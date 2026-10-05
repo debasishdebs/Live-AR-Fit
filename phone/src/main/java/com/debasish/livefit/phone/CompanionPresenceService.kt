@@ -13,23 +13,30 @@ import com.debasish.livefit.services.glasses.CxrGlassesLink
 class CompanionPresenceService : CompanionDeviceService() {
     override fun onDevicePresenceEvent(event: DevicePresenceEvent) {
         if (Build.VERSION.SDK_INT < 36) return
-        val present = event.event == DevicePresenceEvent.EVENT_BLE_APPEARED || event.event == DevicePresenceEvent.EVENT_BT_CONNECTED
-        handle(event.associationId, present)
+        val (source, present) = when (event.event) {
+            DevicePresenceEvent.EVENT_BLE_APPEARED -> CompanionLinker.Source.Ble to true
+            DevicePresenceEvent.EVENT_BLE_DISAPPEARED -> CompanionLinker.Source.Ble to false
+            DevicePresenceEvent.EVENT_BT_CONNECTED -> CompanionLinker.Source.Bt to true
+            DevicePresenceEvent.EVENT_BT_DISCONNECTED -> CompanionLinker.Source.Bt to false
+            else -> return // self-managed and other event types are not ours
+        }
+        handle(event.associationId, source, present)
     }
 
     @Deprecated("API < 36")
-    override fun onDeviceAppeared(info: AssociationInfo) = handle(info.id, true)
+    override fun onDeviceAppeared(info: AssociationInfo) = handle(info.id, CompanionLinker.Source.Legacy, true)
 
     @Deprecated("API < 36")
-    override fun onDeviceDisappeared(info: AssociationInfo) = handle(info.id, false)
+    override fun onDeviceDisappeared(info: AssociationInfo) = handle(info.id, CompanionLinker.Source.Legacy, false)
 
-    private fun handle(associationId: Int, present: Boolean) {
+    private fun handle(associationId: Int, source: CompanionLinker.Source, reported: Boolean) {
         val graph = (application as LiveFitApp).services // builds and starts the hub graph
-        CompanionLinker.setPresent(this, associationId, present)
+        // Gone only when every transport (BLE + BT) has dropped it.
+        val present = CompanionLinker.setPresent(associationId, source, reported)
         if (present) LiveFitHubService.start(this)
         if (CompanionLinker.kindFor(this, associationId) == DeviceKind.Glasses) CxrGlassesLink.instance?.onDevicePresence(present)
         // Spec §5.2: stop the hub when no linked device is present and no workout is active.
         val idle = graph.workout.snapshot.value.phase.let { it == WorkoutPhase.Idle || it == WorkoutPhase.Summary }
-        if (!present && idle && !CompanionLinker.anyPresent(this)) stopService(Intent(this, LiveFitHubService::class.java))
+        if (!present && idle && !CompanionLinker.anyPresent()) stopService(Intent(this, LiveFitHubService::class.java))
     }
 }

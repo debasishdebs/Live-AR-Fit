@@ -22,8 +22,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Live link: Rokid CXR-L through the Hi Rokid app (verified on device: no client secret needed).
     implementation("com.rokid.cxr:client-l:1.1.2")
-}
-dependencies {
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
 }

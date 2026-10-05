@@ -43,4 +43,43 @@ class GlassesSessionPolicyTest {
         assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.onEvent(LinkEvent.DevicePresent))
         assertTrue(p.onEvent(LinkEvent.DevicePresent).isEmpty())
     }
+
+    @Test fun manualConnectReplacesAStuckConnectingAttemptButNotAnOpenSession() {
+        val p = GlassesSessionPolicy()
+        p.onEvent(LinkEvent.DevicePresent)
+        assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.manualConnect())
+        p.onEvent(LinkEvent.Started)
+        assertTrue(p.manualConnect().isEmpty())
+        p.onEvent(LinkEvent.Paused)
+        assertTrue(p.manualConnect().isEmpty())
+    }
+
+    @Test fun connectTimeoutBehavesLikeFailureOnlyWhileConnecting() {
+        val p = GlassesSessionPolicy()
+        assertTrue(p.onEvent(LinkEvent.ConnectTimeout).isEmpty(), "nothing in flight")
+        p.onEvent(LinkEvent.DevicePresent)
+        assertEquals(listOf(LinkAction.MarkDisconnected, LinkAction.ScheduleRetry(2_000)), p.onEvent(LinkEvent.ConnectTimeout))
+        assertTrue(p.onEvent(LinkEvent.ConnectTimeout).isEmpty(), "already waiting to retry")
+    }
+
+    @Test fun glassesExitDoesNotAutoRetryUntilManualConnect() {
+        val p = GlassesSessionPolicy()
+        p.onEvent(LinkEvent.DevicePresent); p.onEvent(LinkEvent.Started)
+        assertEquals(listOf(LinkAction.MarkClosedOnGlasses), p.onEvent(LinkEvent.GlassesExited))
+        assertTrue(p.onEvent(LinkEvent.RetryTimer).isEmpty())
+        assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.manualConnect())
+    }
+
+    @Test fun linkLossStillRetriesWithBackoff() {
+        val p = GlassesSessionPolicy()
+        p.onEvent(LinkEvent.DevicePresent); p.onEvent(LinkEvent.Started)
+        assertEquals(listOf(LinkAction.MarkDisconnected, LinkAction.ScheduleRetry(2_000)), p.onEvent(LinkEvent.Closed))
+    }
+
+    @Test fun authFailureStopsAutoRetry() {
+        val p = GlassesSessionPolicy()
+        p.onEvent(LinkEvent.DevicePresent)
+        assertEquals(listOf(LinkAction.MarkAuthNeeded), p.onEvent(LinkEvent.AuthFailed))
+        assertTrue(p.onEvent(LinkEvent.RetryTimer).isEmpty())
+    }
 }

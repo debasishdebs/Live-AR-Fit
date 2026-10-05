@@ -10,10 +10,7 @@ class AuthActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val link = CxrGlassesLink.instance ?: return finish()
-        link.authorize(this) { ok ->
-            if (ok) link.markAuthorized()
-            finish()
-        }
+        link.authorize(this) { finish() }
     }
 
     @Deprecated("Deprecated in Java")
@@ -21,14 +18,14 @@ class AuthActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         CxrGlassesLink.instance?.let { link ->
             val r = runCatching { com.rokid.cxr.session.CxrSessionManager.getInstance(this).parseAuthorizationResult(resultCode, data) }.getOrNull()
-            if (r?.isSuccess == true) link.markAuthorized()
+            link.onAuthResult(r?.isSuccess == true)
         }
         finish()
     }
 
     companion object {
-        fun launch(context: Context) = runCatching {
-            context.startActivity(Intent(context, AuthActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+        fun launch(context: Context): Result<Unit> = runCatching {
+            context.startActivity(Intent(context, AuthActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION))
         }
     }
 }
