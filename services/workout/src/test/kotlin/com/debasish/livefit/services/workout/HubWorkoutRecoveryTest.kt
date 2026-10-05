@@ -22,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.TestScope
@@ -224,7 +225,7 @@ class HubWorkoutRecoveryTest {
         var finalizeCalls = 0
         override suspend fun storeDelta(delta: SessionDelta): Long { yield(); return inner.storeDelta(delta) }
         override suspend fun lifecycle(sessionId: String): SessionLifecycle? { yield(); return inner.lifecycle(sessionId) }
-        override suspend fun finalize(summary: SessionSummary) { finalizeCalls++; yield(); inner.finalize(summary) }
+        override suspend fun finalize(summary: SessionSummary) { finalizeCalls++; delay(1); inner.finalize(summary) }
     }
 
     @Test fun concurrentDeltasWithASuspendingStoreFinalizeOnce() = runTest {
@@ -242,7 +243,10 @@ class HubWorkoutRecoveryTest {
         gateway.reply()
         gateway.deltas.emit(d(id, 0, listOf(SessionEvent.Started(0, WorkoutType.Walk)))); runCurrent()
         val last = d(id, 1, listOf(SessionEvent.Stopped(9_000, EndReason.User)), final = true)
-        gateway.deltas.emit(last); gateway.deltas.emit(last); runCurrent()
+        gateway.deltas.emit(last); runCurrent() // delta handler is now parked inside finalize
+        gateway.claims.emit(SessionClaim(sessionId = id, type = WorkoutType.Walk, startMs = 0, phase = WorkoutPhase.Stopping, activeMs = 9_000, lastSeq = 1))
+        gateway.stateReports.emit(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.User))
+        advanceTimeBy(10); runCurrent()
         assertEquals(1, finished.size)
         assertEquals(1, store.finalizeCalls)
         assertEquals(SessionStatus.Complete, inner.summaries[id]!!.status)
@@ -265,5 +269,15 @@ class HubWorkoutRecoveryTest {
         r.hub.stop(); runCurrent()
         assertNull(r.confirm.pending.value)
         assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
+    }
+
+    @Test fun takeOverQuestionTimeoutReturnsToIdle() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        r.gateway.reply(ok = false, error = ExerciseError.OtherAppTracking("WALKING")); runCurrent()
+        advanceTimeBy(15_001); runCurrent()
+        assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
+        assertTrue("Samsung Health is still tracking" in r.notices)
+        assertNull(r.confirm.pending.value)
     }
 }

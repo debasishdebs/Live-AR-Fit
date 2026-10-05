@@ -26,6 +26,7 @@ import com.debasish.livefit.services.WorkoutService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -197,7 +198,7 @@ class HubWorkoutService(
     private suspend fun abandon(id: String) {
         store.discard(id) // tombstone: later data and claims for it are rejected, even after a restart
         if (currentId == id) {
-            startJob?.cancel() // also drops a pending take-over question
+            if (currentCoroutineContext()[Job] !== startJob) startJob?.cancel() // drops a pending take-over question; never cancel our own caller
             startJob = null
             resetIdle()
         }
@@ -214,8 +215,7 @@ class HubWorkoutService(
             StoredSessionState.Discarded, StoredSessionState.Finalized -> { gateway.ack(DeltaAck(sessionId = d.sessionId, seq = d.seq)); return }
             else -> Unit
         }
-        if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId)
-        val a = current ?: return
+        val a = (if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId) else current) ?: return
         val storedSeq = store.storeDelta(d) // durable first, then ack
         a.add(d)
         gateway.ack(DeltaAck(sessionId = d.sessionId, seq = storedSeq))
@@ -230,8 +230,7 @@ class HubWorkoutService(
             StoredSessionState.Finalized -> { gateway.ack(DeltaAck(sessionId = c.sessionId, seq = c.lastSeq)); return } // lets the watch free its buffer
             else -> Unit
         }
-        if (c.sessionId != currentId || finishedCurrent) adopt(c.sessionId)
-        val a = current ?: return
+        val a = (if (c.sessionId != currentId || finishedCurrent) adopt(c.sessionId) else current) ?: return
         claim = c
         if (a.contiguousSeq < c.lastSeq) syncUntilSeq = c.lastSeq
         publish()
@@ -258,7 +257,8 @@ class HubWorkoutService(
     }
 
     /** Takes over [id] as the current session (spec §4.4 step 5 and conflict rule step 7). */
-    private suspend fun adopt(id: String) {
+    /** Returns null if a local start() took over [current] while the store was read (the watch will resend). */
+    private suspend fun adopt(id: String): SessionAssembler? {
         val previous = current
         if (previous != null && !finishedCurrent && previous.sessionId != id) {
             if (previous.hasSamples) {
@@ -272,6 +272,7 @@ class HubWorkoutService(
         beginSession(id)
         val a = current!!
         store.deltas(id).forEach { a.add(it) }
+        return if (currentId == id) a else null
     }
 
     private suspend fun restore() = mutex.withLock { restoreLocked() }
