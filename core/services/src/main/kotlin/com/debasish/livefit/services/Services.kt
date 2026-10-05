@@ -77,3 +77,16 @@ interface VoiceService {
     /** Push-to-talk (glasses touchpad or phone button). */
     fun listen()
 }
+
+/** Injected time source so state machines are testable with virtual time. */
+fun interface Clock { fun nowMs(): Long }
+
+enum class ConfirmationOutcome { Yes, No, Timeout, Superseded }
+
+/** At most one pending confirmation; first answer from any device wins; silence = No after 15 s. */
+interface ConfirmationService {
+    val pending: StateFlow<com.debasish.livefit.model.Confirmation?>
+    suspend fun ask(kind: com.debasish.livefit.model.ConfirmationKind, title: String, message: String, defaultYes: Boolean = true): ConfirmationOutcome
+    /** Returns true only for the first answer to the currently pending confirmation. */
+    fun answer(confirmationId: String, yes: Boolean): Boolean
+}
