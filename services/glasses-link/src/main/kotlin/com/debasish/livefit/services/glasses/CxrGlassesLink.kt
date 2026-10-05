@@ -4,9 +4,12 @@ import android.app.Activity
 import android.content.Context
 import android.util.Log
 import com.debasish.livefit.model.DeviceStatus
-import com.debasish.livefit.model.HudFrame
+import com.debasish.livefit.model.CommandEnvelope
+import com.debasish.livefit.model.GlassesChannels
+import com.debasish.livefit.model.HudSettingsFrame
+import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.Wire
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.model.Protocol
 import com.debasish.livefit.services.GlassesEvent
 import com.debasish.livefit.services.GlassesLinkService
 import com.rokid.cxr.Caps
@@ -31,7 +34,7 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Live glasses link over Rokid CXR-L (via the Hi Rokid app). Launches the HUD APK on the glasses
- * and streams [HudFrame]s on [Protocol.CH_HUD]; glasses requests arrive on CH_LISTEN / CH_COMMAND.
+ * and streams [StateFrame]s on [GlassesChannels.STATE]; glasses requests arrive on LISTEN / COMMAND.
  */
 class CxrGlassesLink(context: Context) : GlassesLinkService {
     private val app = context.applicationContext
@@ -80,9 +83,9 @@ class CxrGlassesLink(context: Context) : GlassesLinkService {
         s.addCustomCmdCallback(object : ICustomCmdSessionCallback {
             override fun onCustomCmdResult(cmd: String, bytes: ByteArray?) {
                 when (cmd) {
-                    Protocol.CH_LISTEN -> _events.tryEmit(GlassesEvent.Listen)
-                    Protocol.CH_COMMAND -> bytes?.let { b ->
-                        runCatching { Protocol.decodeCommand(Caps.fromBytes(b).at(0).string) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Issue(it)) }
+                    GlassesChannels.LISTEN -> _events.tryEmit(GlassesEvent.Listen)
+                    GlassesChannels.COMMAND -> bytes?.let { b ->
+                        runCatching { Wire.decode<CommandEnvelope>(Caps.fromBytes(b).at(0).string) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Issue(it)) }
                     }
                 }
             }
@@ -91,10 +94,14 @@ class CxrGlassesLink(context: Context) : GlassesLinkService {
         s.connect(token)
     }
 
-    override suspend fun push(frame: HudFrame) {
+    override suspend fun push(frame: StateFrame) = send(GlassesChannels.STATE, Wire.encode(frame))
+
+    override suspend fun pushSettings(frame: HudSettingsFrame) = send(GlassesChannels.SETTINGS, Wire.encode(frame))
+
+    private fun send(channel: String, json: String) {
         val s = session ?: return
         if (_status.value.link != LinkState.Connected) return
-        val r = s.sendCustomCmd(Protocol.CH_HUD, Caps().apply { write(Protocol.encodeHud(frame)) }, ByteArray(0))
+        val r = s.sendCustomCmd(channel, Caps().apply { write(json) }, ByteArray(0))
         if (!r.isSuccess) Log.w(TAG, "push failed ${r.code} ${r.message}")
     }
 

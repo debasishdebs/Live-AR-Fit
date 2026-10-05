@@ -15,11 +15,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1-spike"
-        // Mock-up mode: every service is bound to its Fake. Flip per service in ServiceGraph when Live lands.
-        buildConfigField("boolean", "USE_FAKE_SERVICES", "true")
-        // Per-service override: talk to the real Rokid glasses (CXR-L) while the rest stays Fake.
-        buildConfigField("boolean", "USE_LIVE_GLASSES", "true")
-        buildConfigField("boolean", "USE_LIVE_WATCH_LINK", "true")
+        // Which services are Live (see Bindings in ServiceGraph); later tasks flip these per service.
+        buildConfigField("boolean", "LIVE_WATCH", "false")
+        buildConfigField("boolean", "LIVE_GLASSES", "true")
+        buildConfigField("boolean", "LIVE_MUSIC", "false")
+        buildConfigField("boolean", "LIVE_VOICE", "false")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -32,7 +32,9 @@ android {
 dependencies {
     implementation(project(":core:services"))
     implementation(project(":services:workout"))
-    implementation(project(":services:metrics"))
+    implementation(project(":services:sync"))
+    implementation(project(":services:confirm"))
+    implementation(project(":services:history"))
     implementation(project(":services:glasses-link"))
     implementation(project(":services:watch-link"))
     implementation(project(":services:music"))

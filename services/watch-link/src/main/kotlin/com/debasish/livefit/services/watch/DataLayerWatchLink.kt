@@ -2,11 +2,12 @@ package com.debasish.livefit.services.watch
 
 import android.content.Context
 import android.util.Log
-import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.DeviceStatus
-import com.debasish.livefit.model.HudFrame
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.model.Protocol
+import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.Wire
+import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.services.WatchLinkService
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
@@ -28,8 +29,8 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
     private val app = context.applicationContext
     private val _status = MutableStateFlow(DeviceStatus("Galaxy Watch", LinkState.Connecting))
     override val status: StateFlow<DeviceStatus> = _status
-    private val _commands = MutableSharedFlow<Command>(extraBufferCapacity = 8)
-    override val commands: Flow<Command> = _commands
+    private val _commands = MutableSharedFlow<CommandEnvelope>(extraBufferCapacity = 8)
+    override val commands: Flow<CommandEnvelope> = _commands
     @Volatile private var nodeId: String? = null
 
     init {
@@ -55,14 +56,14 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
             .onFailure { Log.w(TAG, "battery request failed", it) }
     }
 
-    override suspend fun push(frame: HudFrame) {
+    override suspend fun push(frame: StateFrame) {
         val id = nodeId ?: return
-        runCatching { Wearable.getMessageClient(app).sendMessage(id, Protocol.PATH_STATE, Protocol.encodeHud(frame).toByteArray()).await() }
+        runCatching { Wearable.getMessageClient(app).sendMessage(id, WatchPaths.STATE, Wire.encode(frame).toByteArray()).await() }
     }
 
-    /** Called by the phone's WearableListenerService for [Protocol.PATH_COMMAND]. */
+    /** Called by the phone's WearableListenerService for [WatchPaths.COMMAND]. */
     fun onCommand(json: String) {
-        runCatching { Protocol.decodeCommand(json) }.onSuccess { _commands.tryEmit(it) }.onFailure { Log.w(TAG, "bad command $json", it) }
+        runCatching { Wire.decode<CommandEnvelope>(json) }.onSuccess { _commands.tryEmit(it) }.onFailure { Log.w(TAG, "bad command $json", it) }
     }
 
     fun onBattery(pct: Int) {

@@ -42,7 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.debasish.livefit.model.HudFrame
+import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ServiceGraph
@@ -81,7 +81,7 @@ fun DeviceScreen(kind: DeviceKind, services: ServiceGraph, onBack: () -> Unit) {
 
         if (kind == DeviceKind.Glasses) {
             SectionLabel("HUD preview")
-            val frame by services.lastHud.collectAsStateWithLifecycle()
+            val frame by services.lastFrame.collectAsStateWithLifecycle()
             if (status.link != LinkState.Connected) {
                 SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth(), onClick = { services.glasses.connect() }) {
                     Text("Reconnect · ${status.detail ?: "not connected"}", modifier = Modifier.padding(16.dp), color = LiveFitColors.MintDeep)
@@ -111,9 +111,9 @@ fun DeviceScreen(kind: DeviceKind, services: ServiceGraph, onBack: () -> Unit) {
     }
 }
 
-/** Phone-side miniature of the glasses HUD (green on black), fed by the same HudFrame the glasses get. */
+/** Phone-side miniature of the glasses HUD (green on black), fed by the same StateFrame the glasses get. */
 @Composable
-private fun HudPreview(frame: HudFrame?) {
+private fun HudPreview(frame: StateFrame?) {
     val green = Color(0xFF39FF6A)
     Box(
         Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(240.dp).clip(RoundedCornerShape(20.dp)).background(Color.Black).border(1.dp, LiveFitColors.Line, RoundedCornerShape(20.dp)).padding(16.dp),

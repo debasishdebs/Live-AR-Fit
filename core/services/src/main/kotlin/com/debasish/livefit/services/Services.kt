@@ -1,8 +1,6 @@
 package com.debasish.livefit.services
 
-import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.DeviceStatus
-import com.debasish.livefit.model.HudFrame
 import com.debasish.livefit.model.Metrics
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.VoiceState
@@ -37,24 +35,27 @@ interface WorkoutService {
 
 interface GlassesLinkService {
     val status: StateFlow<DeviceStatus>
-    /** Requests coming from the glasses (touchpad push-to-talk, commands). */
+    /** Requests from the glasses: push-to-talk audio and commands. */
     val events: Flow<GlassesEvent>
     /** Opens the link and launches the HUD app on the glasses. No-op for fakes. */
     fun connect() {}
-    suspend fun push(frame: HudFrame)
+    suspend fun push(frame: com.debasish.livefit.model.StateFrame)
+    suspend fun pushSettings(frame: com.debasish.livefit.model.HudSettingsFrame)
 }
 
 sealed interface GlassesEvent {
     data object Listen : GlassesEvent
-    data class Issue(val command: Command) : GlassesEvent
+    class Audio(val pcm: ByteArray) : GlassesEvent
+    data object ListenEnd : GlassesEvent
+    data class Issue(val envelope: com.debasish.livefit.model.CommandEnvelope) : GlassesEvent
+    data class Outdated(val version: Int?) : GlassesEvent
 }
 
 interface WatchLinkService {
     val status: StateFlow<DeviceStatus>
-    /** Commands tapped on the watch (start/stop workout, music). */
-    val commands: Flow<Command> get() = kotlinx.coroutines.flow.emptyFlow()
-    /** Phone -> watch state, so the watch shows the hub's workout and music. */
-    suspend fun push(frame: HudFrame) {}
+    /** Commands tapped on the watch. */
+    val commands: Flow<com.debasish.livefit.model.CommandEnvelope>
+    suspend fun push(frame: com.debasish.livefit.model.StateFrame)
 }
 
 interface MusicService {
@@ -72,10 +73,12 @@ interface MusicService {
 
 interface VoiceService {
     val state: StateFlow<VoiceState>
-    /** Recognised commands, from any utterance. */
-    val commands: Flow<Command>
-    /** Push-to-talk (glasses touchpad or phone button). */
+    /** Push-to-talk with the phone microphone. */
     fun listen()
+    /** External audio (glasses): returns false if busy or voice is unavailable. */
+    fun startExternal(): Boolean
+    fun feed(pcm: ByteArray)
+    fun endExternal()
 }
 
 /** Injected time source so state machines are testable with virtual time. */

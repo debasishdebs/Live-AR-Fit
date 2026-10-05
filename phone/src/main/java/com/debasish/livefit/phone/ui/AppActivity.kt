@@ -25,6 +25,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.debasish.livefit.phone.SpikeActivity
+import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.services
 import com.debasish.livefit.phone.ui.devices.DeviceKind
 import com.debasish.livefit.phone.ui.devices.DeviceScreen
@@ -46,6 +47,7 @@ class AppActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        LiveFitHubService.start(this)
         // Live glasses: CXR-L needs an in-process authorisation before every connect (see CxrGlassesLink).
         (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.let { link ->
             if (savedInstanceState == null) link.authorize(this) { ok -> if (ok) link.connect() }

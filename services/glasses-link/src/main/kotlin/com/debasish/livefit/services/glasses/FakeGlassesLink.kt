@@ -1,8 +1,9 @@
 package com.debasish.livefit.services.glasses
 
 import com.debasish.livefit.model.DeviceStatus
-import com.debasish.livefit.model.HudFrame
+import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.services.GlassesEvent
 import com.debasish.livefit.services.GlassesLinkService
 import kotlinx.coroutines.flow.Flow
@@ -17,10 +18,9 @@ class FakeGlassesLink : GlassesLinkService {
 
     override val events: Flow<GlassesEvent> = emptyFlow()
 
-    private val _lastFrame = MutableStateFlow<HudFrame?>(null)
-    val lastFrame: StateFlow<HudFrame?> = _lastFrame
+    private val _lastFrame = MutableStateFlow<StateFrame?>(null)
+    val lastFrame: StateFlow<StateFrame?> = _lastFrame
 
-    override suspend fun push(frame: HudFrame) {
-        _lastFrame.value = frame
-    }
+    override suspend fun push(frame: StateFrame) { _lastFrame.value = frame }
+    override suspend fun pushSettings(frame: HudSettingsFrame) = Unit
 }

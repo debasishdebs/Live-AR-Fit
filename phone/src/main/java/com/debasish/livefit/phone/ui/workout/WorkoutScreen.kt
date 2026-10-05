@@ -1,5 +1,6 @@
 package com.debasish.livefit.phone.ui.workout
 
+import com.debasish.livefit.model.Command
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -76,7 +77,7 @@ fun WorkoutScreen(services: ServiceGraph, onBack: () -> Unit, onMusic: () -> Uni
             ScreenHeader(if (s.phase == WorkoutPhase.Summary) "Summary" else "Workout", onBack) {
                 PhasePill(s.phase)
             }
-            if (s.phase == WorkoutPhase.Summary) Summary(s) { services.workout.dismissSummary(); onBack() }
+            if (s.phase == WorkoutPhase.Summary) Summary(s) { services.localCommand(Command.DismissSummary); onBack() }
             else Live(s)
 
             if (s.phase != WorkoutPhase.Summary) {
@@ -88,9 +89,9 @@ fun WorkoutScreen(services: ServiceGraph, onBack: () -> Unit, onMusic: () -> Uni
                                 Text(np.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
                                 Text(np.artist, style = MaterialTheme.typography.bodyMedium, color = LiveFitColors.InkSoft)
                             }
-                            RoundButton(if (np.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, LiveFitColors.ChipRose, 40) { services.music.playPause() }
+                            RoundButton(if (np.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, LiveFitColors.ChipRose, 40) { services.localCommand(Command.PlayPause) }
                             Spacer(Modifier.width(8.dp))
-                            RoundButton(Icons.Rounded.SkipNext, LiveFitColors.ChipRose, 40) { services.music.next() }
+                            RoundButton(Icons.Rounded.SkipNext, LiveFitColors.ChipRose, 40) { services.localCommand(Command.NextTrack) }
                         }
                     }
                 }
@@ -103,8 +104,8 @@ fun WorkoutScreen(services: ServiceGraph, onBack: () -> Unit, onMusic: () -> Uni
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 16.dp),
                 phase = s.phase,
                 voice = voice,
-                onPauseResume = { if (s.phase == WorkoutPhase.Paused) services.workout.resume() else services.workout.pause() },
-                onStop = { services.workout.stop() },
+                onPauseResume = { services.localCommand(if (s.phase == WorkoutPhase.Paused) Command.ResumeWorkout else Command.PauseWorkout) },
+                onStop = { services.localCommand(Command.StopWorkout) },
                 onVoice = { services.voice.listen() },
             )
         }

@@ -1,5 +1,6 @@
 package com.debasish.livefit.phone.ui.music
 
+import com.debasish.livefit.model.Command
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -50,7 +51,6 @@ import com.debasish.livefit.phone.ui.theme.LiveFitColors
 fun MusicScreen(services: ServiceGraph, onBack: () -> Unit) {
     val np by services.music.nowPlaying.collectAsStateWithLifecycle()
     val volume by services.music.volume.collectAsStateWithLifecycle()
-    val music = services.music
 
     Column(Modifier.fillMaxSize().background(LiveFitColors.Surface)) {
         ScreenHeader("Music", onBack)
@@ -70,7 +70,7 @@ fun MusicScreen(services: ServiceGraph, onBack: () -> Unit) {
                     if (np?.liked == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = "Like",
                     tint = if (np?.liked == true) LiveFitColors.ChipRose.second else LiveFitColors.InkSoft,
-                    modifier = Modifier.size(32.dp).clickable { music.toggleLike() },
+                    modifier = Modifier.size(32.dp).clickable { services.localCommand(Command.LikeTrack) },
                 )
             }
             Spacer(Modifier.height(16.dp))
@@ -87,18 +87,18 @@ fun MusicScreen(services: ServiceGraph, onBack: () -> Unit) {
             }
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.CenterVertically) {
-                Round(Icons.Rounded.SkipPrevious, 60, LiveFitColors.ChipRose) { music.previous() }
+                Round(Icons.Rounded.SkipPrevious, 60, LiveFitColors.ChipRose) { services.localCommand(Command.PreviousTrack) }
                 Box(
-                    Modifier.size(88.dp).clip(CircleShape).background(Brush.linearGradient(listOf(Color(0xFFFF6F9C), Color(0xFF8E7CFF)))).clickable { music.playPause() },
+                    Modifier.size(88.dp).clip(CircleShape).background(Brush.linearGradient(listOf(Color(0xFFFF6F9C), Color(0xFF8E7CFF)))).clickable { services.localCommand(Command.PlayPause) },
                     contentAlignment = Alignment.Center,
                 ) { Icon(if (np?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = "Play or pause", tint = Color.White, modifier = Modifier.size(44.dp)) }
-                Round(Icons.Rounded.SkipNext, 60, LiveFitColors.ChipRose) { music.next() }
+                Round(Icons.Rounded.SkipNext, 60, LiveFitColors.ChipRose) { services.localCommand(Command.NextTrack) }
             }
             Spacer(Modifier.height(20.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.AutoMirrored.Rounded.VolumeDown, contentDescription = null, tint = LiveFitColors.InkSoft)
                 Slider(
-                    value = volume, onValueChange = music::setVolume, modifier = Modifier.weight(1f),
+                    value = volume, onValueChange = { services.localCommand(Command.SetVolume(it)) }, modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(thumbColor = LiveFitColors.ChipRose.second, activeTrackColor = LiveFitColors.ChipRose.second, inactiveTrackColor = LiveFitColors.ChipRose.first),
                 )
                 Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = null, tint = LiveFitColors.InkSoft)

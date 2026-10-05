@@ -1,5 +1,6 @@
 package com.debasish.livefit.phone.ui.home
 
+import com.debasish.livefit.model.Command
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -113,11 +114,11 @@ fun HomeScreen(
                 MetricTile(Icons.Rounded.LocalFireDepartment, "Calories", if (dash) "--" else "${m.calories}", "kcal", LiveFitColors.ChipAmber, Modifier.weight(1f))
                 MetricTile(Icons.Rounded.Route, "Distance", if (dash) "--" else "%.2f".format(m.distanceKm), "km", LiveFitColors.ChipViolet, Modifier.weight(1f))
             }
-            NowPlayingCard(music, onOpen = onMusic, onPlayPause = services.music::playPause, onNext = services.music::next)
+            NowPlayingCard(music, onOpen = onMusic, onPlayPause = { services.localCommand(Command.PlayPause) }, onNext = { services.localCommand(Command.NextTrack) })
             Spacer(Modifier.height(120.dp))
         }
 
-        if (picking) WorkoutTypeSheet(onPick = { picking = false; services.workout.start(it); onWorkout() }, onDismiss = { picking = false })
+        if (picking) WorkoutTypeSheet(onPick = { picking = false; services.localCommand(Command.StartWorkout(it)); onWorkout() }, onDismiss = { picking = false })
     }
 }
 
