@@ -77,6 +77,7 @@ class HubWorkoutService(
     private var finishedCurrent = false
     private val mutex = Mutex()
     private var startJob: Job? = null
+    private val lastDiscardedStop = HashMap<String, Long>()
     private val pendingResults = HashMap<String, CompletableDeferred<ExerciseResult>>()
 
     init {
@@ -150,7 +151,12 @@ class HubWorkoutService(
                 else { resetIdle(); notice(if (outcome == ConfirmationOutcome.Superseded) "Cancelled" else "Samsung Health is still tracking") }
             }
             is ExerciseError.PermissionMissing -> { resetIdle(); notice("Watch needs permission: " + e.permissions.joinToString { it.substringAfterLast('.') }) }
-            is ExerciseError.WrongSession -> { resetIdle(); notice("Watch is busy with another workout") }
+            is ExerciseError.WrongSession -> {
+                resetIdle()
+                val stale = e.activeSessionId
+                if (stale != null && isDiscarded(stale)) { stopDiscarded(stale); notice("Stopping an abandoned workout on the watch, try again") }
+                else notice("Watch is busy with another workout")
+            }
             ExerciseError.SensorUnavailable -> { resetIdle(); notice("Watch sensors unavailable") }
             is ExerciseError.Internal -> { resetIdle(); notice(e.message) }
             else -> { resetIdle(); notice("Couldn't start workout") }
@@ -192,6 +198,11 @@ class HubWorkoutService(
     /** Abandoned starts are tombstoned in the store, so this survives a phone restart. */
     private suspend fun isDiscarded(id: String) = store.lifecycle(id)?.state == StoredSessionState.Discarded
 
+    /** Stop for an abandoned session the watch still runs; at most once per [STOP_RETRY_MS] per session. */
+    private suspend fun stopDiscarded(sessionId: String) {
+        if (shouldStopDiscarded(sessionId)) sendStop(sessionId)
+    }
+
     private suspend fun sendStop(sessionId: String) =
         gateway.send(ExerciseRequest(requestId = newId(), sessionId = sessionId, op = ExerciseOp.Stop))
 
@@ -206,20 +217,38 @@ class HubWorkoutService(
 
     // ---- Watch data -----------------------------------------------------------------------
 
-    private suspend fun onDelta(d: SessionDelta) = mutex.withLock { onDeltaLocked(d) }
+    /** Gateway sends happen after the mutex is released, so a slow link never blocks state publication. */
+    private suspend fun onDelta(d: SessionDelta) {
+        val sends = mutex.withLock { onDeltaLocked(d) }
+        if (sends != null) scope.launch { sends() }
+    }
 
-    private suspend fun onDeltaLocked(d: SessionDelta) {
+    private suspend fun onDeltaLocked(d: SessionDelta): (suspend () -> Unit)? {
+        val ack = { seq: Long -> DeltaAck(sessionId = d.sessionId, seq = seq) }
         when (store.lifecycle(d.sessionId)?.state) {
             // Abandoned start, or a session already finalized (e.g. replay after a lost final ack):
             // ack so the watch can drop it, but never adopt it — that would end the current workout.
-            StoredSessionState.Discarded, StoredSessionState.Finalized -> { gateway.ack(DeltaAck(sessionId = d.sessionId, seq = d.seq)); return }
+            // A delta for an abandoned start also means the watch still records it: stop it.
+            StoredSessionState.Discarded -> {
+                val stop = shouldStopDiscarded(d.sessionId)
+                return { gateway.ack(ack(d.seq)); if (stop) sendStop(d.sessionId) }
+            }
+            StoredSessionState.Finalized -> return { gateway.ack(ack(d.seq)) }
             else -> Unit
         }
-        val a = (if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId) else current) ?: return
-        val storedSeq = store.storeDelta(d) // durable first, then ack
+        val a = (if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId) else current) ?: return null
+        val storedSeq = store.storeDelta(d) // durable first, then publish, then ack (outside the lock)
         a.add(d)
-        gateway.ack(DeltaAck(sessionId = d.sessionId, seq = storedSeq))
         publish()
+        return { gateway.ack(ack(storedSeq)) }
+    }
+
+    private fun shouldStopDiscarded(sessionId: String): Boolean {
+        val now = clock.nowMs()
+        val last = lastDiscardedStop[sessionId]
+        if (last != null && now - last < STOP_RETRY_MS) return false
+        lastDiscardedStop[sessionId] = now
+        return true
     }
 
     private suspend fun onClaim(c: SessionClaim) = mutex.withLock { onClaimLocked(c) }
@@ -359,5 +388,6 @@ class HubWorkoutService(
 
     private fun notice(text: String) { _notices.tryEmit(text) }
 
-    companion object { const val SYNCING_NOTICE = "Syncing watch data…" }
+    companion object { const val STOP_RETRY_MS = 10_000L
+        const val SYNCING_NOTICE = "Syncing watch data…" }
 }

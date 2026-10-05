@@ -113,9 +113,9 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     fun start() {
         broadcaster.start()
         stt?.let { s -> scope.launch { s.refresh() } }
-        // Any state change -> push (coalesced).
+        // Any state change -> push (coalesced). Music position ticks (1 s poll) are masked so they don't cause pushes.
         scope.launch {
-            merge(workout.snapshot, music.nowPlaying, music.volume, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)
+            merge(workout.snapshot, music.nowPlaying.map { it?.copy(positionMs = 0) }.distinctUntilChanged(), music.volume, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)
                 .collect { markDirty() }
         }
         scope.launch { workout.notices.collect(::flash) }

@@ -37,6 +37,23 @@ class WatchSessionRecorderTest {
         assertEquals(listOf(2L), FileDeltaBuffer(File(root, "s")).unacked().map { it.seq })
     }
 
+    @Test fun failedDiskWriteKeepsDeltaInRetryListAndRecoversOnNextRecord() = runTest {
+        val root = tmp()
+        val sent = mutableListOf<SessionDelta>()
+        var online = false
+        val rec = WatchSessionRecorder(root, live, send = { d -> if (!online) error("offline"); sent += d })
+        rec.begin("s", WorkoutType.Run, 0)
+        val blocker = File(root, "s/d-1.json.tmp").also { it.mkdirs() } // makes the write of seq 1 fail
+        rec.sample(Sample(1_000, hr = 100))
+        assertFalse(File(root, "s/d-1.json").exists(), "disk write failed")
+        online = true
+        rec.resendUnacked()
+        assertEquals(listOf(0L, 1L), sent.map { it.seq }, "failed delta is still resent from memory")
+        blocker.delete()
+        rec.sample(Sample(2_000, hr = 101))
+        assertEquals(listOf(0L, 1L, 2L), FileDeltaBuffer(File(root, "s")).unacked().map { it.seq }, "retried write landed")
+    }
+
     @Test fun ackForAnotherSessionIsIgnored() = runTest {
         val root = tmp()
         val rec = WatchSessionRecorder(root, live, send = {})

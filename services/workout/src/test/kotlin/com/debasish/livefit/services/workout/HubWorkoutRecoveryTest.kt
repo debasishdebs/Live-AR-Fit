@@ -98,6 +98,38 @@ class HubWorkoutRecoveryTest {
         assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
     }
 
+    @Test fun deltaForAbandonedStartSendsStopOncePer10Seconds() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val a = r.gateway.sent.single().sessionId
+        advanceTimeBy(10_001); runCurrent() // start timed out: A abandoned
+        val before = r.gateway.sent.size
+        r.gateway.deltas.emit(d(a, 0)); r.gateway.deltas.emit(d(a, 1)); runCurrent()
+        val stops = r.gateway.sent.drop(before)
+        assertEquals(1, stops.size, "rate limited")
+        assertEquals(ExerciseOp.Stop, stops.single().op)
+        assertEquals(a, stops.single().sessionId)
+        assertEquals(1L, r.gateway.acks.last().seq, "still acked")
+        advanceTimeBy(10_001); runCurrent()
+        r.gateway.deltas.emit(d(a, 2)); runCurrent()
+        assertEquals(2, r.gateway.sent.drop(before).size, "again after 10 s")
+    }
+
+    @Test fun wrongSessionNamingDiscardedSessionSendsStopForIt() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val a = r.gateway.sent.single().sessionId
+        advanceTimeBy(10_001); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val b = r.gateway.sent.last().sessionId
+        r.gateway.reply(error = ExerciseError.WrongSession(a), ok = false); runCurrent()
+        val stop = r.gateway.sent.last()
+        assertEquals(ExerciseOp.Stop, stop.op)
+        assertEquals(a, stop.sessionId)
+        assertTrue(b != a)
+        assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
+    }
+
     @Test fun endedReportShowsStoppingAndCompletesOnlyWhenAllDeltasStored() = runTest {
         val r = Rig(this)
         val id = active(r)

@@ -26,7 +26,10 @@ class WatchSessionRecorder(
     private val send: suspend (SessionDelta) -> Unit,
     private val sendClaim: suspend (SessionClaim) -> Unit = {},
 ) {
-    private class Held(val buffer: FileDeltaBuffer, var header: WatchSessionHeader, val assembler: SessionAssembler)
+    private class Held(val buffer: FileDeltaBuffer, var header: WatchSessionHeader, val assembler: SessionAssembler) {
+        /** Deltas whose disk write failed: still sent by [resendUnacked] and re-written on the next record. */
+        val retry = sortedMapOf<Long, SessionDelta>()
+    }
 
     /** Oldest first. */
     private val held = mutableListOf<Held>()
@@ -74,14 +77,20 @@ class WatchSessionRecorder(
         val h = newest?.takeIf { it.header.finalSeq == null } ?: return
         val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final)
         h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null)
-        try { // disk trouble must not stop tracking: keep the delta in memory and send it
-            h.buffer.put(d)
+        // Disk trouble must not stop tracking: failed deltas stay in the retry list (still sent, re-written next record).
+        h.retry[d.seq] = d
+        flushRetry(h)
+        h.assembler.add(d)
+        if (h === held.first()) trySend(d) // unreachable phone, or an older session first: stays buffered
+    }
+
+    private fun flushRetry(h: Held) {
+        try {
+            for (r in h.retry.values.toList()) { h.buffer.put(r); h.retry.remove(r.seq) }
             h.buffer.writeHeader(h.header)
         } catch (e: java.io.IOException) {
             java.util.logging.Logger.getLogger("WatchSessionRecorder").warning("buffer write failed: $e")
         }
-        h.assembler.add(d)
-        if (h === held.first()) trySend(d) // unreachable phone, or an older session first: stays buffered
     }
 
     /** Failures keep the delta buffered; cancellation must propagate. */
@@ -92,6 +101,7 @@ class WatchSessionRecorder(
     suspend fun onAck(ack: DeltaAck) {
         val h = held.firstOrNull { it.header.sessionId == ack.sessionId } ?: return
         h.buffer.ackUpTo(ack.seq)
+        h.retry.keys.removeAll { it <= ack.seq }
         val f = h.header.finalSeq ?: return
         if (ack.seq < f) return
         val wasOldest = h === held.first()
@@ -103,7 +113,9 @@ class WatchSessionRecorder(
     /** Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). */
     suspend fun resendUnacked() {
         val h = held.firstOrNull() ?: return
-        for (d in h.buffer.unacked()) trySend(d)
+        if (h.retry.isNotEmpty()) flushRetry(h)
+        val toSend = (h.buffer.unacked() + h.retry.values).distinctBy { it.seq }.sortedBy { it.seq }
+        for (d in toSend) trySend(d)
     }
 
     /** Claims the oldest held session and replays it (on reconnect, and when the previous session completes). */
