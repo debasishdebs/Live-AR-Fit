@@ -48,10 +48,8 @@ class AppActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         LiveFitHubService.start(this)
-        // Live glasses: CXR-L needs an in-process authorisation before every connect (see CxrGlassesLink).
-        (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.let { link ->
-            if (savedInstanceState == null) link.authorize(this) { ok -> if (ok) link.connect() }
-        }
+        // App opened: connect now if no session is in flight (authorization runs through AuthActivity).
+        if (savedInstanceState == null) (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.connect()
         setContent {
             LiveFitTheme {
                 val nav = rememberNavController()
