@@ -39,9 +39,7 @@ import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.HorizontalPageIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
@@ -67,10 +64,10 @@ import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.model.formatElapsed
-import com.debasish.livefit.services.MusicService
-import com.debasish.livefit.services.WorkoutService
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
+import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.NowPlaying
+import com.debasish.livefit.model.zoneLabel
+import com.debasish.livefit.watch.WatchUiState
 
 /** Same palette as the phone, on OLED black. */
 private object W {
@@ -106,33 +103,40 @@ private fun zoneName(zone: Int?) = when (zone) {
 }
 
 @Composable
-fun WatchApp(workout: WorkoutService, music: MusicService, hrHistory: StateFlow<List<Int>>, lastFrameAt: StateFlow<Long>) {
-    val s by workout.snapshot.collectAsStateWithLifecycle()
-    val history by hrHistory.collectAsStateWithLifecycle()
-    val last by lastFrameAt.collectAsStateWithLifecycle()
-    // Phone counts as connected while its frames keep arriving (sent every second).
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1_000); now = System.currentTimeMillis() } }
-    val phoneOnline = now - last < 3_000
+fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit) {
+    val s = state.snapshot
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             when (s.phase) {
-                WorkoutPhase.Idle -> Ready(phoneOnline, onStart = workout::start)
-                WorkoutPhase.Summary -> Summary(s, workout::dismissSummary)
-                else -> Live(s, workout, music, history)
+                WorkoutPhase.Idle -> Ready(state.phoneOnline, state.glassesOnline) { onCommand(Command.StartWorkout(it)) }
+                WorkoutPhase.Summary -> Summary(s) { onCommand(Command.DismissSummary) }
+                WorkoutPhase.Stopping -> Saving(s)
+                else -> Live(s, state, onCommand, onVolume)
             }
+            if (state.offline) OfflineBadge(Modifier.align(Alignment.TopCenter).padding(top = 18.dp))
+            state.confirmation?.let { c -> ConfirmOverlay(c) { yes -> onCommand(Command.Answer(c.id, yes)) } }
+            if (state.needsPermissions.isNotEmpty() && s.phase == WorkoutPhase.Idle) PermissionCard(state.needsPermissions, onGrantPermissions)
         }
     }
 }
 
 @Composable
-private fun Ready(phoneOnline: Boolean, onStart: (WorkoutType) -> Unit) {
+private fun Saving(s: WorkoutSnapshot) {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Icon(s.displayType.icon, contentDescription = null, tint = W.Mint, modifier = Modifier.size(28.dp))
+        Text("Saving workout…", fontSize = 15.sp)
+        Text(formatElapsed(s.elapsedMs), fontSize = 13.sp, color = W.Dim)
+    }
+}
+
+@Composable
+private fun Ready(phoneOnline: Boolean, glassesOnline: Boolean, onStart: (WorkoutType) -> Unit) {
     var typeIndex by remember { mutableIntStateOf(0) }
     val type = WorkoutType.entries[typeIndex]
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatusDot(Icons.Rounded.PhoneAndroid, phoneOnline)
-            StatusDot(Icons.Rounded.Visibility, phoneOnline)
+            StatusDot(Icons.Rounded.Visibility, glassesOnline)
         }
         Spacer(Modifier.height(10.dp))
         Box(
@@ -160,14 +164,14 @@ private fun StatusDot(icon: ImageVector, online: Boolean) {
 }
 
 @Composable
-private fun Live(s: WorkoutSnapshot, workout: WorkoutService, music: MusicService, history: List<Int>) {
+private fun Live(s: WorkoutSnapshot, state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit) {
     val pager = rememberPagerState(pageCount = { 3 })
     Box(Modifier.fillMaxSize()) {
         HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
             when (page) {
-                0 -> HeartPage(s, workout, history)
+                0 -> HeartPage(s, state.hrHistory, onCommand)
                 1 -> StatsPage(s)
-                else -> MusicPage(music)
+                else -> MusicPage(state.music, onCommand, onVolume)
             }
         }
         HorizontalPageIndicator(
@@ -188,7 +192,7 @@ private fun Live(s: WorkoutSnapshot, workout: WorkoutService, music: MusicServic
  * HR line behind the number, zone label, timer, type, pause/stop.
  */
 @Composable
-private fun HeartPage(s: WorkoutSnapshot, workout: WorkoutService, history: List<Int>) {
+private fun HeartPage(s: WorkoutSnapshot, history: List<Int>, onCommand: (Command) -> Unit) {
     val zone = HeartZones.zoneFor(s.metrics.heartRate)
     val color = zoneColor(zone)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -223,7 +227,7 @@ private fun HeartPage(s: WorkoutSnapshot, workout: WorkoutService, history: List
                 Icon(Icons.Rounded.Favorite, contentDescription = "Heart rate", tint = color, modifier = Modifier.size(26.dp))
                 Text(" ${s.metrics.heartRate ?: "--"}", fontSize = 52.sp, fontWeight = FontWeight.Bold)
             }
-            Text(if (zone != null && zone > 0) "Z$zone · ${zoneName(zone)}" else "bpm", fontSize = 13.sp, color = color)
+            Text(if (zone != null && zone > 0) "${zoneLabel(zone)} · ${zoneName(zone)}" else "bpm", fontSize = 13.sp, color = color)
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Timer, contentDescription = "Timer", tint = W.Dim, modifier = Modifier.size(18.dp))
@@ -232,8 +236,8 @@ private fun HeartPage(s: WorkoutSnapshot, workout: WorkoutService, history: List
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val paused = s.phase == WorkoutPhase.Paused
-                RoundIcon(if (paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, W.Mint) { if (paused) workout.resume() else workout.pause() }
-                if (paused) RoundIcon(Icons.Rounded.Stop, W.Coral) { workout.stop() }
+                RoundIcon(if (paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause, W.Mint) { onCommand(if (paused) Command.ResumeWorkout else Command.PauseWorkout) }
+                if (paused) RoundIcon(Icons.Rounded.Stop, W.Coral) { onCommand(Command.StopWorkout) }
             }
         }
     }
@@ -267,27 +271,29 @@ private fun Pill(icon: ImageVector, tint: Color, value: String, unit: String, bi
 
 /** Page 3: music remote (YouTube Music on the phone in the live build). */
 @Composable
-private fun MusicPage(music: MusicService) {
-    val np by music.nowPlaying.collectAsStateWithLifecycle()
-    Column(Modifier.fillMaxSize().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Text(np?.title ?: "Nothing playing", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, textAlign = TextAlign.Center)
-        Text(np?.artist.orEmpty(), fontSize = 13.sp, color = W.Dim, maxLines = 1)
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            RoundIcon(Icons.Rounded.SkipPrevious, W.Rose, sizeDp = 40) { music.previous() }
-            Box(
-                Modifier.size(64.dp).clip(CircleShape).background(Brush.linearGradient(listOf(W.Rose, W.Violet))).clickable { music.playPause() },
-                contentAlignment = Alignment.Center,
-            ) { Icon(if (np?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = "Play or pause", tint = Color.White, modifier = Modifier.size(32.dp)) }
-            RoundIcon(Icons.Rounded.SkipNext, W.Rose, sizeDp = 40) { music.next() }
+private fun MusicPage(np: NowPlaying?, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit) {
+    Box(Modifier.fillMaxSize()) {
+        VolumeArc(level = np?.volume ?: 0.5f, onChange = onVolume)
+        Column(Modifier.fillMaxSize().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text(np?.title ?: "Nothing playing", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, textAlign = TextAlign.Center)
+            Text(np?.artist.orEmpty(), fontSize = 13.sp, color = W.Dim, maxLines = 1)
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                RoundIcon(Icons.Rounded.SkipPrevious, W.Rose, sizeDp = 40) { onCommand(Command.PreviousTrack) }
+                Box(
+                    Modifier.size(64.dp).clip(CircleShape).background(Brush.linearGradient(listOf(W.Rose, W.Violet))).clickable { onCommand(Command.PlayPause) },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(if (np?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = "Play or pause", tint = Color.White, modifier = Modifier.size(32.dp)) }
+                RoundIcon(Icons.Rounded.SkipNext, W.Rose, sizeDp = 40) { onCommand(Command.NextTrack) }
+            }
+            Spacer(Modifier.height(10.dp))
+            Icon(
+                if (np?.liked == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = "Like",
+                tint = if (np?.liked == true) W.Rose else W.Dim,
+                modifier = Modifier.size(28.dp).clickable { onCommand(Command.LikeTrack) },
+            )
         }
-        Spacer(Modifier.height(10.dp))
-        Icon(
-            if (np?.liked == true) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-            contentDescription = "Like",
-            tint = if (np?.liked == true) W.Rose else W.Dim,
-            modifier = Modifier.size(28.dp).clickable { music.toggleLike() },
-        )
     }
 }
 
