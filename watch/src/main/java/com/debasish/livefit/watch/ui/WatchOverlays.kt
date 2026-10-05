@@ -4,7 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,11 +60,23 @@ fun VolumeArc(level: Float, onChange: (Float) -> Unit, modifier: Modifier = Modi
             .onRotaryScrollEvent { e -> local = (local + if (e.verticalScrollPixels > 0) 0.05f else -0.05f).coerceIn(0f, 1f); onChange(local); true }
             .focusRequester(focus).focusable()
             .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
+                // Only drags that start in the outer ring band are ours; others fall through so the pager still pages.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
                     val c = Offset(size.width / 2f, size.height / 2f)
-                    val deg = Math.toDegrees(atan2((change.position.y - c.y).toDouble(), (change.position.x - c.x).toDouble())).toFloat()
-                    // Arc spans 150° (left) → 30° (right) through 90° (bottom).
-                    if (deg in 30f..150f) { local = ((150f - deg) / 120f).coerceIn(0f, 1f); onChange(local) }
+                    fun degOf(o: Offset) = Math.toDegrees(atan2((o.y - c.y).toDouble(), (o.x - c.x).toDouble())).toFloat()
+                    val dist = (down.position - c).getDistance()
+                    if (dist < 0.8f * minOf(size.width, size.height) / 2f || degOf(down.position) !in 30f..150f) return@awaitEachGesture
+                    down.consume()
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull() ?: break
+                        if (!ch.pressed) break
+                        // Arc spans 150° (left) → 30° (right) through 90° (bottom).
+                        val deg = degOf(ch.position)
+                        if (deg in 30f..150f) { local = ((150f - deg) / 120f).coerceIn(0f, 1f); onChange(local) }
+                        ch.consume()
+                    }
                 }
             },
     ) {

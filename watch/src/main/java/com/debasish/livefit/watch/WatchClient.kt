@@ -13,6 +13,7 @@ import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
+import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
@@ -53,6 +54,9 @@ object WatchClient {
     private var volumeJob: Job? = null
     /** Takeover question asked on the watch itself while the phone is offline. */
     private var localConfirm: Pair<Confirmation, WorkoutType>? = null
+    /** Offline sessions whose Summary the user dismissed (in memory; the data stays held for sync). */
+    private var dismissedLocal: String? = null
+    private var lastResendMs = 0L
     private var localToast: Pair<String, Long>? = null
 
     fun start() {
@@ -103,7 +107,11 @@ object WatchClient {
         val online = liveness.isOnline()
         if (wasOnline && !online) wasOnline = false
         // Unacked deltas are re-sent every 5 s while online (spec §4.4 step 3).
-        if (online && WatchRuntime.recorder.holdsData && (System.currentTimeMillis() / 1_000) % 5 == 0L) WatchRuntime.recorder.resendUnacked()
+        val now = System.currentTimeMillis()
+        if (online && WatchRuntime.recorder.holdsData && now - lastResendMs >= 5_000) {
+            lastResendMs = now
+            WatchRuntime.recorder.resendUnacked()
+        }
         refresh()
     }
 
@@ -116,12 +124,22 @@ object WatchClient {
         if (localConfirm?.first?.let { now >= it.expiresAtMs } == true) { localConfirm = null; localToast = "Cancelled" to now + 3_000 }
         val toastLocal = localToast?.takeIf { now < it.second }?.first
         val outdated = _ui.value.outdated
-        _ui.value = if (!online && local != null) WatchUiState(
-            // Show the local session even after an offline stop, so Saving/Summary come from local data.
-            snapshot = local.snapshot(), phoneOnline = false, offline = true,
-            hrHistory = local.hrHistory(60), needsPermissions = missing, outdated = outdated, toast = toastLocal,
-            confirmation = localConfirm?.first,
-        ) else WatchUiState(
+        _ui.value = if (!online && local != null) {
+            // The local session stays Stopping until the final ack; offline, show it as Summary, then Ready once dismissed.
+            val dismissed = WatchRuntime.recorder.sessionId == dismissedLocal && dismissedLocal != null
+            val snap = local.snapshot()
+            WatchUiState(
+                snapshot = when {
+                    dismissed -> WorkoutSnapshot()
+                    snap.phase == WorkoutPhase.Stopping -> snap.copy(phase = WorkoutPhase.Summary)
+                    else -> snap
+                },
+                phoneOnline = false, offline = true,
+                hrHistory = if (dismissed) emptyList() else local.hrHistory(60),
+                needsPermissions = missing, outdated = outdated, toast = toastLocal,
+                confirmation = localConfirm?.first,
+            )
+        } else WatchUiState(
             snapshot = f?.workout ?: WorkoutSnapshot(),
             music = f?.music,
             confirmation = localConfirm?.first ?: f?.confirmation,
@@ -159,6 +177,7 @@ object WatchClient {
                         is Command.StartWorkout -> offlineStart(c.type, force = false)
                         Command.PauseWorkout -> if (!WatchRuntime.controller.localPause()) toastLocally("Couldn't pause workout")
                         Command.ResumeWorkout -> if (!WatchRuntime.controller.localResume()) toastLocally("Couldn't resume workout")
+                        Command.DismissSummary -> dismissedLocal = WatchRuntime.recorder.sessionId
                         Command.StopWorkout -> if (!WatchRuntime.controller.localStop()) toastLocally("Couldn't stop workout")
                         is Command.Answer -> localConfirm?.takeIf { it.first.id == c.confirmationId }?.let { (_, type) ->
                             localConfirm = null

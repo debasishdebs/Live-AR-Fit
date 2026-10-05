@@ -11,7 +11,7 @@ import com.debasish.livefit.watch.ui.WatchApp
 class MainActivity : ComponentActivity() {
     private val perms = arrayOf(
         Manifest.permission.BODY_SENSORS, "android.permission.health.READ_HEART_RATE",
-        Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACTIVITY_RECOGNITION, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION,
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
