@@ -11,6 +11,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
+/**
+ * Cross-device confirmation service: at most one pending confirmation at a time.
+ * First answer from any device wins; silence times out after 15 seconds.
+ *
+ * **Caller contract**: This service must be used from a single thread or single-threaded dispatcher.
+ * All [ask] and [answer] calls must happen on the same dispatcher (e.g., Main.immediate on phone,
+ * test dispatcher in tests). No synchronization is performed.
+ */
 class DefaultConfirmationService(
     private val clock: Clock,
     private val newId: () -> String = { UUID.randomUUID().toString() },
@@ -27,10 +35,24 @@ class DefaultConfirmationService(
         val deferred = CompletableDeferred<ConfirmationOutcome>()
         waiter = deferred
         _pending.value = Confirmation(id, kind, title, message, defaultYes = defaultYes, expiresAtMs = clock.nowMs() + timeoutMs)
-        val outcome = withTimeoutOrNull(timeoutMs) { deferred.await() } ?: ConfirmationOutcome.Timeout
-        if (_pending.value?.id == id) _pending.value = null
-        if (waiter === deferred) waiter = null
-        return outcome
+        return try {
+            val outcome = withTimeoutOrNull(timeoutMs) { deferred.await() }
+            // If timeout occurred (outcome == null), check if deferred was already completed.
+            // This closes the window between timeout and answer arrival.
+            outcome ?: if (deferred.isCompleted) {
+                try {
+                    @Suppress("OPT_IN_USAGE")
+                    deferred.getCompleted()
+                } catch (e: Exception) {
+                    ConfirmationOutcome.Timeout
+                }
+            } else {
+                ConfirmationOutcome.Timeout
+            }
+        } finally {
+            if (_pending.value?.id == id) _pending.value = null
+            if (waiter === deferred) waiter = null
+        }
     }
 
     override fun answer(confirmationId: String, yes: Boolean): Boolean {

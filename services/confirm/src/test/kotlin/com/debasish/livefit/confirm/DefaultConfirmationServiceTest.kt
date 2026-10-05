@@ -2,6 +2,7 @@ package com.debasish.livefit.confirm
 
 import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.services.ConfirmationOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
@@ -61,5 +62,18 @@ class DefaultConfirmationServiceTest {
         assertEquals("b", svc.pending.value!!.title)
         svc.answer(svc.pending.value!!.id, yes = true)
         assertEquals(ConfirmationOutcome.Yes, second.await())
+    }
+
+    @Test fun cancelledAskClearsPendingAndRejectsLateAnswers() = runTest {
+        val svc = service()
+        val job = async { svc.ask(ConfirmationKind.TakeOverWorkout, "Take over?", "SH is tracking") }
+        runCurrent()
+        val id = svc.pending.value!!.id
+        job.cancel()
+        runCurrent()
+        // After cancellation, pending should be cleared
+        assertNull(svc.pending.value)
+        // Late answer to the cancelled confirmation should be rejected
+        assertFalse(svc.answer(id, yes = true))
     }
 }
