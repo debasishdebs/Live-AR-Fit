@@ -37,6 +37,7 @@ import com.debasish.livefit.phone.ui.home.HomeScreen
 import com.debasish.livefit.phone.ui.home.PillNav
 import com.debasish.livefit.phone.ui.home.Tab
 import androidx.navigation.compose.currentBackStackEntryAsState
+import com.debasish.livefit.phone.ui.history.SessionDetailScreen
 import com.debasish.livefit.phone.ui.list.ListScreen
 import com.debasish.livefit.phone.ui.list.ListSources
 import com.debasish.livefit.phone.ui.settings.SettingsScreen
@@ -67,7 +68,7 @@ class AppActivity : ComponentActivity() {
                 val showNav = route != "workout"
                 val tab = when {
                     route == "home" -> Tab.Home
-                    route.startsWith("list/") && currentSource == ListSources.WORKOUTS -> Tab.Activity
+                    (route.startsWith("list/") && currentSource == ListSources.WORKOUTS) || route.startsWith("session/") -> Tab.Activity
                     route == "music" -> Tab.Music
                     route == "settings" || route == "hud" || route == "units" || route == "about" || route.startsWith("device/") || route.startsWith("list/") -> Tab.Settings
                     else -> null
@@ -135,7 +136,11 @@ class AppActivity : ComponentActivity() {
                                 filterJson = entry.arguments?.getString("filter"),
                                 onBack = { nav.popBackStack() },
                                 onMessage = toast,
+                                onOpen = { nav.navigate("session/$it") },
                             )
+                        }
+                        composable("session/{id}") { e ->
+                            SessionDetailScreen(services, e.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() })
                         }
                     }
                     if (showNav) {

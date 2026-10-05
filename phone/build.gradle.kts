@@ -30,6 +30,8 @@ android {
 }
 
 dependencies {
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
     implementation(project(":core:services"))
     implementation(project(":services:workout"))
     implementation(project(":services:sync"))
