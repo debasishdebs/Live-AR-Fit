@@ -31,6 +31,8 @@ import com.debasish.livefit.services.workout.HubWorkoutService
 import com.debasish.livefit.services.workout.SimulatedWatchGateway
 import com.debasish.livefit.sync.HubCommandRouter
 import com.debasish.livefit.sync.StateBroadcaster
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,6 +40,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -85,7 +88,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         broadcaster.start()
         // Any state change -> push (coalesced).
         scope.launch {
-            merge(workout.snapshot, music.nowPlaying, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)
+            merge(workout.snapshot, music.nowPlaying, music.volume, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)
                 .collect { markDirty() }
         }
         scope.launch { workout.notices.collect(::flash) }
@@ -105,10 +108,11 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         // HUD settings: on change and whenever the glasses (re)connect.
         scope.launch {
             combine(settings.hud, glasses.status) { hud, st -> hud to st.link }
+                .distinctUntilChanged()
                 .collect { (hud, link) -> if (link == LinkState.Connected) glasses.pushSettings(HudSettingsFrame(settings = hud)) }
         }
         // ---- end link wiring ----
-        glasses.connect()
+        // Connecting is owned by Task 14's authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.
     }
 
     private fun buildFrame() = StateFrame(
@@ -129,8 +133,13 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     private suspend fun sendFrames() {
         val frame = buildFrame()
         _lastFrame.value = frame
-        runCatching { glasses.push(frame) }
-        runCatching { watch.push(frame) }
+        pushTo("glasses") { glasses.push(frame) }
+        pushTo("watch") { watch.push(frame) }
+    }
+
+    /** One failing link must not block the other; cancellation still propagates. */
+    private suspend fun pushTo(name: String, push: suspend () -> Unit) {
+        try { push() } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w("LiveFitHub", "$name push failed", e) }
     }
 
     private fun phoneBattery(): Int? =

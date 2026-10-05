@@ -104,6 +104,8 @@ class HubCommandRouterTest {
         r.dispatch(env("a", Command.NextTrack))
         r.dispatch(env("b", Command.SetVolume(1.7f)))
         r.dispatch(env("c", Command.Answer("c1", yes = true)))
+        r.dispatch(env("d", Command.StartWorkout(WorkoutType.Run)))
+        r.dispatch(env("e", Command.StopWorkout))
         runCurrent()
         assertEquals(listOf("Next song", "Volume 100%"), toasts)
     }

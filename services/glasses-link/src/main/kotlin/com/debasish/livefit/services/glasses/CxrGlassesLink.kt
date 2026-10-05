@@ -62,7 +62,7 @@ class CxrGlassesLink(context: Context) : GlassesLinkService {
     override fun connect() {
         val token = app.getSharedPreferences(PREFS, 0).getString("token", null)
         if (token == null) { _status.update { it.copy(link = LinkState.Disconnected, detail = "Authorise in Hi Rokid") }; return }
-        if (session != null && _status.value.link != LinkState.Disconnected) return
+        if (session != null && _status.value.link == LinkState.Connected) return // replaces a session still Connecting
         preferGlobalHiRokid()
         session?.close()
         _status.update { it.copy(link = LinkState.Connecting, detail = null) }

@@ -71,13 +71,10 @@ class HubCommandRouter(
     }
 
     companion object {
-        /** Toast text for a user command; null = silent (confirmation answers show on their own card). */
+        /** Toast text for music/volume commands; null = silent. */
         fun describe(command: Command): String? = when (command) {
-            is Command.StartWorkout -> "${command.type.label} started"
-            Command.PauseWorkout -> "Paused"
-            Command.ResumeWorkout -> "Resumed"
-            Command.StopWorkout -> "Workout stopped"
-            Command.DismissSummary -> "Done"
+            // Workout commands get feedback from state changes and HubWorkoutService notices (a rejected Start must not say "started").
+            is Command.StartWorkout, Command.PauseWorkout, Command.ResumeWorkout, Command.StopWorkout, Command.DismissSummary -> null
             Command.PlayPause -> "Play / pause"
             Command.PlayMusic -> "Playing"
             Command.PauseMusic -> "Music paused"

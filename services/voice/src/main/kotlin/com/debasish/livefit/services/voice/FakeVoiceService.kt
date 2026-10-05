@@ -27,8 +27,9 @@ class FakeVoiceService(
             delay(1_800)
             _state.value = VoiceState.Processing
             delay(600)
-            CommandParser.parse(script[turn++ % script.size])?.let { onCommand(it) }
-            _state.value = VoiceState.Idle
+            val command = CommandParser.parse(script[turn++ % script.size])
+            _state.value = VoiceState.Idle // before the command, so a spoken answer to a confirmation it triggers can start
+            command?.let { onCommand(it) }
         }
     }
 
