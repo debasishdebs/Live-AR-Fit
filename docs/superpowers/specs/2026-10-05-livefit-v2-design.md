@@ -18,7 +18,7 @@ V1 and V2 are designed together and planned together; V2 is built after V1 passe
 - A real V1 workout appears in Health Connect (and therefore Samsung Health / Google Fit-style readers) with matching duration, HR samples, steps, distance and calories.
 - **No demo/fake data ever reaches Health Connect.**
 - "Add to playlist" from phone, watch, glasses and voice adds the right song to the default playlist.
-- Google sign-in survives beyond 7 days without re-prompting.
+- After the one-time consent, playlist adds keep working beyond 7 days without re-prompting (silent re-authorization).
 
 ### Out of scope
 Reading other apps' workouts into the Activity list (owner chose **LiveFit only**), playlist creation/editing beyond "add current song", everything in V3.
@@ -74,9 +74,11 @@ Live: `HealthConnectSink`. Fake: in-memory sink for tests/demo (never touches HC
 ## 3. YouTube playlists — `:services:playlists`
 
 ### 3.1 Sign-in (Settings → Linked services → YouTube Music)
-- "Sign in with Google" using the Credential Manager / `AuthorizationClient` flow requesting scope `https://www.googleapis.com/auth/youtube`.
-- Google Cloud project OAuth consent screen set to **"In production" (unverified)** — testing-mode refresh tokens expire after 7 days. Owner accepts the "unverified app" warning once.
-- Refresh token stored with **EncryptedSharedPreferences / Android Keystore**. Sign out revokes and deletes it.
+- "Sign in with Google" via Google Identity Services **`AuthorizationClient.authorize()`** requesting scope `https://www.googleapis.com/auth/youtube`. First call returns a `PendingIntent` (consent screen) which the Linked services screen launches.
+- **No refresh token is stored by the app.** `AuthorizationClient` does not hand a refresh token to Android apps for this flow; instead, **every time an access token is needed** (or after it expires) the service calls `authorize()` again. After consent Google returns an **access token silently**; if it instead returns a resolution `PendingIntent` (consent revoked, scope changed, account removed), the account state becomes `NeedsConsent` and Linked services shows "Reconnect YouTube" — background commands (voice/watch/glasses) then fail with toast "Reconnect YouTube on your phone" rather than launching UI.
+- Access token cached **in memory only** until its expiry; the signed-in account email is the only persisted item (plain prefs).
+- Google Cloud project OAuth consent screen set to **"In production" (unverified)** so consent isn't time-limited as in testing mode. Owner accepts the "unverified app" warning once.
+- Sign out: clear the cached token and account, and call `AuthorizationClient.revokeAccess` where available (else instruct the user to remove access in their Google account).
 - Screen also shows: notification-access status (V1), workout-start music behaviour (V1), **Default playlist** picker (generic list screen, source `playlists`, from `playlists.list?mine=true`).
 
 ### 3.2 "Add to playlist" command
@@ -84,16 +86,19 @@ Live: `HealthConnectSink`. Fake: in-memory sink for tests/demo (never touches HC
 - Entry points: phone Music screen button, watch music page button, glasses (voice only, plus confirmation highlight), voice phrases: "add to playlist", "save this song", "add this song to my playlist", "add to workout playlist" (parser + tests).
 - Flow:
   1. Take `NowPlaying(title, artist, durationMs)` from the media session (no video id is exposed — verified).
-  2. Resolve video: cache lookup (Room `track_cache(title, artist) → videoId, confidence`), else `search.list(q="<title> <artist>", type=video, videoCategoryId=10 Music, maxResults=5)`; score by title/artist similarity and duration delta.
-  3. High confidence → `playlistItems.insert`; toast "Added to <playlist>" on all devices.
-  4. Low confidence → `Confirmation(kind = AddToPlaylistMatch, "Add '<title> – <artist>'?")` on all devices (first answer wins, 15 s → No).
-- **Quota:** search = 100 units, insert = 50 → ~66 adds/day on the default 10,000/day; cache avoids repeat searches. Show "Daily YouTube limit reached" on quota error.
-- Errors: auth expired → re-prompt sign-in only then; network/quota → toast with reason; never silent.
+  2. **Capture** the request immediately: `{trackSnapshot(title, artist, durationMs), playlistId, requestId}`. All later steps use this snapshot, never the live now-playing (the song may change meanwhile).
+  3. Resolve video: cache lookup (Room `track_cache(title, artist, durationMs) → videoId, confidence`), else `search.list(part=snippet, q="<title> <artist>", type=video, videoCategoryId=10, maxResults=5)` → candidate ids → **`videos.list(part=contentDetails,snippet, id=…)`** to get each candidate's duration (search results don't include it). Score = title similarity + artist/channel similarity + duration delta (|Δ| ≤ 3 s strong, ≤ 10 s ok).
+  4. High confidence → insert (step 6).
+  5. Low confidence → `Confirmation(kind = AddToPlaylistMatch, "Add '<candidate title> – <channel>' to <playlist>?")` whose **payload binds `requestId`, the snapshot, the chosen `videoId` and `playlistId`**. On Yes the bound values are used even if a different song is now playing; on No / timeout nothing is added.
+  6. `playlistItems.insert(playlistId, videoId)`. Toast "Added to <playlist>" on all devices. Successful matches are cached.
+- **Uncertain outcome:** a network error after the insert request was sent does **not** mean nothing was added. Before retrying, check `playlistItems.list(playlistId, videoId=…)`; if present → report success, else retry once. Toast "Couldn't confirm — check YouTube Music" if the check also fails.
+- **Quota** (per current YouTube Data API docs at time of writing — verify in the Cloud console): `search.list` has its **own default bucket of 100 calls/day**; `videos.list` costs 1 unit and `playlistItems.insert` 50 units from the default 10,000 units/day. So **≈100 new-song lookups/day**; cached songs need no search. On quota errors show "Daily YouTube limit reached".
+- Errors: consent needed → "Reconnect YouTube" (above); other API errors → toast with reason; never silent.
 
 ### 3.3 Interfaces
 ```kotlin
 interface PlaylistService {                // :core:services
-    val account: StateFlow<AccountState>   // SignedOut | SignedIn(email) | Expired
+    val account: StateFlow<AccountState>   // SignedOut | SignedIn(email) | NeedsConsent
     suspend fun playlists(): List<Playlist>
     suspend fun addCurrent(track: NowPlaying, playlistId: String): AddResult // Added | NeedsConfirm(match) | Failed(reason)
 }
@@ -104,7 +109,7 @@ Live: `YouTubeDataPlaylistService`. Fake: in-memory.
 
 ## 4. Protocol additions
 - `Command.AddToPlaylist(playlistId?)`, `Confirmation.kind = AddToPlaylistMatch`.
-- `StateFrame.music.liked` already exists; no other wire changes. `protocolVersion` → 2; V1 clients ignore unknown commands gracefully (phone never sends commands to clients).
+- `protocolVersion` → 2. Per the V1 version policy (V1 §4.7, **coordinated upgrades**), all three APKs are updated together; a device still on version 1 is told to update and its commands are ignored. No mixed-version compatibility is promised.
 
 ## 5. Error handling (V2)
 | Situation | Behaviour |
@@ -113,10 +118,11 @@ Live: `YouTubeDataPlaylistService`. Fake: in-memory.
 | HC permission revoked | Status "Needs permissions"; queue holds; toast once per workout end. |
 | Write partially fails | Whole session retried (upsert by clientRecordId makes retries safe). |
 | Ineligible (Demo) session | Never written; shown as "Demo · not saved to Health Connect" in detail page. |
-| YouTube quota / network | Toast with reason; nothing added. |
-| Refresh token revoked | Account state `Expired`; one prompt in Linked services. |
+| YouTube quota | "Daily YouTube limit reached"; nothing added. |
+| Network error during insert | Verify with `playlistItems.list` before retry (may already be added). |
+| Consent revoked / resolution required | Account state `NeedsConsent`; "Reconnect YouTube" in Linked services; background commands toast instead of opening UI. |
 
 ## 6. Testing (V2)
-- Unit: provenance gate, clientRecordId scheme + idempotency, per-minute interval derivation from cumulative totals, track-match scoring, parser phrases for add-to-playlist.
+- Unit: provenance gate, clientRecordId scheme + idempotency, per-minute interval derivation from cumulative totals, track-match scoring (incl. duration from `videos.list`), confirmation payload binding (song changes during confirm), uncertain-insert verification, parser phrases for add-to-playlist.
 - Instrumented: Health Connect writes with the `androidx.health.connect:connect-testing` fake client; encrypted token store.
 - Device: real workout → verify in Health Connect app (and Samsung Health) values match LiveFit summary; add-to-playlist from each device, verify in YouTube Music.

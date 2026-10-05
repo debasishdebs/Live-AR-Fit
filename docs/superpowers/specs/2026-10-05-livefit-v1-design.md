@@ -79,7 +79,7 @@ Facts below were **verified on the owner's devices** during brainstorming spikes
                     ┌────────────── PHONE (hub, foreground service) ───────────────┐
  Galaxy Watch       │  ServiceGraph (bindings: Fake | Live per service)            │      Rokid Glasses
  ┌─────────────┐    │                                                              │    ┌──────────────┐
- │ Health Svcs │ ─SampleBatch──► MetricsSource(watch) ─► WorkoutService ◄─ Commands ◄─┼────│ HUD app      │
+ │ Health Svcs │ ─SessionDelta─► MetricsSource(watch) ─► WorkoutService ◄─ Commands ◄─┼────│ HUD app      │
  │ local buffer│ ◄─StateFrame/ack─ WatchLink (Data Layer) │ (state machine)        │    │ CXR bridge   │
  │ watch UI    │ ───Commands───►                          ▼                        │    │ AudioRecord  │
  └─────────────┘    │  ConfirmationService ◄─► all 3     HistoryStore (Room)        │    └──────────────┘
@@ -93,7 +93,7 @@ Facts below were **verified on the owner's devices** during brainstorming spikes
 |---|---|---|
 | `:core:model` | Kotlin JVM | Shared types and wire protocol (§4). kotlinx.serialization, `classDiscriminator = "cmd"`. |
 | `:core:services` | Kotlin JVM | Interfaces: `MetricsSource`, `WorkoutService`, `GlassesLinkService`, `WatchLinkService`, `MusicService`, `VoiceService`, `SpeechToText`, `ConfirmationService`, `HistoryStore`, `SettingsStore`. |
-| `:services:workout` | Kotlin JVM | `DefaultWorkoutService`: state machine, session assembly from `SampleBatch`es, offline-gap replay, auto type detection, HR history. Used on phone (authoritative) and watch (offline copy). |
+| `:services:workout` | Kotlin JVM | `DefaultWorkoutService`: state machine, session assembly from `SessionDelta`s (events + samples), offline-gap replay, auto type detection, HR history. Used on phone (authoritative) and watch (offline copy). |
 | `:services:metrics` | Android lib | `HealthServicesSource` (watch side, produces samples), `WatchSampleSource` (phone side, consumes batches), `FakeMetricsSource`. |
 | `:services:watch-link` | Android lib | `DataLayerWatchLink` (phone) + watch-side client: frames, commands, sample batches, acks, battery. |
 | `:services:glasses-link` | Android lib | `CxrGlassesLink`: session lifecycle, authorization workaround, reconnect, frames, glasses events, audio chunks. |
@@ -111,35 +111,57 @@ Existing mock-up code in these modules is the starting point: `DefaultWorkoutSer
 
 ## 4. Wire protocol
 
-All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (integer, starts at 1). Unknown fields are ignored. Sealed hierarchies use discriminator key **`"cmd"`** (the default `"type"` collides with `StartWorkout.type` — bug found in spikes).
+All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (integer, starts at 1; policy in §4.7). Unknown fields are ignored defensively. Sealed hierarchies use discriminator key **`"cmd"`** (the default `"type"` collides with `StartWorkout.type` — bug found in spikes).
 
 ### 4.1 Messages
 | Message | Direction | Content |
 |---|---|---|
-| `StateFrame` | phone → watch, glasses | `workout: WorkoutSnapshot`, `music: NowPlaying?`, `devices` (link state + battery for phone/watch/glasses), `voice: VoiceState`, `confirmation: Confirmation?`, `toast: String?`, `ackSampleSeq: Long?` (watch only), `sentAtMs`. |
+| `StateFrame` | phone → watch, glasses | `workout: WorkoutSnapshot`, `music: NowPlaying?` (incl. `volume` 0..1), `devices` (link state + battery for phone/watch/glasses), `voice: VoiceState`, `confirmation: Confirmation?`, `toast: String?`, `sentAtMs`. |
 | `HudSettingsFrame` | phone → glasses | `HudSettings` (scale 0.3–1.0, `HudPosition` 3×3, `items: Set<HudItem>`). Sent on change and on every (re)connect. |
-| `Command` | any → phone | `id: String` (UUID, dedup) + one of: `StartWorkout(type)`, `PauseWorkout`, `ResumeWorkout`, `StopWorkout`, `DismissSummary`, `PlayPause`, `PlayMusic`, `PauseMusic`, `NextTrack`, `PreviousTrack`, `LikeTrack`, `Volume(up)`, `Answer(confirmationId, yes)`. |
-| `SampleBatch` | watch → phone | `sessionId`, `seq` (monotonic per session), `samples: [{tMs, hr?, stepsTotal, distanceKmTotal, kcalTotal, speedKmh?}]`, `provenance`, `final: Boolean`. |
+| `Command` | any → phone | `id: String` (UUID, dedup) + one of: `StartWorkout(type)`, `PauseWorkout`, `ResumeWorkout`, `StopWorkout`, `DismissSummary`, `PlayPause`, `PlayMusic`, `PauseMusic`, `NextTrack`, `PreviousTrack`, `LikeTrack`, `Volume(up)` (voice, ±10 %), `SetVolume(level 0..1)` (watch arc/bezel, phone slider), `Answer(confirmationId, yes)`. |
+| `SessionDelta` | watch → phone | `sessionId`, `seq` (monotonic per session), `events: [SessionEvent]`, `samples: [{tMs, hr?, stepsTotal, distanceKmTotal, kcalTotal, speedKmh?}]`, `provenance`, `final: Boolean`. `SessionEvent` = `Started(tMs, type)` · `Paused(tMs)` · `Resumed(tMs)` · `TypeDetected(tMs, type)` · `Stopped(tMs, reason)`. |
+| `DeltaAck` | phone → watch | `sessionId`, `seq` — highest contiguous seq **durably stored** on the phone (§4.4). |
+| `SessionClaim` | watch → phone | Sent on reconnect when the watch holds an offline session: `sessionId`, `type`, `startMs`, `phase`, `activeMs`, `lastSeq`. |
+| `ExerciseRequest` | phone → watch | `requestId`, `op`: `Start(sessionId, type, force)` · `Pause` · `Resume` · `Stop` (§4.7). |
+| `ExerciseResult` | watch → phone | `requestId`, `ok`, `error?` (`PermissionMissing(perms)` · `OtherAppTracking(appType)` · `SensorUnavailable` · `NoSuchSession` · `Internal(msg)`), `state` (actual Health Services exercise state). |
+| `ExerciseStateReport` | watch → phone | Unsolicited, whenever the real exercise state changes: `sessionId`, `state`, `endedBy?` (`User` · `OtherApp` · `System` · `Error`). |
 | `ListenRequest` / `AudioChunk` / `ListenEnd` | glasses → phone | Push-to-talk: start, 100 ms PCM16 chunks (binary payload in CXR `bytes`), end (VAD or cap). |
 | `BatteryReport` | watch → phone | Percentage, on request and every 60 s. |
 
 ### 4.2 Transports and channel names
 - **Glasses (CXR custom cmd names):** `lf_state`, `lf_settings` (phone → glasses); `lf_cmd`, `lf_listen`, `lf_audio`, `lf_listen_end` (glasses → phone). Payload: `Caps` with one JSON string; audio uses the `bytes` argument.
-- **Watch (Data Layer message paths):** `/lf/state`, `/lf/settings`, `/lf/cmd`, `/lf/samples`, `/lf/battery_req`, `/lf/battery`.
+- **Watch (Data Layer message paths):** `/lf/state`, `/lf/settings`, `/lf/cmd`, `/lf/delta`, `/lf/ack`, `/lf/claim`, `/lf/exercise_req`, `/lf/exercise_res`, `/lf/exercise_state`, `/lf/battery_req`, `/lf/battery`.
 - **Migration:** the mock-up uses `lf_hud` / `lf_cmd` / `lf_listen` (glasses) and `/rf/*` (watch) with a combined `HudFrame`. V1 renames to the names above, splits `HudFrame` into `StateFrame` + `HudSettingsFrame`, and bumps `protocolVersion` to 1. The spike-only `rf_ping` / `rf_metrics` channels, `SpikeActivity` and `DebugReceiver` move behind a debug build type.
 
 ### 4.3 Push-on-change and latency
-- `StateBroadcaster` emits a `StateFrame` **whenever state changes**, coalescing changes within **100 ms**, plus a **5 s heartbeat**. (Replaces the mock-up's fixed 1 s tick, which added up to 1 s latency.)
-- Latency budget (typical): watch HS update (1 Hz) → Data Layer 0.3–0.6 s → phone < 50 ms → CXR ~40 ms → render. **Target ≤ 1 s**, worst case < 1.5 s. Each `SampleBatch` sample's `tMs` and each frame's `sentAtMs` are logged so device tests can measure it.
+- `StateBroadcaster` emits a `StateFrame` **whenever state changes**, coalescing changes within **100 ms**, plus a **5 s heartbeat**. (Replaces the mock-up's fixed 1 s tick, which added up to 1 s latency.) During an active workout frames flow ~1 Hz anyway (each sample changes state); the heartbeat matters when idle or paused.
+- **Liveness:** a client treats the phone as offline only after **12 s without any frame** (two missed heartbeats plus delivery tolerance), or immediately when the transport reports disconnection (Data Layer node lost / CXR session closed). The same 12 s rule applies to the glasses' "Open LiveFit on your phone" message. A healthy paused session therefore never triggers offline mode.
+- Latency budget (typical): watch HS update (1 Hz) → Data Layer 0.3–0.6 s → phone < 50 ms → CXR ~40 ms → render. **Target ≤ 1 s**, worst case < 1.5 s. Each `SessionDelta` sample's `tMs` and each frame's `sentAtMs` are logged so device tests can measure it.
 
-### 4.4 Sample acknowledgement and offline buffer (approach A)
-1. Watch writes every `SampleBatch` to a **local store** before sending.
-2. Phone tracks the highest contiguous `seq` per session and returns it as `ackSampleSeq` in the next `StateFrame` to the watch.
-3. Watch deletes batches `≤ ackSampleSeq`.
-4. **Phone unreachable** (no frame for 3 s): watch switches its UI to a **local `DefaultWorkoutService` copy**, keeps recording and buffering, shows "Phone offline". Glasses show their disconnected state; music controls are disabled on the watch.
-5. **Reconnect:** watch sends buffered batches in order; phone replays them into the session so timer, totals and HR history are continuous; acks; watch deletes.
-6. **Workout ended offline:** watch finalises locally and marks the last batch `final = true`; deletes only after the phone acks the final seq.
-7. **Started on the watch with no phone:** watch generates `sessionId`; the phone adopts it on reconnect.
+### 4.4 Session deltas, acknowledgement and offline buffer (approach A)
+The phone owns the session; the watch only holds a **temporary durable buffer** until the phone has stored everything. No second permanent history is kept on the watch.
+
+**What the watch persists** (small Room/DataStore on the watch, written *before* sending):
+- Session header: `sessionId`, `type`, `startMs`, current `phase`, `activeMs`, last `seq`.
+- Every `SessionDelta` (events + samples). Events capture pause/resume/stop/type detection, so active duration and pause intervals are reconstructable — cumulative measurements alone are not enough.
+
+**Normal flow (phone reachable):**
+1. Watch appends a delta (seq n), persists it, sends it on `/lf/delta`.
+2. Phone writes the delta into Room **in one transaction**, then sends `DeltaAck(sessionId, seq = highest contiguous stored)`. Ack is sent **only after durable storage**.
+3. Watch deletes deltas `≤ ack.seq` for that `sessionId`. Unacked deltas are re-sent on reconnect and every 5 s while unacked (phone ignores duplicates by `(sessionId, seq)`).
+
+**Phone unreachable** (liveness rule §4.3):
+4. Watch switches its UI to a **local `DefaultWorkoutService` copy** seeded from the last frame, shows "Phone offline", keeps recording. Local controls (pause / resume / stop) are applied locally **and recorded as events** in deltas. Music controls are disabled; glasses show their disconnected state.
+
+**Reconnect and adoption:**
+5. Watch sends `SessionClaim`. The phone enters **`Syncing`** for that session: it adopts the claimed `sessionId` (creating the session if it only knew it from earlier frames, or if it was started offline on the watch), then accepts the buffered deltas in seq order.
+6. While `Syncing`, the phone **rejects workout commands** from any device with toast "Syncing watch data…" (music commands still work). Once the phone has stored up to `claim.lastSeq` it rebuilds totals, active time and HR history from events + samples, sets the phase to the watch's claimed phase, acks, and broadcasts a normal `StateFrame`. The watch then drops its local copy and goes back to rendering phone frames.
+7. **Conflict rule:** if the phone has a different active session (only possible with a non-watch source), the session **with samples wins**; an empty phone session is discarded. Two sessions with samples → both are kept; the phone keeps the watch's as active and finalises its own.
+
+**Workout ended while offline:**
+8. Watch records `Stopped`, marks the last delta `final = true`, keeps the buffer. After reconnect + claim + replay, the phone finalises the session (Summary + history). The watch deletes the buffer **only after the ack of the final seq**.
+
+**Started on the watch with no phone:** the watch generates `sessionId` (UUID) and `Started` event; adoption happens via steps 5–6.
 
 ### 4.5 Commands
 - Phone applies commands **in arrival order**, ignores duplicate `id`s, then broadcasts. Clients never mutate shared state locally (except the watch's offline copy in 4.4).
@@ -150,6 +172,21 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 - No answer by `expiresAtMs` (15 s) → **No**; all devices toast "Cancelled".
 - V1 kinds: `TakeOverWorkout` (another app tracking), `StopWorkoutByVoice`.
 
+### 4.7 Version policy — coordinated upgrades
+All three APKs are built from the same commit and share one `protocolVersion`. Any mismatch (not only major) is treated as incompatible: the hub ignores commands from that device and tells it to update; the hub shows which device is outdated. `tools/install-all.sh` installs all three together. Unknown-field tolerance stays only as defensive parsing, not as a compatibility promise.
+
+### 4.8 Hub → watch exercise control
+The phone decides; the watch executes on Health Services and reports what actually happened.
+- **Start:** phone sets phase `Starting`, sends `ExerciseRequest(Start(sessionId, type, force=false))`.
+  - `ok` → phase `Active` when the first delta arrives.
+  - `OtherAppTracking` → phone raises `TakeOverWorkout`; Yes → `Start(..., force=true)`; No/timeout → phase back to `Idle`, toast "Samsung Health is still tracking".
+  - `PermissionMissing(perms)` → phase `Idle`; toast on all devices "Watch needs <perm>"; the watch shows a one-tap permission prompt; Linked services → Galaxy Watch shows the missing permission.
+  - `SensorUnavailable` / `Internal` → `Idle` + toast with reason.
+  - No result within **10 s** → `Idle`, toast "Watch didn't respond", request is cancelled (a late `ok` triggers an immediate `Stop` to avoid a ghost session).
+- **Pause / Resume / Stop:** sent as requests; the watch calls `pauseExercise` / `resumeExercise` / `endExercise`, so Health Services' own active-time matches ours. The phone updates phase on `ok`; on failure it keeps the previous phase and toasts. Stop also finalises the session after the final delta is acked.
+- **Actual state wins:** the watch sends `ExerciseStateReport` whenever Health Services' state changes on its own — e.g. **another app ended our workout** (`endedBy = OtherApp`), auto-pause, or a system end. The phone treats `Ended` as a stop (`reason` recorded), finalises with the data it has, and toasts "Workout ended by <reason>".
+- Requests are idempotent by `requestId`; the watch remembers the last 20.
+
 ---
 
 ## 5. Live services (V1)
@@ -159,7 +196,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 - `prepareExercise` warm-up before `startExercise`.
 - Data types (filtered by `getCapabilities`): `HEART_RATE_BPM`, `STEPS_TOTAL`, `DISTANCE_TOTAL`, `CALORIES_TOTAL`, `SPEED`.
 - GPS: enabled for Run / Cycle / Auto when Settings → Workout → "Use GPS outdoors" is on (requires location permission). Walk uses step-based distance.
-- Before starting: if `OTHER_APP_IN_PROGRESS`, the phone raises `TakeOverWorkout`; the watch force-starts only on Yes.
+- Before starting: if `OTHER_APP_IN_PROGRESS`, the watch returns `OtherAppTracking`; the phone raises `TakeOverWorkout`; the watch force-starts only on a new `Start(force=true)` (§4.8).
 - Fix from spikes: status messages must be sent **before** `stopSelf()` cancels the service scope.
 - Permissions: `BODY_SENSORS`, `health.READ_HEART_RATE`, `ACTIVITY_RECOGNITION`, `FOREGROUND_SERVICE_HEALTH`, `POST_NOTIFICATIONS`, optional `ACCESS_FINE_LOCATION`.
 
@@ -175,7 +212,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 - **Authorization in the background:** companion-device apps are exempt from background-activity-launch limits, so the hub launches a transparent `AuthActivity` that calls `requestAuthorization` (silent when already authorized) and finishes, then connects. Fallback: reflection flag (quirk 2.1.1). Last resort: notification "Open LiveFit to connect glasses".
 - Reconnect back-off: 2 s → 5 s → 10 s → 30 s (repeating at 30 s) while a linked glasses device is present.
 - Sends `HudSettingsFrame` on every connect, `StateFrame`s on change.
-- Glasses app opened manually with no session: after 3 s without a frame it shows "Open LiveFit on your phone".
+- Glasses app opened manually with no session: after 12 s without a frame (liveness rule §4.3) it shows "Open LiveFit on your phone"; it shows "Connecting…" before that.
 
 ### 5.4 Voice — glasses push-to-talk
 1. **Tap** on the glasses touchpad → glasses send `ListenRequest`, start `AudioRecord(MIC, 16 kHz mono)`.
@@ -190,7 +227,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 
 ### 5.5 Music — `YtmMediaSessionService`
 - Requires notification-listener access (Linked services → YouTube Music).
-- `play/pause/next/previous` via `TransportControls`; `like` via custom action `thumbs_up_action`; `volume` via `AudioManager.STREAM_MUSIC` (±10 %).
+- `play/pause/next/previous` via `TransportControls`; `like` via custom action `thumbs_up_action`; `volume` via `AudioManager.STREAM_MUSIC` — `Volume(up)` = ±10 %, `SetVolume(level)` = absolute; current level published in `NowPlaying.volume`.
 - `NowPlaying` from metadata + playback state (title, artist, position, duration, isPlaying, liked if exposed).
 - If no YTM session exists: `PlayMusic` launches YTM with `MEDIA_PLAY_FROM_SEARCH` using the saved query.
 - **Workout start behaviour** (Settings → Music): *Don't touch* / *Resume last played* (**default**) / *Play saved search* (e.g. "workout mix"). On stop: pause music (default on). Pause workout does not pause music by default.
@@ -228,7 +265,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 - **Live pager (3 pages, swipe):**
   1. HR in an edge ring coloured by **effort** (green Z0–2, amber Z3, orange Z4, red Z5), faint 60 s HR trend line behind the number, "Z2 · Fat burn" label, type, timer, pause; when paused: resume + stop.
   2. Pills: calories (big), steps, distance, speed.
-  3. Music: title/artist, previous / play-pause / next, like.
+  3. Music: title/artist, previous / play-pause / next, like, and **volume**: a curved arc along the screen edge showing the phone's media volume (from `StateFrame.music.volume`); drag the arc or **turn the rotating bezel** (5 % per detent, only while this page is shown) → `SetVolume(level)`, throttled to ≤ 10 commands/s.
 - **Summary** with Done. **Confirmation** overlay (Yes/No buttons). "Phone offline" badge in offline mode.
 
 ### 6.3 Glasses HUD (green monochrome)
@@ -247,7 +284,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 
 | Situation | Behaviour |
 |---|---|
-| Watch ↔ phone link drops mid-workout | Watch records locally (§4.4); phone "Watch offline"; glasses watch ring dotted + slash; gap replayed on reconnect. |
+| Watch ↔ phone link drops mid-workout | After the liveness timeout (§4.3) the watch records locally (§4.4); phone "Watch offline"; glasses watch ring dotted + slash; gap replayed on reconnect. |
 | Glasses disconnect | Workout continues; reconnect with back-off; HUD resumes. |
 | Phone restarts / app killed mid-workout | Watch continues offline; next watch message wakes the phone; hub adopts the session from the watch buffer. |
 | HR unavailable | HUD "--", watch "acquiring"; other metrics continue. |
@@ -258,7 +295,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 | YTM not running / no notification access | Music controls show "Connect YouTube Music" → Linked services. |
 | Rokid authorization lost | Transparent AuthActivity → reflection fallback → notification. |
 | Battery ≤ 15 % on any device | Ring at full brightness; one warning toast per device per workout. |
-| Protocol mismatch | Unknown fields ignored; major-version mismatch shows "Update LiveFit on your watch/glasses". |
+| Protocol mismatch | Coordinated upgrades (§4.7): any `protocolVersion` difference → the outdated device shows "Update LiveFit on your <device>" and its commands are ignored until updated. |
 
 ---
 
@@ -266,7 +303,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 
 | Level | Scope | Location |
 |---|---|---|
-| Unit (pure Kotlin) | Workout state machine (pause excluded, auto-detect, gap replay, duplicate commands), parsers per language incl. ASR-style variants, yes/no parser, protocol round-trips + version tolerance, confirmation (first answer wins, timeout), provenance rule, ack + buffer pruning. Existing: 27 tests. | `:core:*`, `:services:*` |
+| Unit (pure Kotlin) | Workout state machine (pause excluded, auto-detect, gap replay from events + samples, duplicate commands, Syncing rejects workout commands), exercise-control results (permission missing, other app tracking, timeout, late ok → stop, ended by other app), delta ack only after durable store + retry/dedup, liveness (paused session with 5 s heartbeat never goes offline), parsers per language incl. ASR-style variants, yes/no parser, protocol round-trips + version tolerance, confirmation (first answer wins, timeout), provenance rule, ack + buffer pruning. Existing: 27 tests. | `:core:*`, `:services:*` |
 | Contract | Each Live service passes the same suite as its Fake. | per service |
 | Android instrumented | Room history, settings store, setup wizard, list screen, Apply/auto-apply. | phone, watch |
 | On-device scripted | adb scripts: start/pause/stop from each device and verify all three; latency watch-sample → glasses render (log, target ≤ 1 s); glasses push-to-talk with recorded phrases; Samsung Health takeover with confirm on each device; watch Bluetooth off mid-workout → on → no gap. | `tools/device-tests/` |
@@ -296,3 +333,4 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 - Glasses confirm by touchpad and voice.
 - HUD settings apply to all LiveFit glasses screens; draft + Apply / auto-apply on back.
 - Footer persistent except live Workout screen.
+- Review round 1 (Codex): 12 s liveness vs 5 s heartbeat; SessionDelta events + DeltaAck after durable store + SessionClaim/Syncing adoption; explicit hub → watch ExerciseRequest/Result/StateReport; coordinated-upgrade version policy; watch volume via edge arc + rotating bezel (`SetVolume`).

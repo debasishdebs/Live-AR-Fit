@@ -58,8 +58,10 @@ During a workout the glasses show live watch data (heart rate, calories, timer, 
 |---|---|---|
 | Rokid SDK only (CXR-L/S), never raw Bluetooth RFCOMM | Owner requirement; official path; earlier apps wrongly used raw RFCOMM | Raw SPP |
 | **Phone is the hub** (single source of truth); watch and glasses send Commands and render StateFrames | Sync across 3 devices without conflicts; history in one place; future ring/band sources plug in the same way | Watch-owned workout (doesn't fit other sources), dual-record + merge (conflicts) |
-| **Offline approach A:** the watch always streams raw samples; if the phone is unreachable it runs a local copy of the workout, buffers samples, and deletes them only after the phone acks (or at workout end after ack) | No data loss; watch-only starts possible | Phone-required (loses data) |
-| Push-on-change state frames (100 ms coalescing + 5 s heartbeat) instead of a 1 Hz tick | 1 Hz polling added up to 1 s latency; target ≤ 1 s | Fixed tick |
+| **Offline approach A:** the watch always streams `SessionDelta`s (events: start/pause/resume/stop/type + samples); if the phone is unreachable it runs a local copy, keeps the header + deltas durably, and deletes them only after a `DeltaAck(sessionId, seq)` sent once the phone has stored them durably. On reconnect a `SessionClaim` puts the phone in `Syncing` (workout commands rejected) until replay completes | No data loss; pause intervals/active time reconstructable; watch-only starts possible | Phone-required (loses data) |
+| Hub → watch exercise control via `ExerciseRequest` / `ExerciseResult` / `ExerciseStateReport` (permission missing, other app tracking, timeout, ended by another app) | Phone decides, watch reports what Health Services actually did | Implicit control |
+| Version policy: coordinated upgrades — any `protocolVersion` mismatch → "Update LiveFit on <device>", commands ignored | Three personal-use APKs built from one commit | Mixed-version compatibility |
+| Push-on-change state frames (100 ms coalescing + 5 s heartbeat) instead of a 1 Hz tick; offline only after 12 s without a frame or a transport disconnect | 1 Hz polling added up to 1 s latency; target ≤ 1 s; a paused session must not look offline | Fixed tick; 3 s timeout (contradicted the heartbeat) |
 | Modular services: one module per service, Fake + Live behind interfaces, bindings in one wiring file per app | Mock-ups first, swap to live per service; testability | Separate processes / AIDL (overkill, battery) |
 | Pure Kotlin for core logic (no Android imports) | Future iOS via Kotlin Multiplatform; owner wants platform decoupling | Android-coupled core |
 | Phone foreground service starts when the glasses **or** a wearable is nearby (companion-device presence); otherwise the device shows "Open LiveFit on your phone" | The Rokid SDK needs a foreground service; the watch can wake the phone, the glasses can't | Always-on (battery), workout-only (friction) |
@@ -72,8 +74,8 @@ During a workout the glasses show live watch data (heart rate, calories, timer, 
 | Music when a workout starts: a setting, default "Resume last played"; stopping pauses music | Owner choice | Never touch / always auto-play |
 | History: Room on the phone, 1 Hz samples, **provenance** per sample (Live(source) / Fake); Activity tab shows **LiveFit sessions only** + (V2) Health Connect daily totals | Owner choice; provenance enables the V2 real-data guarantee | Merging other apps' workouts |
 | V2: Health Connect write-back **only for 100% Live sessions**; the writer refuses ineligible sessions at the API boundary and isn't even bound in Fake builds; `clientRecordId` makes writes idempotent | Owner: never write demo data | UI-only guard |
-| V2: YouTube sign-in under Settings → Linked services; the OAuth app set to "In production (unverified)" | Testing-mode refresh tokens expire after 7 days | — |
-| V2 add-to-playlist: search by title + artist (no video ID), cache, confirm on a weak match | Fact 7; quota: search 100 + insert 50 units → ~66 adds/day | — |
+| V2: YouTube sign-in under Settings → Linked services; OAuth app "In production (unverified)"; no refresh token stored — `AuthorizationClient.authorize()` is called again for silent access tokens, resolution → "Reconnect YouTube" | Testing-mode consent is time-limited; AuthorizationClient doesn't give Android apps a refresh token | Storing a refresh token |
+| V2 add-to-playlist: search by title + artist (no video ID) + `videos.list` durations, cache, confirm on a weak match with the request bound to the captured song/candidate/playlist; verify before retrying an uncertain insert | Fact 7; quota per current docs: search has its own 100 calls/day bucket → ≈100 new-song lookups/day, cached songs free | — |
 
 ## Approved UX (mock-ups exist in code and were tested on devices)
 - **Phone:** white, icon-led (pastel icon chips; inspired by Hi Rokid / Samsung Health / AIVELA). Floating footer on every page except the live Workout screen. Generic reusable list screen (search / filter / sort / confirm + progress overlay).
@@ -82,7 +84,7 @@ During a workout the glasses show live watch data (heart rate, calories, timer, 
 - **Watch:** black. Pager with three pages:
   1. heart rate in a ring coloured by effort (green → amber → red), a faint 60 s trend line behind it, and the zone label;
   2. stat pills;
-  3. music controls.
+  3. music controls incl. volume (edge arc + rotating bezel → `SetVolume`).
   Then a summary screen.
 - **Glasses HUD:**
   - **Rendering rules:** black = transparent, outlines only, brightness tiers 100 / 60 / 35%.
