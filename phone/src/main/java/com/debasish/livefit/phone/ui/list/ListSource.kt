@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.debasish.livefit.phone.services
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutHistorySource
@@ -53,6 +54,8 @@ interface ListSource {
     val searchHint: String
     /** Labels for the status filter chips and section headers. Empty = no grouping/filtering. */
     val statusLabels: Map<ItemStatus, String> get() = emptyMap()
+    /** False keeps the source's own order (e.g. newest-first history) and hides the A–Z toggle. */
+    val sortable: Boolean get() = true
     val doneSection: String get() = ""
     val actionSection: String get() = ""
     /** Trailing icon for [ItemStatus.ActionNeeded] rows. */
@@ -66,10 +69,10 @@ object ListSources {
     const val PERMISSIONS = "permissions"
     const val WORKOUTS = "workouts"
 
-    fun create(id: String, context: Context): ListSource = when (id) {
+    fun create(id: String, context: Context, open: (String) -> Unit = {}): ListSource = when (id) {
         LANGUAGES -> LanguageSource(context.applicationContext)
         PERMISSIONS -> PermissionSource(context)
-        WORKOUTS -> WorkoutHistorySource()
+        WORKOUTS -> WorkoutHistorySource(context.services.history, open)
         else -> error("Unknown list source: $id")
     }
 }

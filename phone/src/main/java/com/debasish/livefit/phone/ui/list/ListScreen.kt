@@ -71,9 +71,9 @@ private enum class SortOrder { AZ, ZA }
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMessage: (String) -> Unit) {
+fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMessage: (String) -> Unit, onOpen: (String) -> Unit = {}) {
     val context = LocalContext.current
-    val source = remember(sourceId) { ListSources.create(sourceId, context) }
+    val source = remember(sourceId) { ListSources.create(sourceId, context, onOpen) }
     val filter = remember(filterJson) { filterJson?.let { runCatching { JSONObject(it) }.getOrNull() } }
     val scope = rememberCoroutineScope()
 
@@ -116,7 +116,7 @@ fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMess
     val visible = items.orEmpty()
         .filter { query.isBlank() || it.title.contains(query, true) || (it.subtitle?.contains(query, true) == true) }
         .filter { statusFilter == null || it.status == statusFilter }
-        .let { list -> if (sort == SortOrder.AZ) list.sortedBy { it.title.lowercase() } else list.sortedByDescending { it.title.lowercase() } }
+        .let { list -> if (!source.sortable) list else if (sort == SortOrder.AZ) list.sortedBy { it.title.lowercase() } else list.sortedByDescending { it.title.lowercase() } }
     val installed = if (grouped) visible.filter { it.status == ItemStatus.Done || it.status == ItemStatus.InProgress } else emptyList()
     val others = visible - installed.toSet()
 
@@ -126,7 +126,7 @@ fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMess
                 if (grouped) BadgedBox(badge = { if (statusFilter != null) Badge(containerColor = LiveFitColors.Mint) }) {
                     IconButton(onClick = { showFilters = true }) { Icon(Icons.Rounded.FilterList, contentDescription = "Filter") }
                 }
-                IconButton(onClick = { sort = if (sort == SortOrder.AZ) SortOrder.ZA else SortOrder.AZ }) {
+                if (source.sortable) IconButton(onClick = { sort = if (sort == SortOrder.AZ) SortOrder.ZA else SortOrder.AZ }) {
                     Box(contentAlignment = Alignment.BottomEnd) {
                         Icon(Icons.Rounded.SortByAlpha, contentDescription = "Sort")
                         Text(if (sort == SortOrder.AZ) "↓" else "↑", style = MaterialTheme.typography.labelMedium, color = LiveFitColors.MintDeep)
