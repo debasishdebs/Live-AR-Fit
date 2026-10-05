@@ -14,7 +14,7 @@ interface HistoryDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertSession(s: SessionEntity)
     @Query("SELECT seq FROM delta WHERE sessionId = :id ORDER BY seq") suspend fun seqs(id: String): List<Long>
     @Query("SELECT json FROM delta WHERE sessionId = :id ORDER BY seq") suspend fun deltaJson(id: String): List<String>
-    @Query("SELECT id FROM session WHERE summaryJson IS NULL AND status != 'Discarded' ORDER BY createdAtMs") suspend fun openIds(): List<String>
+    @Query("SELECT id FROM session WHERE summaryJson IS NULL AND status != 'Discarded' AND EXISTS (SELECT 1 FROM delta WHERE delta.sessionId = session.id) ORDER BY createdAtMs") suspend fun openIds(): List<String>
     @Query("SELECT * FROM session WHERE id = :id") suspend fun session(id: String): SessionEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSession(s: SessionEntity)
     @Query("UPDATE session SET endedAtMs = COALESCE(endedAtMs, :at), endReason = COALESCE(endReason, :reason) WHERE id = :id") suspend fun markEnded(id: String, reason: String?, at: Long)
@@ -36,7 +36,7 @@ interface HistoryDao {
         return seqs(delta.sessionId)
     }
 
-    /** Deletes the data but keeps a tombstone row so late deltas/claims for an abandoned start are rejected after a restart. */
+    /** Deletes the data but keeps a tombstone row so after a restart the session stays Discarded: late deltas are still stored but hidden by lifecycle()/openSessionIds(). */
     @Transaction
     suspend fun discard(id: String, now: Long) {
         deleteDeltas(id); deleteSamples(id)

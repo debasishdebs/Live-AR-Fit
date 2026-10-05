@@ -85,9 +85,10 @@ class RoomSessionStoreTest {
         assertTrue(s.sessions.first().isEmpty())
     }
 
-    @Test fun markEndedCreatesOpenSessionExcludedFromOpenIdsOnlyWhenFinalized() = runTest {
+    @Test fun markEndedOnUnseenIdGivesOpenLifecycleButNoOpenSessionId() = runTest {
         val s = store()
         s.markEnded("e", EndReason.User, 7_000)
         assertEquals(SessionLifecycle(StoredSessionState.Open, EndReason.User, 7_000), s.lifecycle("e"))
+        assertTrue(s.openSessionIds().isEmpty())
     }
 }
