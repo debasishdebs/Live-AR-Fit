@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudMode
 import com.debasish.livefit.glasses.hud.HudScreen
+import com.debasish.livefit.model.GlassesChannels
 import com.rokid.cxr.CXRServiceBridge
 
 /** Glasses HUD. Touchpad: tap = talk, swipe = toggle full/glance, double-tap (back) = exit. */
@@ -36,7 +37,7 @@ class MainActivity : ComponentActivity() {
             override fun onRokidAccountChanged(p0: String?) {}
             override fun onAudioNoise(p0: Float) {}
         })
-        controller = HudController(lifecycleScope, bridge).also { it.start() }
+        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0)).also { it.start() }
         val batteryManager = getSystemService(BatteryManager::class.java)
         setContent {
             var battery by androidx.compose.runtime.remember { mutableStateOf(batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)) }
@@ -44,14 +45,16 @@ class MainActivity : ComponentActivity() {
                 while (true) { kotlinx.coroutines.delay(30_000); battery = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }
             }
             val frame by controller.frame.collectAsStateWithLifecycle()
+            val settings by controller.settings.collectAsStateWithLifecycle()
+            val connection by controller.connection.collectAsStateWithLifecycle()
             val history by controller.hrHistory.collectAsStateWithLifecycle()
-            HudScreen(frame, mode, battery, history)
+            HudScreen(frame, settings, connection, mode, battery, history)
         }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> controller.listen()
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> controller.sendRaw(GlassesChannels.LISTEN, "{}") // Task 20 replaces this with push-to-talk
             // One swipe can emit several key events; debounce like the UPI app does.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 val now = System.currentTimeMillis()
