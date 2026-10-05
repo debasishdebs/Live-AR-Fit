@@ -2,7 +2,7 @@ package com.debasish.livefit.services.voice
 
 /** English yes/no lexicon for confirmations (spec §5.4). Negation wins over affirmation. */
 object YesNoParser {
-    private val no = listOf("no", "nope", "nah", "cancel", "stop", "don t", "dont", "do not", "leave it", "not now")
+    private val no = listOf("no", "nope", "nah", "cancel", "stop", "don t", "dont", "do not", "leave it", "not now", "not sure", "no idea", "not really")
     private val yes = listOf("yes", "yeah", "yep", "yup", "ok", "okay", "sure", "confirm", "take over", "do it", "go ahead")
 
     fun parse(utterance: String): Boolean? {
