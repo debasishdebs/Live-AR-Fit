@@ -50,8 +50,8 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     // Everything below is touched only on [scope] (Main): CXR callbacks are posted there first.
     private var session: CxrSession? = null
-    private var authorizedThisProcess = false
-    private var authInFlight = false
+    private val auth = AuthGate()
+    private var authJob: Job? = null
     private var authDeclined = false
     private var retryJob: Job? = null
     private var connectJob: Job? = null
@@ -72,8 +72,10 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             manager.requestAuthorization(activity, listOf(GlassPermission.MICROPHONE, GlassPermission.DEVICE_MANAGE, GlassPermission.MEDIA)) { r ->
                 Log.i(TAG, "authorize ok=${r.isSuccess} code=${r.errorCode}")
                 r.token?.takeIf { r.isSuccess }?.let { app.getSharedPreferences(PREFS, 0).edit().putString(KEY_TOKEN, it).apply() }
-                post { onAuthResult(r.isSuccess) }
-                onDone(r.isSuccess)
+                // Success without any usable token would loop AuthActivity: treat it as a failure.
+                val ok = r.isSuccess && (r.token != null || app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null) != null)
+                post { onAuthResult(ok) }
+                onDone(ok)
             }
         } catch (e: CancellationException) {
             throw e
@@ -86,10 +88,9 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     /** Result of an in-process authorization (also fed by [AuthActivity.onActivityResult]). */
     internal fun onAuthResult(ok: Boolean) {
-        if (ok && authorizedThisProcess && !authInFlight) return // duplicate report (callback + onActivityResult)
-        authInFlight = false
+        if (!auth.result(ok)) return // late or duplicate report for an attempt already resolved
+        authJob?.cancel(); authJob = null
         if (ok) {
-            authorizedThisProcess = true
             authDeclined = false
             act(policy.manualConnect())
         } else {
@@ -104,6 +105,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     }
 
     override fun connect() = post {
+        auth.clearStale(System.currentTimeMillis())
         authDeclined = false
         act(policy.manualConnect())
     }
@@ -124,13 +126,19 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     private fun openSession() {
         val token = app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null)
-        if (token == null || !authorizedThisProcess) {
+        if (token == null || !auth.authorized) {
             // Background authorization: companion apps may start activities (spec §5.3).
             // CXR-L only works after an in-process requestAuthorization, so connect waits for AuthActivity.
             if (authDeclined) { act(policy.onEvent(LinkEvent.AuthFailed)); return }
-            if (authInFlight) return
-            authInFlight = true
+            if (!auth.begin(System.currentTimeMillis())) return
             _status.update { it.copy(detail = "Authorizing with Hi Rokid") }
+            // A blocked background start never reports back: give up after the timeout.
+            authJob = scope.launch {
+                delay(AuthGate.AUTH_TIMEOUT_MS)
+                auth.expire()
+                authDeclined = true
+                act(policy.onEvent(LinkEvent.AuthFailed))
+            }
             if (AuthActivity.launch(app).isFailure) onAuthResult(false)
             return
         }
