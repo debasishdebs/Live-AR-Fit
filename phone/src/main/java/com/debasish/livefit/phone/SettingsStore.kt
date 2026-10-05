@@ -46,5 +46,9 @@ class SettingsStore(context: Context) {
     val gpsOutdoors: StateFlow<Boolean> = _gpsOutdoors
     fun setGpsOutdoors(v: Boolean) { _gpsOutdoors.value = v; prefs.edit().putString("gpsOutdoors", v.toString()).apply() }
 
+    private val _setupDone = MutableStateFlow(prefs.getBoolean("setupDone", false))
+    val setupDone: StateFlow<Boolean> = _setupDone
+    fun setSetupDone() { _setupDone.value = true; prefs.edit().putBoolean("setupDone", true).apply() }
+
     private companion object { const val KEY_HUD = "hud" }
 }

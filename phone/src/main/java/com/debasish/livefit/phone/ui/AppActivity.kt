@@ -27,6 +27,7 @@ import androidx.navigation.navArgument
 import com.debasish.livefit.phone.SpikeActivity
 import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.services
+import com.debasish.livefit.phone.setup.SetupScreen
 import com.debasish.livefit.phone.ui.components.HubConfirmationDialog
 import com.debasish.livefit.phone.ui.components.OutdatedBanner
 import com.debasish.livefit.phone.ui.devices.DeviceKind
@@ -65,7 +66,7 @@ class AppActivity : ComponentActivity() {
                 val route = entry?.destination?.route.orEmpty()
                 val currentSource = entry?.arguments?.getString("source")
                 // Footer everywhere except the live workout screen (it has its own bottom controls).
-                val showNav = route != "workout"
+                val showNav = route != "workout" && route != "setup"
                 val tab = when {
                     route == "home" -> Tab.Home
                     (route.startsWith("list/") && currentSource == ListSources.WORKOUTS) || route.startsWith("session/") -> Tab.Activity
@@ -87,7 +88,10 @@ class AppActivity : ComponentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize()) {
-                    NavHost(nav, startDestination = "home", modifier = if (showNav) Modifier.padding(bottom = 84.dp) else Modifier) {
+                    NavHost(nav, startDestination = if (services.settings.setupDone.value) "home" else "setup", modifier = if (showNav) Modifier.padding(bottom = 84.dp) else Modifier) {
+                        composable("setup") {
+                            SetupScreen(services) { nav.navigate("home") { popUpTo("setup") { inclusive = true } } }
+                        }
                         composable("home") {
                             HomeScreen(
                                 services = services,

@@ -101,6 +101,9 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 
     fun markDirty() = broadcaster.markDirty()
 
+    /** Re-reads installed on-device speech packs (e.g. right after a download) so voice enables immediately. */
+    suspend fun refreshVoicePacks() { stt?.refresh() }
+
     /** Phone UI commands go through the same router (dedup id is fresh). */
     fun localCommand(command: Command) =
         router.dispatch(CommandEnvelope(id = UUID.randomUUID().toString(), origin = DeviceKind.Phone, command = command))
