@@ -103,6 +103,8 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     fun markDirty() = broadcaster.markDirty()
 
     fun sttRefresh() { stt?.let { s -> scope.launch { s.refresh() } } }
+    /** Re-reads installed on-device speech packs (e.g. right after a download) so voice enables immediately. */
+    suspend fun refreshVoicePacks() { stt?.refresh() }
 
     /** Phone UI commands go through the same router (dedup id is fresh). */
     fun localCommand(command: Command) =
