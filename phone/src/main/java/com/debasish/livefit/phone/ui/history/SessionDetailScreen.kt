@@ -38,18 +38,29 @@ import kotlinx.coroutines.flow.first
 fun SessionDetailScreen(services: ServiceGraph, sessionId: String, onBack: () -> Unit) {
     var summary by remember { mutableStateOf<SessionSummary?>(null) }
     var samples by remember { mutableStateOf<List<Sample>>(emptyList()) }
+    var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(sessionId) {
-        summary = services.history.sessions.first().firstOrNull { it.id == sessionId }
-        samples = services.history.samples(sessionId)
+        runCatching {
+            summary = services.history.sessions.first().firstOrNull { it.id == sessionId }
+            samples = services.history.samples(sessionId)
+        }
+        loaded = true
     }
     val s = summary
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
         ScreenHeader(s?.let { HistoryFormat.title(it) } ?: "Workout", onBack)
-        if (s == null) return@Column
-        HistoryFormat.badge(s)?.let {
-            Text(if (it == "Demo") "Demo · not saved to Health Connect" else "Incomplete · some data could not be recovered",
-                color = LiveFitColors.ChipCoral.second, modifier = Modifier.padding(horizontal = 20.dp))
+        if (s == null) {
+            if (loaded) Text("Workout not found", color = LiveFitColors.InkSoft, modifier = Modifier.padding(20.dp))
+            return@Column
         }
+        HistoryFormat.badge(s)?.let {
+            val msg = buildList {
+                if (it.startsWith("Demo")) add("Demo · not saved to Health Connect")
+                if (it.endsWith("Incomplete")) add("Incomplete · some data could not be recovered")
+            }.joinToString("\n")
+            Text(msg, color = LiveFitColors.ChipCoral.second, modifier = Modifier.padding(horizontal = 20.dp))
+        }
+        s.endReason?.let { Text(HistoryFormat.endReason(it), color = LiveFitColors.InkSoft, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) }
         SoftCard(Modifier.padding(16.dp).fillMaxWidth()) {
             Column {
                 Row(Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -63,6 +74,7 @@ fun SessionDetailScreen(services: ServiceGraph, sessionId: String, onBack: () ->
         SectionLabel("Heart rate")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(180.dp)) {
             val hrs = samples.mapNotNull { it.hr }
+            if (hrs.size < 2) Text("No heart-rate data", color = LiveFitColors.InkSoft, modifier = Modifier.padding(16.dp))
             Canvas(Modifier.fillMaxSize().padding(16.dp)) {
                 if (hrs.size < 2) return@Canvas
                 val lo = hrs.min() - 5f; val hi = hrs.max() + 5f
