@@ -27,8 +27,9 @@ import androidx.navigation.navArgument
 import com.debasish.livefit.phone.SpikeActivity
 import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.services
-import com.debasish.livefit.phone.ui.devices.DeviceKind
-import com.debasish.livefit.phone.ui.devices.DeviceScreen
+import com.debasish.livefit.phone.ui.linked.LinkedGlassesScreen
+import com.debasish.livefit.phone.ui.linked.LinkedMusicScreen
+import com.debasish.livefit.phone.ui.linked.LinkedWatchScreen
 import com.debasish.livefit.phone.ui.music.MusicScreen
 import com.debasish.livefit.phone.ui.settings.AboutScreen
 import com.debasish.livefit.phone.ui.settings.UnitsScreen
@@ -67,7 +68,7 @@ class AppActivity : ComponentActivity() {
                     route == "home" -> Tab.Home
                     route.startsWith("list/") && currentSource == ListSources.WORKOUTS -> Tab.Activity
                     route == "music" -> Tab.Music
-                    route == "settings" || route == "hud" || route == "units" || route == "about" || route.startsWith("device/") || route.startsWith("list/") -> Tab.Settings
+                    route == "settings" || route == "hud" || route == "units" || route == "about" || route.startsWith("linked/") || route.startsWith("list/") -> Tab.Settings
                     else -> null
                 }
                 val goTab: (Tab) -> Unit = { t ->
@@ -92,14 +93,14 @@ class AppActivity : ComponentActivity() {
                                 onWorkout = { nav.navigate("workout") },
                                 onMusic = { nav.navigate("music") },
                                 onActivity = { nav.navigate(listRoute(ListSources.WORKOUTS, filter = null)) },
-                                onDevice = { nav.navigate("device/$it") },
+                                onDevice = { nav.navigate("linked/$it") },
                             )
                         }
                         composable("workout") { WorkoutScreen(services, onBack = { nav.popBackStack() }, onMusic = { nav.navigate("music") }) }
                         composable("music") { MusicScreen(services, onBack = { nav.popBackStack() }) }
-                        composable("device/{kind}") { e ->
-                            DeviceScreen(if (e.arguments?.getString("kind") == "watch") DeviceKind.Watch else DeviceKind.Glasses, services, onBack = { nav.popBackStack() })
-                        }
+                        composable("linked/glasses") { LinkedGlassesScreen(services, onBack = { nav.popBackStack() }, onDisplay = { nav.navigate("hud") }, toast = toast) }
+                        composable("linked/watch") { LinkedWatchScreen(services, onBack = { nav.popBackStack() }, toast = toast) }
+                        composable("linked/music") { LinkedMusicScreen(services, onBack = { nav.popBackStack() }) }
                         composable("hud") {
                             val glasses by services.glasses.status.collectAsStateWithLifecycle()
                             com.debasish.livefit.phone.ui.settings.HudDisplayScreen(
@@ -113,6 +114,7 @@ class AppActivity : ComponentActivity() {
                         composable("about") { AboutScreen(onBack = { nav.popBackStack() }) }
                         composable("settings") {
                             SettingsScreen(
+                                services = services,
                                 onBack = { nav.popBackStack() },
                                 onLanguages = { nav.navigate(listRoute(ListSources.LANGUAGES, filter = null)) },
                                 onDeveloper = { startActivity(Intent(this@AppActivity, SpikeActivity::class.java)) },

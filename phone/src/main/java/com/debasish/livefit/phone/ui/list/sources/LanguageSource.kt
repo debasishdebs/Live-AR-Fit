@@ -13,7 +13,11 @@ import org.json.JSONObject
 import java.util.Locale
 
 /** On-device speech recognition language packs. */
-class LanguageSource(private val context: Context) : ListSource {
+class LanguageSource(
+    private val context: Context,
+    private val voiceLocale: () -> String,
+    private val onUseForVoice: (String) -> Unit,
+) : ListSource {
     override val title = "Languages"
     override val searchHint = "Search languages"
     override val statusLabels = mapOf(ItemStatus.Done to "Downloaded", ItemStatus.ActionNeeded to "Not downloaded")
@@ -36,18 +40,16 @@ class LanguageSource(private val context: Context) : ListSource {
                 subtitle = listOfNotNull(locale.getDisplayCountry(Locale.getDefault()).takeIf { it.isNotBlank() }, tag).joinToString(" · "),
                 glyph = flagFor(locale) ?: locale.language.uppercase(),
                 status = status,
+                trailingText = if (tag == voiceLocale()) "Voice" else null,
             )
         }
     }
 
     override fun actionFor(item: ListItem): ItemAction? {
+        if (item.status == ItemStatus.Done) return ItemAction { onUseForVoice(item.id); ActionResult.Done }
         if (item.status != ItemStatus.ActionNeeded) return null
-        return ItemAction(
-            confirmTitle = "Download ${item.title}?",
-            confirmMessage = "Lets Rokid LiveFit understand voice commands in ${item.title} (${item.id}) without internet. Google downloads the pack once; Wi-Fi recommended.",
-            confirmLabel = "Download",
-            blocking = true,
-        ) { onProgress ->
+        // Google shows its own size dialog; no LiveFit confirm.
+        return ItemAction(confirmTitle = null, blocking = true) { onProgress ->
             when (val r = SpeechPacks.download(context, item.id, onProgress)) {
                 SpeechPacks.Result.Success -> ActionResult.Done
                 SpeechPacks.Result.Scheduled -> ActionResult.Scheduled("Download scheduled. Google will finish it in the background, usually on Wi-Fi.")

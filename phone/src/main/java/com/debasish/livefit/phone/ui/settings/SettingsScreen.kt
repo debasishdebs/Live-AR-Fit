@@ -12,11 +12,26 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Straighten
-import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.debasish.livefit.phone.BuildConfig
+import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.components.GlassesIcon
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -28,36 +43,57 @@ import com.debasish.livefit.phone.ui.theme.LiveFitColors
 
 @Composable
 fun SettingsScreen(
+    services: ServiceGraph,
     onBack: () -> Unit,
     onLanguages: () -> Unit,
     onDeveloper: () -> Unit,
     onNavigate: (String) -> Unit,
 ) {
+    val voiceLocale by services.settings.voiceLocale.collectAsStateWithLifecycle()
+    val gps by services.settings.gpsOutdoors.collectAsStateWithLifecycle()
+    val glasses by services.glasses.status.collectAsStateWithLifecycle()
+    val watch by services.watch.status.collectAsStateWithLifecycle()
+    val glassesStatus = glasses.link.name + (glasses.batteryPct?.let { " · $it%" } ?: "")
+    val watchStatus = watch.link.name + (watch.batteryPct?.let { " · $it%" } ?: "")
+    val musicStatus = if (services.musicConnected.collectAsStateWithLifecycle().value) "Connected" else "Needs notification access"
+    var confirmClear by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    if (confirmClear) AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        title = { Text("Clear history?") },
+        text = { Text("All workouts stored on this phone are deleted. Health Connect copies are not affected.") },
+        confirmButton = { TextButton(onClick = { confirmClear = false; scope.launch { services.history.clearAll() } }) { Text("Clear") } },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+    )
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
         ScreenHeader("Settings", onBack)
 
         SectionLabel("General")
         Group {
-            ChipRow(Icons.Rounded.Language, LiveFitColors.ChipSky, "Languages", "Offline voice packs", onLanguages)
+            ChipRow(Icons.Rounded.Language, LiveFitColors.ChipSky, "Languages", "Voice packs · voice: $voiceLocale", onLanguages)
             Divider()
             ChipRow(Icons.Rounded.Straighten, LiveFitColors.ChipAmber, "Units", "Metric", { onNavigate("units") })
         }
-
-        SectionLabel("Devices")
+        SectionLabel("Linked services")
         Group {
-            ChipRow(Icons.Rounded.Visibility, LiveFitColors.ChipMint, "Rokid glasses", "Via Hi Rokid", { onNavigate("device/glasses") })
+            ChipRow(GlassesIcon, LiveFitColors.ChipMint, "Rokid glasses", glassesStatus, { onNavigate("linked/glasses") })
             Divider()
-            ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") })
+            ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, "Galaxy Watch", watchStatus, { onNavigate("linked/watch") })
             Divider()
-            ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, "Galaxy Watch", "Health Services", { onNavigate("device/watch") })
-            Divider()
-            ChipRow(Icons.Rounded.Shield, LiveFitColors.ChipCoral, "Permissions", null, { onNavigate("permissions") })
+            ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "YouTube Music", musicStatus, { onNavigate("linked/music") })
         }
-
+        SectionLabel("Glasses")
+        Group { ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") }) }
+        SectionLabel("Workout")
+        Group {
+            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Run, Cycle, Auto", onClick = { services.settings.setGpsOutdoors(!gps) },
+                trailing = { Switch(gps, { services.settings.setGpsOutdoors(it) }) })
+        }
+        SectionLabel("Data")
+        Group { ChipRow(Icons.Rounded.DeleteSweep, LiveFitColors.ChipCoral, "Clear history", "Removes all workouts on this phone", { confirmClear = true }) }
         SectionLabel("Advanced")
         Group {
-            ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Developer tools", "Spike console", onDeveloper)
-            Divider()
+            if (BuildConfig.DEBUG) { ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Developer tools", "Spike console", onDeveloper); Divider() }
             ChipRow(Icons.Rounded.Info, LiveFitColors.ChipRose, "About", "Rokid LiveFit 0.1", { onNavigate("about") })
         }
     }

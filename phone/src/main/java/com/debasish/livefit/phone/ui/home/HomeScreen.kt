@@ -33,7 +33,6 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ShowChart
-import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +57,7 @@ import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.WorkoutTypeSheet
 import com.debasish.livefit.phone.ui.components.icon
 import com.debasish.livefit.phone.ui.components.IconChip
@@ -95,7 +95,7 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(20.dp))
                 Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                    DeviceBubble(Icons.Rounded.Visibility, "Glasses", LiveFitColors.ChipMint, glasses.link == LinkState.Connected) { onDevice("glasses") }
+                    DeviceBubble(GlassesIcon, "Glasses", LiveFitColors.ChipMint, glasses.link == LinkState.Connected) { onDevice("glasses") }
                     DeviceBubble(Icons.Rounded.Watch, "Watch", LiveFitColors.ChipSky, watch.link == LinkState.Connected) { onDevice("watch") }
                     DeviceBubble(Icons.Rounded.MusicNote, "Music", LiveFitColors.ChipRose, music?.isPlaying == true, onMusic)
                 }

@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.debasish.livefit.phone.ui.components.ScreenHeader
+import com.debasish.livefit.phone.services
 import com.debasish.livefit.phone.ui.components.SoftCard
 import com.debasish.livefit.phone.ui.components.TextChip
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
@@ -73,7 +74,7 @@ private enum class SortOrder { AZ, ZA }
 @Composable
 fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMessage: (String) -> Unit) {
     val context = LocalContext.current
-    val source = remember(sourceId) { ListSources.create(sourceId, context) }
+    val source = remember(sourceId) { ListSources.create(sourceId, context, context.services) }
     val filter = remember(filterJson) { filterJson?.let { runCatching { JSONObject(it) }.getOrNull() } }
     val scope = rememberCoroutineScope()
 

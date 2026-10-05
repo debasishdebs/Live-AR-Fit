@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutHistorySource
@@ -66,8 +67,8 @@ object ListSources {
     const val PERMISSIONS = "permissions"
     const val WORKOUTS = "workouts"
 
-    fun create(id: String, context: Context): ListSource = when (id) {
-        LANGUAGES -> LanguageSource(context.applicationContext)
+    fun create(id: String, context: Context, services: ServiceGraph): ListSource = when (id) {
+        LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale)
         PERMISSIONS -> PermissionSource(context)
         WORKOUTS -> WorkoutHistorySource()
         else -> error("Unknown list source: $id")
