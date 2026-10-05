@@ -11,6 +11,12 @@ sealed interface LinkEvent {
     data object Closed : LinkEvent
     data object ConnectFailed : LinkEvent
     data object RetryTimer : LinkEvent
+    /** The connect attempt produced no result in time; treated like [ConnectFailed] while connecting. */
+    data object ConnectTimeout : LinkEvent
+    /** The glasses left our app (user exit / app switch): do not auto-reconnect. */
+    data object GlassesExited : LinkEvent
+    /** Hi Rokid authorization failed or was declined: stop auto-relaunching it. */
+    data object AuthFailed : LinkEvent
 }
 
 sealed interface LinkAction {
@@ -20,6 +26,8 @@ sealed interface LinkAction {
     data object MarkConnected : LinkAction
     data object MarkConnecting : LinkAction
     data object MarkDisconnected : LinkAction
+    data object MarkClosedOnGlasses : LinkAction
+    data object MarkAuthNeeded : LinkAction
 }
 
 /** Pure session lifecycle rules for the CXR-L link (spec §5.3, Review Focus #3). */
@@ -37,6 +45,9 @@ class GlassesSessionPolicy(private val backoff: Backoff = Backoff()) {
         LinkEvent.Started -> { state = S.Open; backoff.reset(); listOf(LinkAction.MarkConnected, LinkAction.SendSettings) }
         LinkEvent.Paused -> { state = S.Paused; listOf(LinkAction.MarkConnecting) }
         LinkEvent.Resumed -> { state = S.Open; listOf(LinkAction.MarkConnected, LinkAction.SendSettings) }
+        LinkEvent.GlassesExited -> { state = S.Idle; listOf(LinkAction.MarkClosedOnGlasses) }
+        LinkEvent.AuthFailed -> { state = S.Idle; listOf(LinkAction.MarkAuthNeeded) }
+        LinkEvent.ConnectTimeout -> if (state == S.Connecting) onEvent(LinkEvent.ConnectFailed) else emptyList()
         LinkEvent.Closed, LinkEvent.ConnectFailed -> {
             if (present) { state = S.WaitingRetry; listOf(LinkAction.MarkDisconnected, LinkAction.ScheduleRetry(backoff.next())) }
             else { state = S.Idle; listOf(LinkAction.MarkDisconnected) }
@@ -44,9 +55,13 @@ class GlassesSessionPolicy(private val backoff: Backoff = Backoff()) {
         LinkEvent.RetryTimer -> if (present && state == S.WaitingRetry) { state = S.Connecting; listOf(LinkAction.Connect) } else emptyList()
     }
 
-    /** Manual connect (app opened / reconnect button) is allowed only when no session is in flight. */
+    /**
+     * Manual connect (app opened / reconnect button / workout start). Re-issues Connect from Connecting
+     * so a stuck attempt can be replaced; an Open or Paused session is left alone.
+     */
     fun manualConnect(): List<LinkAction> {
         present = true
-        return if (state == S.Idle || state == S.WaitingRetry) { state = S.Connecting; listOf(LinkAction.MarkConnecting, LinkAction.Connect) } else emptyList()
+        return if (state == S.Open || state == S.Paused) emptyList()
+        else { state = S.Connecting; listOf(LinkAction.MarkConnecting, LinkAction.Connect) }
     }
 }

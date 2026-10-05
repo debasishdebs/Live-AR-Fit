@@ -13,6 +13,7 @@ import com.debasish.livefit.model.Devices
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.GlassesEvent
@@ -48,6 +49,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -159,6 +161,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
                 }
                 previous = s.phase
             }
+        }
+        // A workout starting brings the glasses back even after the user left LiveFit on them (no auto-retry otherwise).
+        scope.launch {
+            workout.snapshot.map { it.phase == WorkoutPhase.Starting || it.phase == WorkoutPhase.Active || it.phase == WorkoutPhase.Paused }
+                .distinctUntilChanged()
+                .collect { running -> if (running) glasses.connect() }
         }
         // ---- end link wiring ----
         // Connecting is owned by the authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.

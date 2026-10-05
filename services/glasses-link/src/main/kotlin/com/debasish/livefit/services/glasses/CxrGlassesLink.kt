@@ -30,6 +30,7 @@ import com.rokid.cxr.session.SessionType
 import com.rokid.cxr.session.TerminatingReason
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,9 +47,15 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     private val app = context.applicationContext
     private val manager = CxrSessionManager.getInstance(app)
     private val policy = GlassesSessionPolicy()
+
+    // Everything below is touched only on [scope] (Main): CXR callbacks are posted there first.
     private var session: CxrSession? = null
-    private var authorizedThisProcess = false
-    @Volatile private var lastSettings: HudSettingsFrame? = null
+    private val auth = AuthGate()
+    private var authJob: Job? = null
+    private var authDeclined = false
+    private var retryJob: Job? = null
+    private var connectJob: Job? = null
+    private var lastSettings: HudSettingsFrame? = null
 
     private val _status = MutableStateFlow(DeviceStatus("Rokid Glasses", LinkState.Disconnected))
     override val status: StateFlow<DeviceStatus> = _status
@@ -57,48 +64,85 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     init { instance = this }
 
+    private fun post(block: () -> Unit) { scope.launch { block() } }
+
     /** Silent when already authorized in Hi Rokid; sets CXR-L's in-memory flags (quirk 2.1.1). */
     fun authorize(activity: Activity, onDone: (Boolean) -> Unit) {
         try {
             manager.requestAuthorization(activity, listOf(GlassPermission.MICROPHONE, GlassPermission.DEVICE_MANAGE, GlassPermission.MEDIA)) { r ->
                 Log.i(TAG, "authorize ok=${r.isSuccess} code=${r.errorCode}")
                 r.token?.takeIf { r.isSuccess }?.let { app.getSharedPreferences(PREFS, 0).edit().putString(KEY_TOKEN, it).apply() }
-                authorizedThisProcess = r.isSuccess
-                onDone(r.isSuccess)
+                // Success without any usable token would loop AuthActivity: treat it as a failure.
+                val ok = r.isSuccess && (r.token != null || app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null) != null)
+                post { onAuthResult(ok) }
+                onDone(ok)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "authorize failed", e)
+            post { onAuthResult(false) }
             onDone(false)
         }
     }
 
-    fun onDevicePresence(present: Boolean) = act(policy.onEvent(if (present) LinkEvent.DevicePresent else LinkEvent.DeviceGone))
+    /** Result of an in-process authorization (also fed by [AuthActivity.onActivityResult]). */
+    internal fun onAuthResult(ok: Boolean) {
+        if (!auth.result(ok)) return // late or duplicate report for an attempt already resolved
+        authJob?.cancel(); authJob = null
+        if (ok) {
+            authDeclined = false
+            act(policy.manualConnect())
+        } else {
+            authDeclined = true // no auto-relaunch; a manual connect or the next presence event retries
+            act(policy.onEvent(LinkEvent.AuthFailed))
+        }
+    }
 
-    override fun connect() = act(policy.manualConnect())
+    fun onDevicePresence(present: Boolean) = post {
+        if (present) authDeclined = false
+        act(policy.onEvent(if (present) LinkEvent.DevicePresent else LinkEvent.DeviceGone))
+    }
+
+    override fun connect() = post {
+        auth.clearStale(System.currentTimeMillis())
+        authDeclined = false
+        act(policy.manualConnect())
+    }
 
     private fun act(actions: List<LinkAction>) {
+        if (actions.isNotEmpty()) { retryJob?.cancel(); retryJob = null; connectJob?.cancel(); connectJob = null }
         for (a in actions) when (a) {
             LinkAction.Connect -> openSession()
-            LinkAction.SendSettings -> lastSettings?.let { scope.launch { pushSettings(it) } }
-            is LinkAction.ScheduleRetry -> scope.launch { delay(a.delayMs); act(policy.onEvent(LinkEvent.RetryTimer)) }
+            LinkAction.SendSettings -> scope.launch { lastSettings?.let { pushSettings(it) } }
+            is LinkAction.ScheduleRetry -> retryJob = scope.launch { delay(a.delayMs); act(policy.onEvent(LinkEvent.RetryTimer)) }
             LinkAction.MarkConnected -> _status.update { it.copy(link = LinkState.Connected, detail = null) }
-            LinkAction.MarkConnecting -> _status.update { it.copy(link = LinkState.Connecting) }
-            LinkAction.MarkDisconnected -> _status.update { it.copy(link = LinkState.Disconnected) }
+            LinkAction.MarkConnecting -> _status.update { it.copy(link = LinkState.Connecting, detail = null) }
+            LinkAction.MarkDisconnected -> _status.update { it.copy(link = LinkState.Disconnected, detail = null) }
+            LinkAction.MarkClosedOnGlasses -> _status.update { it.copy(link = LinkState.Disconnected, detail = "LiveFit closed on glasses") }
+            LinkAction.MarkAuthNeeded -> _status.update { it.copy(link = LinkState.Disconnected, detail = "Authorize in Hi Rokid") }
         }
     }
 
     private fun openSession() {
         val token = app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null)
-        if (token == null || !authorizedThisProcess) {
+        if (token == null || !auth.authorized) {
             // Background authorization: companion apps may start activities (spec §5.3).
             // CXR-L only works after an in-process requestAuthorization, so connect waits for AuthActivity.
-            AuthActivity.launch(app)
+            if (authDeclined) { act(policy.onEvent(LinkEvent.AuthFailed)); return }
+            if (!auth.begin(System.currentTimeMillis())) return
             _status.update { it.copy(detail = "Authorizing with Hi Rokid") }
-            act(policy.onEvent(LinkEvent.ConnectFailed))
+            // A blocked background start never reports back: give up after the timeout.
+            authJob = scope.launch {
+                delay(AuthGate.AUTH_TIMEOUT_MS)
+                auth.expire()
+                authDeclined = true
+                act(policy.onEvent(LinkEvent.AuthFailed))
+            }
+            if (AuthActivity.launch(app).isFailure) onAuthResult(false)
             return
         }
+        connectJob = scope.launch { delay(CONNECT_TIMEOUT_MS); act(policy.onEvent(LinkEvent.ConnectTimeout)) }
         try {
             preferGlobalHiRokid()
             // Detach the old session first so its late close callback cannot clobber the new one.
@@ -140,14 +184,16 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "bad payload on $cmd", e); null
-        } ?: ""
+        }
+        if (text.isNullOrEmpty()) return
         when (cmd) {
             GlassesChannels.LISTEN -> _events.tryEmit(GlassesEvent.Listen)
             // Audio is Base64 text on lf_audio (spike-verified; deliberate deviation from a raw-bytes argument).
-            GlassesChannels.AUDIO -> runCatching { Base64.decode(text, Base64.NO_WRAP) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Audio(it)) }
+            GlassesChannels.AUDIO -> runCatching { Base64.decode(text, Base64.NO_WRAP) }.getOrNull()
+                ?.takeIf { it.isNotEmpty() }?.let { _events.tryEmit(GlassesEvent.Audio(it)) }
             GlassesChannels.LISTEN_END -> _events.tryEmit(GlassesEvent.ListenEnd)
             GlassesChannels.COMMAND -> {
-                val v = Wire.versionOf(text)
+                val v = Wire.versionOf(text) ?: return
                 if (v != PROTOCOL_VERSION) _events.tryEmit(GlassesEvent.Outdated(v))
                 else runCatching { Wire.decode<CommandEnvelope>(text) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Issue(it)) }
             }
@@ -174,19 +220,21 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         }
     }
 
+    /** CXR callbacks arrive on binder threads: hop onto [scope] before touching the policy or session. */
     private fun lifecycleFor(s: CxrSession) = object : ISessionLifecycleCbk {
-        private fun current() = s === session
-        override fun onSessionStarted() { if (current()) act(policy.onEvent(LinkEvent.Started)) }
-        override fun onSessionPaused(reason: PausedReason) { if (current()) act(policy.onEvent(LinkEvent.Paused)) }
-        override fun onSessionResumed() { if (current()) act(policy.onEvent(LinkEvent.Resumed)) }
+        private fun ifCurrent(event: LinkEvent) = post { if (s === session) act(policy.onEvent(event)) }
+        override fun onSessionStarted() = ifCurrent(LinkEvent.Started)
+        override fun onSessionPaused(reason: PausedReason) = ifCurrent(LinkEvent.Paused)
+        override fun onSessionResumed() = ifCurrent(LinkEvent.Resumed)
         override fun onSessionTerminating(reason: TerminatingReason, graceMs: Long) = Unit
-        override fun onSessionClosed(reason: CloseReason) {
-            if (!current()) return
+        override fun onSessionClosed(reason: CloseReason) = post {
+            if (s !== session) return@post
             session = null
-            act(policy.onEvent(LinkEvent.Closed))
+            val glassesLeft = reason == CloseReason.GLASSES_EXIT || reason == CloseReason.USER_CLOSED
+            act(policy.onEvent(if (glassesLeft) LinkEvent.GlassesExited else LinkEvent.Closed))
         }
-        override fun onConnectResult(ok: Boolean, code: SessionErrorCode?) {
-            if (!ok && current()) { session = null; Log.w(TAG, "connect failed $code"); act(policy.onEvent(LinkEvent.ConnectFailed)) }
+        override fun onConnectResult(ok: Boolean, code: SessionErrorCode?) = post {
+            if (!ok && s === session) { session = null; Log.w(TAG, "connect failed $code"); act(policy.onEvent(LinkEvent.ConnectFailed)) }
         }
     }
 
@@ -202,11 +250,10 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         }
     }
 
-    internal fun markAuthorized() { authorizedThisProcess = true; act(policy.manualConnect()) }
-
     companion object {
         const val TAG = "LiveFitGlassesLink"
         const val GLASSES_PKG = "com.debasish.livefit.glasses"
+        const val CONNECT_TIMEOUT_MS = 15_000L
         internal const val PREFS = "rokid"
         internal const val KEY_TOKEN = "token"
         @Volatile var instance: CxrGlassesLink? = null

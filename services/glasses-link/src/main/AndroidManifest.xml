@@ -4,6 +4,7 @@
         <activity
             android:name="com.debasish.livefit.services.glasses.AuthActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>

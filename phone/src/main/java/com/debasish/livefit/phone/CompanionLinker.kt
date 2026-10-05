@@ -9,6 +9,7 @@ import android.companion.ObservingDevicePresenceRequest
 import android.content.Context
 import android.content.IntentSender
 import android.os.Build
+import android.util.Log
 import com.debasish.livefit.model.DeviceKind
 import java.util.concurrent.Executor
 import java.util.regex.Pattern
@@ -21,6 +22,7 @@ object CompanionLinker {
     )
 
     fun associate(activity: Activity, kind: DeviceKind, onResult: (Boolean) -> Unit) {
+        if (Build.VERSION.SDK_INT < 33) { Log.w(TAG, "companion pairing needs Android 13+"); onResult(false); return }
         val cdm = activity.getSystemService(CompanionDeviceManager::class.java)
         val request = AssociationRequest.Builder()
             .addDeviceFilter(BluetoothDeviceFilter.Builder().setNamePattern(namePatterns.getValue(kind)).build())
@@ -36,7 +38,7 @@ object CompanionLinker {
                 observe(activity, info.id)
                 onResult(true)
             }
-            override fun onFailure(error: CharSequence?) = onResult(false)
+            override fun onFailure(error: CharSequence?) { Log.w(TAG, "associate failed: $error"); onResult(false) }
         })
     }
 
@@ -60,24 +62,42 @@ object CompanionLinker {
         DeviceKind.entries.mapNotNull { k -> prefs.getInt(k.name, -1).takeIf { it >= 0 } }.forEach { observe(context, it) }
     }
 
-    private val present = mutableSetOf<Int>()
-    fun setPresent(context: Context, associationId: Int, isPresent: Boolean) { if (isPresent) present += associationId else present -= associationId }
-    fun anyPresent(context: Context): Boolean = present.isNotEmpty()
+    /** Transports that can report a device as nearby; present = any of them still reports it. */
+    enum class Source { Ble, Bt, Legacy }
+
+    private val presence = mutableMapOf<Int, MutableSet<Source>>()
+
+    /** Records one transport's report and returns whether the association is present on any transport. */
+    @Synchronized
+    fun setPresent(associationId: Int, source: Source, isPresent: Boolean): Boolean {
+        val sources = presence.getOrPut(associationId) { mutableSetOf() }
+        if (isPresent) sources += source else sources -= source
+        if (sources.isEmpty()) presence.remove(associationId)
+        return sources.isNotEmpty()
+    }
+
+    @Synchronized
+    fun anyPresent(): Boolean = presence.isNotEmpty()
 
     fun kindFor(context: Context, associationId: Int): DeviceKind? =
         DeviceKind.entries.firstOrNull { context.getSharedPreferences("companion", 0).getInt(it.name, -1) == associationId }
 
     private fun observe(context: Context, associationId: Int) {
         val cdm = context.getSystemService(CompanionDeviceManager::class.java)
-        runCatching {
+        try {
             if (Build.VERSION.SDK_INT >= 36) {
                 cdm.startObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(associationId).build())
-            } else {
+            } else if (Build.VERSION.SDK_INT >= 33) {
                 @Suppress("DEPRECATION")
                 cdm.myAssociations.firstOrNull { it.id == associationId }?.deviceMacAddress?.toString()?.let { cdm.startObservingDevicePresence(it) }
+            } else {
+                Log.w(TAG, "presence observation needs Android 13+")
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "observe presence failed for $associationId", e)
         }
     }
 
+    private const val TAG = "CompanionLinker"
     private const val REQUEST_CODE = 4711
 }
