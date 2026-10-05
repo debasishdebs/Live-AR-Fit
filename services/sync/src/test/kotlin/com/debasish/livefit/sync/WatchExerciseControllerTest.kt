@@ -40,16 +40,18 @@ class WatchExerciseControllerTest {
         /** Consumed first, one per reattach call, before [reattachAnswer]. */
         val reattachScript = ArrayDeque<Boolean?>()
         var throwOnOther = false
+        var throwOnControl = false
         var endDelayMs = 0L
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
         override suspend fun otherAppTracking(): String? { if (throwOnOther) error("hs down"); return other }
         override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; return true }
-        override suspend fun pause(): Boolean { calls += "pause"; return pauseOk }
-        override suspend fun resume(): Boolean { calls += "resume"; return true }
+        override suspend fun pause(): Boolean { calls += "pause"; if (throwOnControl) error("hs"); return pauseOk }
+        override suspend fun resume(): Boolean { calls += "resume"; if (throwOnControl) error("hs"); return true }
         override suspend fun end(): Boolean {
             calls += "end"
+            if (throwOnControl) error("hs")
             kotlinx.coroutines.delay(endDelayMs)
             if (endOk) { // Health Services delivers the last metrics together with the ENDED state
                 updates.emit(BackendUpdate.Reading(Sample(500, hr = 99, stepsTotal = 42)))
@@ -281,6 +283,18 @@ class WatchExerciseControllerTest {
         val b2 = async { c.localStop() }
         assertEquals(listOf(false, false), listOf(a.await(), b2.await()))
         assertEquals(1, b.calls.count { it == "end" }, "second stop awaited the first")
+        assertEquals("s", c.activeSessionId)
+    }
+
+    @Test fun controlExceptionsAreRefusalsNotCrashes() = runTest {
+        val backend = FakeBackend()
+        val (_, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        backend.throwOnControl = true
+        c.handle(req("r2", "s", ExerciseOp.Pause))
+        assertIs<ExerciseError.Internal>(results.last().error)
+        c.handle(req("r3", "s", ExerciseOp.Stop))
+        assertIs<ExerciseError.Internal>(results.last().error)
         assertEquals("s", c.activeSessionId)
     }
 }

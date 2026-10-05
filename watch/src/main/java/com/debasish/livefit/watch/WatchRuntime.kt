@@ -49,6 +49,7 @@ object WatchRuntime {
         )
         initialized = true
         // Every entry point (phone message, sticky service restart, activity) gets the same recovery and sync loop.
+        ensureExerciseService() // before recover(), which may retry for a long time
         scope.launch { controller.recover(); ensureExerciseService() }
         WatchClient.start()
     }

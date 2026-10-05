@@ -160,16 +160,22 @@ class WatchExerciseController(
     }
 
     /** Offline controls from the watch UI use the same paths and are recorded as events only on success. */
+    /** Backend exceptions count as a refusal (false), never escape; cancellation propagates. */
+    private suspend fun safely(op: suspend () -> Boolean): Boolean = runCatchingNonCancel(op) ?: false
+
+    private suspend fun <T> runCatchingNonCancel(op: suspend () -> T): T? =
+        try { op() } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+
     suspend fun localPause(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Active) return false
-        if (!backend.pause()) return false
+        if (!safely { backend.pause() }) return false
         recorder.event(SessionEvent.Paused(clock.nowMs()))
         return true
     }
 
     suspend fun localResume(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Paused) return false
-        if (!backend.resume()) return false
+        if (!safely { backend.resume() }) return false
         recorder.event(SessionEvent.Resumed(clock.nowMs()))
         return true
     }
@@ -195,9 +201,9 @@ class WatchExerciseController(
         stopAtMs = clock.nowMs()
         stopping = waiter
         try {
-            if (!backend.end()) {
+            if (!safely { backend.end() }) {
                 // end() failed: if the exercise is in fact gone, finalize instead of leaving a zombie session.
-                if (backend.reattach(recorder.assembler?.lastSample()) != false) return false
+                if (runCatchingNonCancel { backend.reattach(recorder.assembler?.lastSample()) } != false) return false
                 recorder.event(SessionEvent.Stopped(stopAtMs, EndReason.System), final = true)
                 runCatching { sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)) }
                 return true
