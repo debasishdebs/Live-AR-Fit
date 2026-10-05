@@ -26,6 +26,7 @@ import com.debasish.livefit.services.glasses.CxrGlassesLink
 import com.debasish.livefit.services.glasses.FakeGlassesLink
 import com.debasish.livefit.services.music.FakeMusicService
 import com.debasish.livefit.services.voice.FakeVoiceService
+import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.debasish.livefit.services.watch.FakeWatchLink
 import com.debasish.livefit.services.workout.HubWorkoutService
 import com.debasish.livefit.services.workout.SimulatedWatchGateway
@@ -57,8 +58,9 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val confirm = DefaultConfirmationService(clock)
 
     // ---- Service bindings: one line each, so later tasks flip them independently ----
-    val watchGateway: WatchExerciseGateway = SimulatedWatchGateway(scope, clock) // Task 13 binds the Data Layer link when liveWatch
-    val watch: WatchLinkService = FakeWatchLink()                                // Task 13
+    private val dataLayer: DataLayerWatchLink? = if (bindings.liveWatch) DataLayerWatchLink(app, scope) else null
+    val watchGateway: WatchExerciseGateway = dataLayer ?: SimulatedWatchGateway(scope, clock)
+    val watch: WatchLinkService = dataLayer ?: FakeWatchLink()
     val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app) else FakeGlassesLink() // Task 14
     val music: MusicService = FakeMusicService(scope)                            // Task 15
     // ---- end bindings ----
@@ -94,6 +96,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         scope.launch { workout.notices.collect(::flash) }
         // ---- Link wiring: one block per device ----
         scope.launch { watch.commands.collect(router::dispatch) }
+        dataLayer?.let { link -> scope.launch { link.outdated.collect { router.markOutdated(DeviceKind.Watch) } } }
         scope.launch {
             glasses.events.collect { e ->
                 when (e) {

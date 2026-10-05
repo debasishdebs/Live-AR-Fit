@@ -21,3 +21,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.google.android.gms:play-services-wearable:19.0.0")
 }
+
+android { sourceSets["test"].java.srcDirs("src/test/kotlin") }
+dependencies {
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
+}
