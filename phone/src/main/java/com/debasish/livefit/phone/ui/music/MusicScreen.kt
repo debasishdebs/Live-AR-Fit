@@ -34,6 +34,9 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.Throttle
 import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
 
@@ -51,6 +55,8 @@ import com.debasish.livefit.phone.ui.theme.LiveFitColors
 fun MusicScreen(services: ServiceGraph, onBack: () -> Unit) {
     val np by services.music.nowPlaying.collectAsStateWithLifecycle()
     val volume by services.music.volume.collectAsStateWithLifecycle()
+    val throttle = remember { Throttle(100) }
+    var dragging by remember { mutableStateOf<Float?>(null) }
 
     Column(Modifier.fillMaxSize().background(LiveFitColors.Surface)) {
         ScreenHeader("Music", onBack)
@@ -98,7 +104,10 @@ fun MusicScreen(services: ServiceGraph, onBack: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.AutoMirrored.Rounded.VolumeDown, contentDescription = null, tint = LiveFitColors.InkSoft)
                 Slider(
-                    value = volume, onValueChange = { services.localCommand(Command.SetVolume(it)) }, modifier = Modifier.weight(1f),
+                    value = dragging ?: volume,
+                    onValueChange = { v -> dragging = v; if (throttle.allow()) services.localCommand(Command.SetVolume(v)) },
+                    onValueChangeFinished = { dragging?.let { services.localCommand(Command.SetVolume(it)) }; dragging = null },
+                    modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(thumbColor = LiveFitColors.ChipRose.second, activeTrackColor = LiveFitColors.ChipRose.second, inactiveTrackColor = LiveFitColors.ChipRose.first),
                 )
                 Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = null, tint = LiveFitColors.InkSoft)

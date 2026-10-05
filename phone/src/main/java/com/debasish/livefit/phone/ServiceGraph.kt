@@ -98,6 +98,18 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
                 .collect { markDirty() }
         }
         scope.launch { workout.notices.collect(::flash) }
+        // Low-battery warning (spec §7): one toast per device per workout at <= 15 %.
+        scope.launch {
+            val warned = mutableSetOf<DeviceKind>()
+            lastFrame.collect { f ->
+                if (f == null) return@collect
+                if (f.workout.phase == com.debasish.livefit.model.WorkoutPhase.Idle) { warned.clear(); return@collect }
+                listOf(DeviceKind.Phone to f.devices.phone, DeviceKind.Watch to f.devices.watch, DeviceKind.Glasses to f.devices.glasses).forEach { (k, d) ->
+                    val pct = d.batteryPct ?: return@forEach
+                    if (pct <= 15 && warned.add(k)) flash("${k.name} battery low · $pct%")
+                }
+            }
+        }
         // ---- Link wiring: one block per device ----
         scope.launch { watch.commands.collect(router::dispatch) }
         dataLayer?.let { link -> scope.launch { link.outdated.collect { router.markOutdated(DeviceKind.Watch) } } }
