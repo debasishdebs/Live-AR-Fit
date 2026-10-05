@@ -26,6 +26,9 @@ import com.debasish.livefit.services.glasses.CxrGlassesLink
 import com.debasish.livefit.services.glasses.FakeGlassesLink
 import com.debasish.livefit.services.music.FakeMusicService
 import com.debasish.livefit.services.voice.FakeVoiceService
+import com.debasish.livefit.services.voice.LiveVoiceService
+import com.debasish.livefit.services.voice.android.AndroidOnDeviceStt
+import com.debasish.livefit.services.voice.android.PhoneMic
 import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.debasish.livefit.services.watch.FakeWatchLink
 import com.debasish.livefit.services.workout.HubWorkoutService
@@ -73,7 +76,17 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash)
 
     // ---- Voice binding (after the router, which it feeds) ----
-    val voice: VoiceService = FakeVoiceService(scope) { router.dispatchVoice(it) } // Task 16
+    private val stt: AndroidOnDeviceStt? = if (bindings.liveVoice) AndroidOnDeviceStt(app) else null
+    private lateinit var phoneMic: PhoneMic
+    val voice: VoiceService = if (stt != null) LiveVoiceService(
+        scope, stt,
+        locale = { settings.voiceLocale.value },
+        pendingConfirmationId = { confirm.pending.value?.id },
+        onCommand = { router.dispatchVoice(it) },
+        onAnswer = { id, yes -> confirm.answer(id, yes) },
+        toast = ::flash,
+        phoneMic = { phoneMic.record() },
+    ).also { v -> phoneMic = PhoneMic { v } } else FakeVoiceService(scope) { router.dispatchVoice(it) }
     // ---- end voice binding ----
 
     private val _lastFrame = MutableStateFlow<StateFrame?>(null)
@@ -88,6 +101,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 
     fun start() {
         broadcaster.start()
+        stt?.let { s -> scope.launch { s.refresh() } }
         // Any state change -> push (coalesced).
         scope.launch {
             merge(workout.snapshot, music.nowPlaying, music.volume, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)

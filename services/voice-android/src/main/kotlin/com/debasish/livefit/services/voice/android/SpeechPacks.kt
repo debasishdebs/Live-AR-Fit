@@ -1,4 +1,4 @@
-package com.debasish.livefit.phone.speech
+package com.debasish.livefit.services.voice.android
 
 import android.content.Context
 import android.content.Intent
