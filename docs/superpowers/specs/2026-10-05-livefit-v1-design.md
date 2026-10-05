@@ -122,8 +122,8 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 | `SessionDelta` | watch → phone | `sessionId`, `seq` (monotonic per session), `events: [SessionEvent]`, `samples: [{tMs, hr?, stepsTotal, distanceKmTotal, kcalTotal, speedKmh?}]`, `provenance`, `final: Boolean`. `SessionEvent` = `Started(tMs, type)` · `Paused(tMs)` · `Resumed(tMs)` · `TypeDetected(tMs, type)` · `Stopped(tMs, reason)`. |
 | `DeltaAck` | phone → watch | `sessionId`, `seq` — highest contiguous seq **durably stored** on the phone (§4.4). |
 | `SessionClaim` | watch → phone | Sent on reconnect when the watch holds an offline session: `sessionId`, `type`, `startMs`, `phase`, `activeMs`, `lastSeq`. |
-| `ExerciseRequest` | phone → watch | `requestId`, `op`: `Start(sessionId, type, force)` · `Pause` · `Resume` · `Stop` (§4.7). |
-| `ExerciseResult` | watch → phone | `requestId`, `ok`, `error?` (`PermissionMissing(perms)` · `OtherAppTracking(appType)` · `SensorUnavailable` · `NoSuchSession` · `Internal(msg)`), `state` (actual Health Services exercise state). |
+| `ExerciseRequest` | phone → watch | `requestId`, `sessionId`, `op`: `Start(type, force)` · `Pause` · `Resume` · `Stop` (§4.8). **Every op names its session.** |
+| `ExerciseResult` | watch → phone | `requestId`, `sessionId`, `ok`, `error?` (`PermissionMissing(perms)` · `OtherAppTracking(appType)` · `SensorUnavailable` · `WrongSession(activeSessionId)` · `NoSuchSession` · `Internal(msg)`), `state` (actual Health Services exercise state), `activeSessionId?`. |
 | `ExerciseStateReport` | watch → phone | Unsolicited, whenever the real exercise state changes: `sessionId`, `state`, `endedBy?` (`User` · `OtherApp` · `System` · `Error`). |
 | `ListenRequest` / `AudioChunk` / `ListenEnd` | glasses → phone | Push-to-talk: start, 100 ms PCM16 chunks (binary payload in CXR `bytes`), end (VAD or cap). |
 | `BatteryReport` | watch → phone | Percentage, on request and every 60 s. |
@@ -182,10 +182,18 @@ The phone decides; the watch executes on Health Services and reports what actual
   - `OtherAppTracking` → phone raises `TakeOverWorkout`; Yes → `Start(..., force=true)`; No/timeout → phase back to `Idle`, toast "Samsung Health is still tracking".
   - `PermissionMissing(perms)` → phase `Idle`; toast on all devices "Watch needs <perm>"; the watch shows a one-tap permission prompt; Linked services → Galaxy Watch shows the missing permission.
   - `SensorUnavailable` / `Internal` → `Idle` + toast with reason.
-  - No result within **10 s** → `Idle`, toast "Watch didn't respond", request is cancelled (a late `ok` triggers an immediate `Stop` to avoid a ghost session).
-- **Pause / Resume / Stop:** sent as requests; the watch calls `pauseExercise` / `resumeExercise` / `endExercise`, so Health Services' own active-time matches ours. The phone updates phase on `ok`; on failure it keeps the previous phase and toasts. Stop also finalises the session after the final delta is acked.
-- **Actual state wins:** the watch sends `ExerciseStateReport` whenever Health Services' state changes on its own — e.g. **another app ended our workout** (`endedBy = OtherApp`), auto-pause, or a system end. The phone treats `Ended` as a stop (`reason` recorded), finalises with the data it has, and toasts "Workout ended by <reason>".
+  - No result within **10 s** → `Idle`, toast "Watch didn't respond"; session A is recorded in the phone's **abandoned-starts list**. A late `ok` for A triggers `Stop(sessionId = A)` — **only A** is stopped, never a newer session.
+- **Session scoping on the watch:** the watch tracks at most one active `sessionId`. Any `Pause` / `Resume` / `Stop` whose `sessionId` differs from the active one returns `WrongSession(activeSessionId)` and does nothing. A `Start` for a new session while another is active returns `WrongSession` unless the phone first stops the old one.
+- **Reconciling abandoned starts:** on every reconnect the watch reports `activeSessionId` (in `SessionClaim` or an `ExerciseResult`). If it equals an abandoned start the phone sends `Stop(A)` and discards A's data (no history entry); if it equals the current session nothing changes; if it's unknown the phone adopts it via §4.4.
+- **Pause / Resume / Stop:** sent as session-scoped requests; the watch calls `pauseExercise` / `resumeExercise` / `endExercise`, so Health Services' own active-time matches ours. The phone updates phase on `ok`; on failure it keeps the previous phase and toasts.
+- **Actual state wins:** the watch sends `ExerciseStateReport(sessionId, …)` whenever Health Services' state changes on its own — e.g. **another app ended our workout** (`endedBy = OtherApp`), auto-pause, or a system end. On `Ended` the phone **immediately shows the workout as ended** on all devices ("Workout ended by <reason>", phase `Stopping`), then applies the completion rule (§4.9).
 - Requests are idempotent by `requestId`; the watch remembers the last 20.
+
+### 4.9 Session completion rule (single rule for every way a workout ends)
+A session becomes **Complete** — Summary data final, history row finalised, eligible for Health Connect (V2) — only when **all deltas through the final `seq` are durably stored on the phone**. This applies equally to a normal stop, a stop while offline, and an unsolicited end (another app / system).
+- Until then the phone shows phase `Stopping` ("Saving workout…") with the totals known so far; the Summary screen appears when the session completes.
+- The watch keeps sending outstanding deltas (retry rules §4.4); the final delta carries `final = true`.
+- **Recovery impossible** — the watch reports its buffer lost (e.g. app data cleared), or no final delta arrives within **24 h** of the end event — the phone finalises with the data it has and marks the session **`Incomplete`** (badge "Incomplete" in Activity; never exported to Health Connect).
 
 ---
 
@@ -233,7 +241,7 @@ The phone decides; the watch executes on Health Services and reports what actual
 - **Workout start behaviour** (Settings → Music): *Don't touch* / *Resume last played* (**default**) / *Play saved search* (e.g. "workout mix"). On stop: pause music (default on). Pause workout does not pause music by default.
 
 ### 5.6 History — `:services:history`
-- Room tables: `session(id, type, detectedType, startMs, endMs, activeMs, avgHr, maxHr, steps, distanceKm, kcal, provenance, source)`, `sample(sessionId, tMs, hr, steps, distanceKm, kcal, speedKmh, provenance)`.
+- Room tables: `session(id, type, detectedType, startMs, endMs, activeMs, avgHr, maxHr, steps, distanceKm, kcal, provenance, source, status: Active|Stopping|Complete|Incomplete, endReason)`, `sample(sessionId, tMs, hr, steps, distanceKm, kcal, speedKmh, provenance)`.
 - Every sample has **provenance**: `Live(sourceId)` (e.g. `galaxy-watch/health-services`) or `Fake`. A session is `Live` only if all its samples are Live; otherwise it is labelled **Demo** in the UI.
 - Activity tab: list (generic list screen, source `workouts`) and a detail page (summary tiles + HR chart). Settings → Data → "Clear history".
 
@@ -284,6 +292,7 @@ The phone decides; the watch executes on Health Services and reports what actual
 
 | Situation | Behaviour |
 |---|---|
+| Workout ended by another app / system | All devices show ended immediately; Summary and history complete only after all deltas are stored (§4.9); otherwise `Incomplete`. |
 | Watch ↔ phone link drops mid-workout | After the liveness timeout (§4.3) the watch records locally (§4.4); phone "Watch offline"; glasses watch ring dotted + slash; gap replayed on reconnect. |
 | Glasses disconnect | Workout continues; reconnect with back-off; HUD resumes. |
 | Phone restarts / app killed mid-workout | Watch continues offline; next watch message wakes the phone; hub adopts the session from the watch buffer. |
@@ -303,7 +312,7 @@ The phone decides; the watch executes on Health Services and reports what actual
 
 | Level | Scope | Location |
 |---|---|---|
-| Unit (pure Kotlin) | Workout state machine (pause excluded, auto-detect, gap replay from events + samples, duplicate commands, Syncing rejects workout commands), exercise-control results (permission missing, other app tracking, timeout, late ok → stop, ended by other app), delta ack only after durable store + retry/dedup, liveness (paused session with 5 s heartbeat never goes offline), parsers per language incl. ASR-style variants, yes/no parser, protocol round-trips + version tolerance, confirmation (first answer wins, timeout), provenance rule, ack + buffer pruning. Existing: 27 tests. | `:core:*`, `:services:*` |
+| Unit (pure Kotlin) | Workout state machine (pause excluded, auto-detect, gap replay from events + samples, duplicate commands, Syncing rejects workout commands), exercise-control results (permission missing, other app tracking, timeout, late ok stops only the abandoned session, WrongSession rejection, abandoned-start reconciliation on reconnect, ended by other app), completion rule (ended report before outstanding deltas → stays Stopping until final seq stored; lost buffer → Incomplete), delta ack only after durable store + retry/dedup, liveness (paused session with 5 s heartbeat never goes offline), parsers per language incl. ASR-style variants, yes/no parser, protocol round-trips + version tolerance, confirmation (first answer wins, timeout), provenance rule, ack + buffer pruning. Existing: 27 tests. | `:core:*`, `:services:*` |
 | Contract | Each Live service passes the same suite as its Fake. | per service |
 | Android instrumented | Room history, settings store, setup wizard, list screen, Apply/auto-apply. | phone, watch |
 | On-device scripted | adb scripts: start/pause/stop from each device and verify all three; latency watch-sample → glasses render (log, target ≤ 1 s); glasses push-to-talk with recorded phrases; Samsung Health takeover with confirm on each device; watch Bluetooth off mid-workout → on → no gap. | `tools/device-tests/` |
@@ -334,3 +343,4 @@ The phone decides; the watch executes on Health Services and reports what actual
 - HUD settings apply to all LiveFit glasses screens; draft + Apply / auto-apply on back.
 - Footer persistent except live Workout screen.
 - Review round 1 (Codex): 12 s liveness vs 5 s heartbeat; SessionDelta events + DeltaAck after durable store + SessionClaim/Syncing adoption; explicit hub → watch ExerciseRequest/Result/StateReport; coordinated-upgrade version policy; watch volume via edge arc + rotating bezel (`SetVolume`).
+- Review round 2 (Codex): session-scoped exercise ops + WrongSession + abandoned-start reconciliation; single completion rule (§4.9) with `Incomplete` status.

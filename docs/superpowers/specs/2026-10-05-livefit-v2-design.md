@@ -28,7 +28,7 @@ Reading other apps' workouts into the Activity list (owner chose **LiveFit only*
 ## 2. Health Connect — `:services:health-connect`
 
 ### 2.1 Write-back
-- Trigger: session reaches `Summary` (finalised) and is **eligible** (§2.2).
+- Trigger: session status becomes `Complete` (V1 §4.9) and it is **eligible** (§2.2).
 - Records (all with `metadata.clientRecordId = "<sessionId>:<kind>[:<index>]"` and `clientRecordVersion` so re-writes upsert, never duplicate):
   - `ExerciseSessionRecord` — type mapping Walk → `EXERCISE_TYPE_WALKING`, Run → `RUNNING`, Cycle → `BIKING`, Auto → detected type; title "LiveFit <type>"; start/end; pauses as `ExerciseSegment`s or excluded via laps if supported.
   - `HeartRateRecord` — 1 Hz samples, chunked (≤ 1,000 samples per record).
@@ -38,7 +38,7 @@ Reading other apps' workouts into the Activity list (owner chose **LiveFit only*
 - Samsung Health takeover case: SH writes its own partial session; LiveFit writes its own — distinct workouts, not duplicates.
 
 ### 2.2 Real-data guarantee (provenance gate)
-- A session is **eligible** only if **every** sample's provenance is `Live` and the session's `source` is a Live metrics source.
+- A session is **eligible** only if its status is **`Complete`** (V1 §4.9 — all deltas through the final seq stored; `Incomplete` sessions are never written), **every** sample's provenance is `Live`, and the session's `source` is a Live metrics source.
 - `HealthConnectWriter` refuses ineligible sessions at the API boundary (not just in UI), returning `Rejected(NotLive)`.
 - The writer is **only bound in the ServiceGraph when the metrics binding is Live**; Fake builds bind a no-op writer, so demo builds cannot write even if permissions are granted.
 - "Export past workouts" skips Demo sessions and shows how many were skipped.
@@ -123,6 +123,6 @@ Live: `YouTubeDataPlaylistService`. Fake: in-memory.
 | Consent revoked / resolution required | Account state `NeedsConsent`; "Reconnect YouTube" in Linked services; background commands toast instead of opening UI. |
 
 ## 6. Testing (V2)
-- Unit: provenance gate, clientRecordId scheme + idempotency, per-minute interval derivation from cumulative totals, track-match scoring (incl. duration from `videos.list`), confirmation payload binding (song changes during confirm), uncertain-insert verification, parser phrases for add-to-playlist.
-- Instrumented: Health Connect writes with the `androidx.health.connect:connect-testing` fake client; encrypted token store.
+- Unit: provenance + completion gate (Incomplete/Stopping never written), clientRecordId scheme + idempotency, per-minute interval derivation from cumulative totals, track-match scoring (incl. duration from `videos.list`), confirmation payload binding (song changes during confirm), uncertain-insert verification, parser phrases for add-to-playlist.
+- Instrumented: Health Connect writes with the `androidx.health.connect:connect-testing` fake client; YouTube authorization — silent `authorize()` returns an access token after consent, resolution `PendingIntent` → `NeedsConsent` (no UI launched from background commands), sign-out clears cached token/account and revokes access.
 - Device: real workout → verify in Health Connect app (and Samsung Health) values match LiveFit summary; add-to-playlist from each device, verify in YouTube Music.
