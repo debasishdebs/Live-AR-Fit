@@ -30,4 +30,8 @@ include(
     ":services:watch-link",
     ":services:music",
     ":services:voice",
+    ":services:voice-android",
+    ":services:sync",
+    ":services:confirm",
+    ":services:history",
 )
