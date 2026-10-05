@@ -135,3 +135,18 @@ interface HistoryStore : SessionStore {
     suspend fun samples(sessionId: String): List<com.debasish.livefit.model.Sample>
     suspend fun clearAll()
 }
+
+/** Platform speech-to-text, on-device only (spec §5.4). */
+interface SpeechToText {
+    /** True when the on-device pack for [locale] is installed. */
+    fun isAvailable(locale: String): Boolean
+    fun start(locale: String): SttSession
+}
+
+interface SttSession {
+    /** 16 kHz mono PCM16 little-endian. */
+    fun feed(pcm: ByteArray)
+    fun end()
+    /** Final (or last partial) text; null on error/timeout. */
+    suspend fun awaitFinal(timeoutMs: Long): String?
+}

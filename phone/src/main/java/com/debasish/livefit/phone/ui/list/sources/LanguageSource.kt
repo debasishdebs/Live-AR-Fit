@@ -3,7 +3,7 @@ package com.debasish.livefit.phone.ui.list.sources
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudDownload
-import com.debasish.livefit.phone.speech.SpeechPacks
+import com.debasish.livefit.services.voice.android.SpeechPacks
 import com.debasish.livefit.phone.ui.list.ActionResult
 import com.debasish.livefit.phone.ui.list.ItemAction
 import com.debasish.livefit.phone.ui.list.ItemStatus
