@@ -13,6 +13,7 @@ import com.debasish.livefit.model.Devices
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.GlassesEvent
@@ -48,6 +49,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -67,7 +69,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     private val dataLayer: DataLayerWatchLink? = if (bindings.liveWatch) DataLayerWatchLink(app, scope) else null
     val watchGateway: WatchExerciseGateway = dataLayer ?: SimulatedWatchGateway(scope, clock)
     val watch: WatchLinkService = dataLayer ?: FakeWatchLink()
-    val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app) else FakeGlassesLink() // Task 14
+    val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app, scope) else FakeGlassesLink() // Task 14
     private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope) else null // Task 15
     val music: MusicService = ytm ?: FakeMusicService(scope)
     // ---- end bindings ----
@@ -157,8 +159,16 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
                 previous = s.phase
             }
         }
+        // A workout starting brings the glasses back even after the user left LiveFit on them (no auto-retry otherwise).
+        scope.launch {
+            workout.snapshot.map { it.phase == WorkoutPhase.Starting || it.phase == WorkoutPhase.Active || it.phase == WorkoutPhase.Paused }
+                .distinctUntilChanged()
+                .collect { running -> if (running) glasses.connect() }
+        }
         // ---- end link wiring ----
-        // Connecting is owned by Task 14's authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.
+        // Connecting is owned by the authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.
+        // Presence re-arm only; the glasses connect when CompanionPresenceService reports them or the app opens.
+        CompanionLinker.observePresence(app)
     }
 
     private fun buildFrame() = StateFrame(

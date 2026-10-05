@@ -13,11 +13,15 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     sourceSets["main"].java.srcDirs("src/main/kotlin")
+    sourceSets["test"].java.srcDirs("src/test/kotlin")
 }
 
 dependencies {
     api(project(":core:services"))
+    implementation(project(":services:sync"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Live link: Rokid CXR-L through the Hi Rokid app (verified on device: no client secret needed).
     implementation("com.rokid.cxr:client-l:1.1.2")
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
 }
