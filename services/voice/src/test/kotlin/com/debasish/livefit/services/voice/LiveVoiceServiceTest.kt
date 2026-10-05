@@ -21,11 +21,12 @@ import kotlin.test.assertTrue
 class LiveVoiceServiceTest {
     private class FakeStt(var available: Boolean = true) : SpeechToText {
         var sessions = 0
+        var ended = 0
         val result = CompletableDeferred<String?>()
         override fun isAvailable(locale: String) = available
         override fun start(locale: String): SttSession { sessions++; return object : SttSession {
             override fun feed(pcm: ByteArray) = Unit
-            override fun end() = Unit
+            override fun end() { ended++ }
             override suspend fun awaitFinal(timeoutMs: Long) = withTimeoutOrNull(timeoutMs) { result.await() }
         } }
     }
@@ -108,6 +109,9 @@ class LiveVoiceServiceTest {
         assertEquals(VoiceState.Listening, v.state.value, "guard must not fire early")
         advanceTimeBy(2); runCurrent()
         assertEquals(VoiceState.Processing, v.state.value, "guard ended the session")
+        assertEquals(1, stt.ended, "guard called session.end()")
+        v.endExternal() // a late/duplicate end must not double-dispatch
+        assertEquals(1, stt.ended)
         advanceTimeBy(5_001); runCurrent() // nothing was recognised
         assertEquals(VoiceState.Idle, v.state.value)
         assertEquals(listOf("Didn't catch that"), toasts)

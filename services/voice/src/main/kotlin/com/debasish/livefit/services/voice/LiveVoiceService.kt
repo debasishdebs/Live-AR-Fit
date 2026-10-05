@@ -27,16 +27,17 @@ class LiveVoiceService(
     override val state: StateFlow<VoiceState> = _state
     private var session: SttSession? = null
     private var listenGuard: Job? = null
+    private val lock = Any() // audio threads, the glasses event loop and the guard all transition state
 
     override fun listen() { phoneMic?.invoke() }
 
-    override fun startExternal(): Boolean {
-        if (_state.value != VoiceState.Idle) return false
+    override fun startExternal(): Boolean = synchronized(lock) {
+        if (_state.value != VoiceState.Idle) return@synchronized false
         val loc = locale()
         val pack = LanguageRegistry.forLocale(loc)
         if (pack == null || !stt.isAvailable(loc)) {
             toast("Voice needs the ${pack?.displayName ?: loc} pack")
-            return false
+            return@synchronized false
         }
         val s = stt.start(loc)
         session = s
@@ -47,25 +48,28 @@ class LiveVoiceService(
             delay(LISTEN_GUARD_MS)
             if (session === s && _state.value == VoiceState.Listening) endExternal()
         }
-        return true
+        true
     }
 
-    override fun feed(pcm: ByteArray) { if (_state.value == VoiceState.Listening) session?.feed(pcm) }
+    override fun feed(pcm: ByteArray) { synchronized(lock) { if (_state.value == VoiceState.Listening) session?.feed(pcm) } }
 
     override fun endExternal() {
-        val s = session ?: return
-        if (_state.value != VoiceState.Listening) return
-        listenGuard?.cancel()
-        listenGuard = null
-        _state.value = VoiceState.Processing
-        s.end()
+        val s = synchronized(lock) {
+            val s = session ?: return
+            if (_state.value != VoiceState.Listening) return
+            listenGuard?.cancel()
+            listenGuard = null
+            _state.value = VoiceState.Processing
+            s.end()
+            s
+        }
         scope.launch {
             val text = s.awaitFinal(5_000)
-            session = null
+            synchronized(lock) { session = null }
             val pack = LanguageRegistry.forLocale(locale())
             val confirmationId = pendingConfirmationId()
             // Release the mic before acting: a command may wait on a confirmation whose answer is spoken (stop → "yes").
-            _state.value = VoiceState.Idle
+            synchronized(lock) { _state.value = VoiceState.Idle }
             when {
                 text.isNullOrBlank() || pack == null -> toast("Didn't catch that")
                 confirmationId != null -> pack.parseYesNo(text)?.let { onAnswer(confirmationId, it) } ?: toast("Say yes or no")

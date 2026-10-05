@@ -86,7 +86,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         onAnswer = { id, yes -> confirm.answer(id, yes) },
         toast = ::flash,
         phoneMic = { phoneMic.record() },
-    ).also { v -> phoneMic = PhoneMic { v } } else FakeVoiceService(scope) { router.dispatchVoice(it) }
+    ).also { v -> phoneMic = PhoneMic(app, { v }, ::flash) } else FakeVoiceService(scope) { router.dispatchVoice(it) }
     // ---- end voice binding ----
 
     private val _lastFrame = MutableStateFlow<StateFrame?>(null)
