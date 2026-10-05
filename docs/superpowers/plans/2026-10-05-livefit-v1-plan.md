@@ -69,6 +69,10 @@ tools/   install-all.sh, device-tests/*.sh
 
 Spec deviation, by design: the watch's offline "local copy" (spec §4.4 step 4) is implemented as a `SessionAssembler` over the watch's own buffered deltas instead of a separate `DefaultWorkoutService`, so phone and watch derive state with the same code.
 
+Spec additions from plan review (Codex, plan round 1), not contradicting the spec:
+- The watch holds one buffer directory **per session** and replays them **one at a time, oldest first**. A hub `Start` while an older session still awaits its final ack is refused with `Internal("Watch is still saving the previous workout…")` (spec §4.8: Internal → toast with reason). Otherwise the hub would adopt the newer session mid-replay and finalize the older one as Incomplete.
+- The phone store persists each session's lifecycle (open / finalized / discarded tombstone, end time, end reason), so abandoned starts, historical replays and the 24 h deadline survive a phone restart.
+
 ---
 ## Task index
 
@@ -1063,6 +1067,7 @@ git commit -m "feat(voice): yes/no parser and per-locale language registry"
   - `fun phase(): WorkoutPhase` (Starting / Active / Paused / Stopping)
   - `fun activeMs(): Long`, `fun snapshot(): WorkoutSnapshot`, `fun hrHistory(limit: Int = 120): List<Int>`
   - `fun provenance(): Provenance`, `fun summary(status: SessionStatus, endReasonOverride: EndReason? = null): SessionSummary`
+  - `fun lastSample(): Sample?` (latest sample by timestamp; the watch seeds Health Services totals with it after process death)
 
 - [ ] **Step 1: Write the failing test** — `SessionAssemblerTest.kt`:
 
@@ -1316,6 +1321,8 @@ class SessionAssembler(val sessionId: String) {
 
     /** All stored deltas in seq order (used to rebuild after a phone restart). */
     fun deltasInOrder(): List<SessionDelta> = deltas.values.toList()
+
+    fun lastSample(): com.debasish.livefit.model.Sample? = samples().lastOrNull()
 }
 ```
 
@@ -1348,7 +1355,8 @@ The phone's authoritative `WorkoutService`. This task covers starting (incl. tak
 - Consumes: `SessionAssembler` (Task 5), `ConfirmationService`, `Clock`, `ConfirmationOutcome` (Task 3), protocol types (Task 2).
 - Produces:
   - `interface WatchExerciseGateway { suspend fun send(request: ExerciseRequest); suspend fun ack(ack: DeltaAck); val results: Flow<ExerciseResult>; val stateReports: Flow<ExerciseStateReport>; val deltas: Flow<SessionDelta>; val claims: Flow<SessionClaim> }`
-  - `interface SessionStore { suspend fun storeDelta(delta: SessionDelta): Long; suspend fun deltas(sessionId: String): List<SessionDelta>; suspend fun openSessionIds(): List<String>; suspend fun finalize(summary: SessionSummary); suspend fun discard(sessionId: String) }` — `storeDelta` is durable and idempotent and returns the highest contiguous seq stored for that session.
+  - `interface SessionStore { suspend fun storeDelta(delta: SessionDelta): Long; suspend fun deltas(sessionId: String): List<SessionDelta>; suspend fun openSessionIds(): List<String>; suspend fun finalize(summary: SessionSummary); suspend fun discard(sessionId: String); suspend fun lifecycle(sessionId: String): SessionLifecycle?; suspend fun markEnded(sessionId: String, endReason: EndReason?, endedAtMs: Long) }` — `storeDelta` is durable and idempotent and returns the highest contiguous seq stored for that session; `discard` keeps a `Discarded` tombstone.
+  - `enum class StoredSessionState { Open, Finalized, Discarded }`, `data class SessionLifecycle(val state: StoredSessionState, val endReason: EndReason? = null, val endedAtMs: Long? = null)` (in `Services.kt`).
   - `class InMemorySessionStore : SessionStore` (+ `val summaries: Map<String, SessionSummary>`)
   - `class HubWorkoutService(scope, gateway, store, confirm, clock, newId = UUID, resultTimeoutMs = 10_000, incompleteAfterMs = 24h, incompleteCheckMs = 60_000, gpsFor: (WorkoutType) -> Boolean = { false }) : WorkoutService` with extra `val notices: SharedFlow<String>`, `val hrHistory: StateFlow<List<Int>>`, `val finished: SharedFlow<SessionSummary>`.
   - Constant `HubWorkoutService.SYNCING_NOTICE = "Syncing watch data…"`.
@@ -1375,8 +1383,21 @@ interface SessionStore {
     /** Sessions with stored deltas but no finalized summary, oldest first. */
     suspend fun openSessionIds(): List<String>
     suspend fun finalize(summary: com.debasish.livefit.model.SessionSummary)
+    /** Deletes the session's data but keeps a Discarded tombstone, so late data for it is still ignored after a restart. */
     suspend fun discard(sessionId: String)
+    /** What the hub must remember across a phone restart (spec §4.8 abandoned starts, §4.9 end time); null = never seen. */
+    suspend fun lifecycle(sessionId: String): SessionLifecycle?
+    /** Records the end event. The first [endedAtMs] is kept (it starts the 24 h deadline); a later non-null reason fills a missing one. */
+    suspend fun markEnded(sessionId: String, endReason: com.debasish.livefit.model.EndReason?, endedAtMs: Long)
 }
+
+enum class StoredSessionState { Open, Finalized, Discarded }
+
+data class SessionLifecycle(
+    val state: StoredSessionState,
+    val endReason: com.debasish.livefit.model.EndReason? = null,
+    val endedAtMs: Long? = null,
+)
 ```
 
 - [ ] **Step 2: Test dependency** — in `services/workout/build.gradle.kts` `dependencies { }` add:
@@ -1390,14 +1411,19 @@ interface SessionStore {
 ```kotlin
 package com.debasish.livefit.services.workout
 
+import com.debasish.livefit.model.EndReason
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionSummary
+import com.debasish.livefit.services.SessionLifecycle
 import com.debasish.livefit.services.SessionStore
+import com.debasish.livefit.services.StoredSessionState
 import java.util.TreeMap
 
 class InMemorySessionStore : SessionStore {
     private val deltas = LinkedHashMap<String, TreeMap<Long, SessionDelta>>()
     private val finalized = LinkedHashMap<String, SessionSummary>()
+    private val ended = HashMap<String, Pair<EndReason?, Long>>()
+    private val discarded = HashSet<String>()
     val summaries: Map<String, SessionSummary> get() = finalized
     /** Order of storeDelta calls, for tests that check "store before ack". */
     val storeLog = mutableListOf<Pair<String, Long>>()
@@ -1412,9 +1438,24 @@ class InMemorySessionStore : SessionStore {
     }
 
     override suspend fun deltas(sessionId: String): List<SessionDelta> = deltas[sessionId]?.values?.toList() ?: emptyList()
-    override suspend fun openSessionIds(): List<String> = deltas.keys.filter { it !in finalized }
+    override suspend fun openSessionIds(): List<String> = deltas.keys.filter { it !in finalized && it !in discarded }
     override suspend fun finalize(summary: SessionSummary) { finalized[summary.id] = summary }
-    override suspend fun discard(sessionId: String) { deltas.remove(sessionId); finalized.remove(sessionId) }
+    override suspend fun discard(sessionId: String) { deltas.remove(sessionId); finalized.remove(sessionId); ended.remove(sessionId); discarded += sessionId }
+
+    override suspend fun lifecycle(sessionId: String): SessionLifecycle? {
+        val e = ended[sessionId]
+        return when {
+            sessionId in discarded -> SessionLifecycle(StoredSessionState.Discarded)
+            sessionId in finalized -> SessionLifecycle(StoredSessionState.Finalized, e?.first, e?.second)
+            sessionId in deltas || e != null -> SessionLifecycle(StoredSessionState.Open, e?.first, e?.second)
+            else -> null
+        }
+    }
+
+    override suspend fun markEnded(sessionId: String, endReason: EndReason?, endedAtMs: Long) {
+        val old = ended[sessionId]
+        ended[sessionId] = (old?.first ?: endReason) to (old?.second ?: endedAtMs)
+    }
 }
 ```
 
@@ -1813,11 +1854,13 @@ Completes `HubWorkoutService` per spec §4.4 (adoption, Syncing), §4.8 (state r
 - Consumes: everything from Task 6.
 - Produces: same public API as Task 6 (no new public members). Behavioural contract:
   - Unknown session in a delta or claim → adopted (phone's empty session discarded; phone's session with samples finalised as Complete/Incomplete).
+  - Delta or claim for a session the store already holds as `Finalized` (e.g. a replay after a lost final ack) → acked, the current workout is untouched. `Discarded` (abandoned start) → acked / `Stop(that session)`, never adopted. Both are read from the store, so they hold after a phone restart.
   - Claim with `lastSeq` beyond stored → phase `Syncing`; workout commands rejected with `SYNCING_NOTICE`.
   - `ExerciseStateReport(Ended)` → phase `Stopping` immediately; `Summary` only when `SessionAssembler.isComplete`.
   - `ExerciseStateReport(sessionId != current, state = Idle)` while current is `Stopping` and incomplete → finalised `Incomplete` (watch has no buffer left).
   - Completion unmet 24 h after the end event → `Incomplete`.
-  - On construction, the newest open session in the store is restored.
+  - On construction, the newest open session in the store is restored, including a recorded end (phase `Stopping`, original 24 h deadline, end reason).
+  - `ExerciseError.Internal(message)` on start → `Idle` + toast with the message (spec §4.8).
 
 - [ ] **Step 1: Write the failing test** — `HubWorkoutRecoveryTest.kt`:
 
@@ -1838,7 +1881,9 @@ import com.debasish.livefit.model.SessionStatus
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -1854,12 +1899,13 @@ import kotlin.test.assertTrue
 class HubWorkoutRecoveryTest {
     private val live = Provenance.Live("galaxy-watch/health-services")
 
-    private class Rig(scope: TestScope, val store: InMemorySessionStore = InMemorySessionStore()) {
+    /** [hubScope] lets a test kill one hub ("process death") and start another on the same store. */
+    private class Rig(scope: TestScope, val store: InMemorySessionStore = InMemorySessionStore(), hubScope: CoroutineScope = scope.backgroundScope, idPrefix: String = "id") {
         var n = 0
         val gateway = FakeWatchGateway()
         val clock = Clock { scope.testScheduler.currentTime }
         val confirm = DefaultConfirmationService(clock, newId = { "c${n++}" })
-        val hub = HubWorkoutService(scope.backgroundScope, gateway, store, confirm, clock, newId = { "id${n++}" })
+        val hub = HubWorkoutService(hubScope, gateway, store, confirm, clock, newId = { "$idPrefix${n++}" })
         val notices = mutableListOf<String>()
         init { scope.backgroundScope.launch { hub.notices.toList(notices) } }
     }
@@ -1978,6 +2024,63 @@ class HubWorkoutRecoveryTest {
         assertNull(r.store.summaries[phoneId])
         assertTrue(phoneId !in r.store.openSessionIds())
     }
+
+    /** Codex P1: replaying an old session's final delta must not end or replace the current one. */
+    @Test fun replayOfFinalizedSessionNeverTouchesTheCurrentWorkout() = runTest {
+        val r = Rig(this)
+        val a = active(r)
+        val finalA = d(a, 1, listOf(SessionEvent.Stopped(9_000, EndReason.User)), final = true)
+        r.gateway.deltas.emit(finalA); runCurrent()
+        assertEquals(SessionStatus.Complete, r.store.summaries[a]!!.status)
+        r.hub.dismissSummary()
+        r.gateway.sent.clear()
+        val b = active(r)
+        r.gateway.deltas.emit(d(b, 1, samples = listOf(Sample(1_000, hr = 120)))); runCurrent()
+        r.gateway.deltas.emit(finalA); runCurrent() // the watch never got A's final ack and re-sends it
+        assertEquals(b, r.hub.snapshot.value.sessionId)
+        assertEquals(WorkoutPhase.Active, r.hub.snapshot.value.phase)
+        assertNull(r.store.summaries[b])
+        assertEquals(a to 1L, r.gateway.acks.last().let { it.sessionId to it.seq })
+        r.gateway.claims.emit(SessionClaim(sessionId = a, type = WorkoutType.Walk, startMs = 0, phase = WorkoutPhase.Stopping, activeMs = 9_000, lastSeq = 1)); runCurrent()
+        assertEquals(b, r.hub.snapshot.value.sessionId, "a claim for a finalized session is acked, not adopted")
+        assertEquals(a to 1L, r.gateway.acks.last().let { it.sessionId to it.seq })
+    }
+
+    /** Codex P1: the end event and its 24 h deadline survive a phone restart. */
+    @Test fun restartAfterEndedReportKeepsStoppingAndTheOriginalDeadline() = runTest {
+        val store = InMemorySessionStore()
+        val firstLife = Job()
+        val r1 = Rig(this, store, CoroutineScope(backgroundScope.coroutineContext + firstLife))
+        val id = active(r1)
+        r1.gateway.stateReports.emit(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)); runCurrent()
+        advanceTimeBy(12 * 60 * 60 * 1000L); runCurrent()
+        firstLife.cancel() // phone process dies…
+        val r2 = Rig(this, store, idPrefix = "second"); runCurrent() // …and restarts
+        assertEquals(id, r2.hub.snapshot.value.sessionId)
+        assertEquals(WorkoutPhase.Stopping, r2.hub.snapshot.value.phase)
+        advanceTimeBy(12 * 60 * 60 * 1000L + 60_001); runCurrent()
+        assertEquals(SessionStatus.Incomplete, store.summaries[id]!!.status, "24 h counts from the end event, not from the restart")
+        assertEquals(EndReason.System, store.summaries[id]!!.endReason)
+    }
+
+    /** Codex P1: an abandoned start stays abandoned after a phone restart. */
+    @Test fun abandonedStartIsStillRejectedAfterRestart() = runTest {
+        val store = InMemorySessionStore()
+        val firstLife = Job()
+        val r1 = Rig(this, store, CoroutineScope(backgroundScope.coroutineContext + firstLife)); runCurrent()
+        r1.hub.start(WorkoutType.Walk); runCurrent()
+        val a = r1.gateway.sent.single().sessionId
+        advanceTimeBy(10_001); runCurrent() // no result: A abandoned
+        firstLife.cancel()
+        val r2 = Rig(this, store, idPrefix = "second"); runCurrent()
+        r2.gateway.deltas.emit(d(a, 0, listOf(SessionEvent.Started(0, WorkoutType.Walk)))); runCurrent()
+        assertEquals(WorkoutPhase.Idle, r2.hub.snapshot.value.phase)
+        assertEquals(a to 0L, r2.gateway.acks.last().let { it.sessionId to it.seq })
+        assertTrue(a !in store.openSessionIds())
+        r2.gateway.claims.emit(SessionClaim(sessionId = a, type = WorkoutType.Walk, startMs = 0, phase = WorkoutPhase.Active, activeMs = 1, lastSeq = 0)); runCurrent()
+        assertEquals(ExerciseOp.Stop, r2.gateway.sent.last().op)
+        assertEquals(a, r2.gateway.sent.last().sessionId)
+    }
 }
 ```
 
@@ -2011,6 +2114,7 @@ import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.ConfirmationOutcome
 import com.debasish.livefit.services.ConfirmationService
 import com.debasish.livefit.services.SessionStore
+import com.debasish.livefit.services.StoredSessionState
 import com.debasish.livefit.services.WatchExerciseGateway
 import com.debasish.livefit.services.WorkoutService
 import kotlinx.coroutines.CompletableDeferred
@@ -2061,7 +2165,6 @@ class HubWorkoutService(
     private var endedAtMs: Long? = null
     private var finishedCurrent = false
     private val pendingResults = HashMap<String, CompletableDeferred<ExerciseResult>>()
-    private val abandoned = HashSet<String>()
 
     init {
         scope.launch { gateway.results.collect { onResult(it) } }
@@ -2136,6 +2239,7 @@ class HubWorkoutService(
             is ExerciseError.PermissionMissing -> { resetIdle(); notice("Watch needs permission: " + e.permissions.joinToString { it.substringAfterLast('.') }) }
             is ExerciseError.WrongSession -> { resetIdle(); notice("Watch is busy with another workout") }
             ExerciseError.SensorUnavailable -> { resetIdle(); notice("Watch sensors unavailable") }
+            is ExerciseError.Internal -> { resetIdle(); notice(e.message) }
             else -> { resetIdle(); notice("Couldn't start workout") }
         }
     }
@@ -2167,22 +2271,29 @@ class HubWorkoutService(
     private suspend fun onResult(r: ExerciseResult) {
         val waiter = pendingResults.remove(r.requestId)
         if (waiter != null) { waiter.complete(r); return }
-        if (r.ok && r.sessionId in abandoned) sendStop(r.sessionId) // late ok: stop only that session
+        if (r.ok && isDiscarded(r.sessionId)) sendStop(r.sessionId) // late ok: stop only that session
     }
+
+    /** Abandoned starts are tombstoned in the store, so this survives a phone restart. */
+    private suspend fun isDiscarded(id: String) = store.lifecycle(id)?.state == StoredSessionState.Discarded
 
     private suspend fun sendStop(sessionId: String) =
         gateway.send(ExerciseRequest(requestId = newId(), sessionId = sessionId, op = ExerciseOp.Stop))
 
     private suspend fun abandon(id: String) {
-        abandoned += id
-        store.discard(id)
+        store.discard(id) // tombstone: later data and claims for it are rejected, even after a restart
         if (currentId == id) resetIdle()
     }
 
     // ---- Watch data -----------------------------------------------------------------------
 
     private suspend fun onDelta(d: SessionDelta) {
-        if (d.sessionId in abandoned) { gateway.ack(DeltaAck(sessionId = d.sessionId, seq = d.seq)); return }
+        when (store.lifecycle(d.sessionId)?.state) {
+            // Abandoned start, or a session already finalized (e.g. replay after a lost final ack):
+            // ack so the watch can drop it, but never adopt it — that would end the current workout.
+            StoredSessionState.Discarded, StoredSessionState.Finalized -> { gateway.ack(DeltaAck(sessionId = d.sessionId, seq = d.seq)); return }
+            else -> Unit
+        }
         if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId)
         val a = current ?: return
         val storedSeq = store.storeDelta(d) // durable first, then ack
@@ -2192,7 +2303,11 @@ class HubWorkoutService(
     }
 
     private suspend fun onClaim(c: SessionClaim) {
-        if (c.sessionId in abandoned) { sendStop(c.sessionId); return }
+        when (store.lifecycle(c.sessionId)?.state) {
+            StoredSessionState.Discarded -> { sendStop(c.sessionId); return }
+            StoredSessionState.Finalized -> { gateway.ack(DeltaAck(sessionId = c.sessionId, seq = c.lastSeq)); return } // lets the watch free its buffer
+            else -> Unit
+        }
         if (c.sessionId != currentId || finishedCurrent) adopt(c.sessionId)
         val a = current ?: return
         claim = c
@@ -2212,6 +2327,7 @@ class HubWorkoutService(
             endedByReport = true
             endReason = r.endedBy
             if (endedAtMs == null) endedAtMs = clock.nowMs()
+            store.markEnded(r.sessionId, r.endedBy, endedAtMs!!) // survives a phone restart
             if (r.endedBy != null && r.endedBy != EndReason.User) notice("Workout ended by ${describe(r.endedBy)}")
             publish()
         }
@@ -2240,8 +2356,14 @@ class HubWorkoutService(
         val a = SessionAssembler(id)
         store.deltas(id).forEach { a.add(it) }
         if (a.deltaCount == 0 || currentId != null) return
+        val life = store.lifecycle(id)
         beginSession(id)
         current = a
+        life?.endedAtMs?.let { at -> // ended before the restart: keep Stopping and the original deadline
+            endedByReport = true
+            endReason = life.endReason
+            endedAtMs = at
+        }
         publish()
     }
 
@@ -2254,7 +2376,10 @@ class HubWorkoutService(
         if (finishedCurrent) return
         syncUntilSeq?.let { if (a.contiguousSeq >= it) syncUntilSeq = null }
         val ended = isEnded(a)
-        if (ended && endedAtMs == null) endedAtMs = clock.nowMs()
+        if (ended && endedAtMs == null) {
+            endedAtMs = clock.nowMs()
+            store.markEnded(a.sessionId, endReason, endedAtMs!!)
+        }
         if (a.isComplete && syncUntilSeq == null) { finalize(a, SessionStatus.Complete); return }
         var snap = a.snapshot()
         if (a.deltaCount == 0) snap = snap.copy(type = claim?.type ?: _snapshot.value.type, phase = WorkoutPhase.Starting)
@@ -2312,7 +2437,7 @@ class HubWorkoutService(
 - [ ] **Step 4: Run all workout tests**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:workout:test`
-Expected: PASS — HubWorkoutRecoveryTest 9, HubWorkoutStartTest 8, SessionAssemblerTest 8, DefaultWorkoutServiceTest 5.
+Expected: PASS — HubWorkoutRecoveryTest 12, HubWorkoutStartTest 8, SessionAssemblerTest 8, DefaultWorkoutServiceTest 5.
 
 - [ ] **Step 5: Commit**
 
@@ -2695,7 +2820,7 @@ git commit -m "feat(sync): state broadcaster, liveness monitor, back-off and com
 
 ### Task 10: Watch delta buffer and session recorder
 
-The watch's temporary durable buffer (spec §4.4): header + unacked deltas on disk, deleted only after the phone acks.
+The watch's temporary durable buffer (spec §4.4): per session, a header + unacked deltas on disk, deleted only after the phone acks. Acked deltas are folded into a small **checkpoint** before deletion, so a watch restart can still rebuild phase, active time and totals. Ended sessions waiting for their final ack are kept **separately** from a newer session, and the phone receives one session at a time (oldest first).
 
 **Files:**
 - Modify: `services/sync/build.gradle.kts` (add `api(project(":services:workout"))` — the recorder exposes a `SessionAssembler` for offline display)
@@ -2706,9 +2831,10 @@ The watch's temporary durable buffer (spec §4.4): header + unacked deltas on di
 **Interfaces:**
 - Consumes: `Wire`, `SessionDelta`, `DeltaAck`, `SessionClaim`, `SessionEvent`, `Sample`, `Provenance` (Task 2); `SessionAssembler` (Task 5).
 - Produces:
-  - `@Serializable data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long)`
-  - `class FileDeltaBuffer(dir: File) { fun readHeader(): WatchSessionHeader?; fun writeHeader(h: WatchSessionHeader); fun put(d: SessionDelta); fun unacked(): List<SessionDelta>; fun ackUpTo(seq: Long); fun clear() }`
-  - `class WatchSessionRecorder(buffer: FileDeltaBuffer, provenance: Provenance, send: suspend (SessionDelta) -> Unit)` with `val sessionId: String?`, `val assembler: SessionAssembler?`, `suspend fun begin(sessionId: String, type: WorkoutType, tMs: Long)`, `suspend fun event(e: SessionEvent, final: Boolean = false)`, `suspend fun sample(s: Sample)`, `fun onAck(ack: DeltaAck)`, `suspend fun resendUnacked()`, `fun claim(): SessionClaim?`, `val isFinalized: Boolean`.
+  - `@Serializable data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long, val finalSeq: Long? = null)`
+  - `class FileDeltaBuffer(dir: File)` — one directory per session: `fun readHeader(): WatchSessionHeader?; fun writeHeader(h: WatchSessionHeader); fun put(d: SessionDelta); fun unacked(): List<SessionDelta>; fun readCheckpoint(): SessionDelta?; fun ackUpTo(seq: Long); fun delete()`
+  - `class WatchSessionRecorder(root: File, provenance: Provenance, send: suspend (SessionDelta) -> Unit, sendClaim: suspend (SessionClaim) -> Unit = {})` with `val sessionId: String?` (newest held session), `val assembler: SessionAssembler?` (newest), `val type: WorkoutType?` (newest), `val isFinalized: Boolean` (newest), `val holdsData: Boolean` (any session not yet fully acked), `suspend fun begin(sessionId: String, type: WorkoutType, tMs: Long)`, `suspend fun event(e: SessionEvent, final: Boolean = false)`, `suspend fun sample(s: Sample)`, `suspend fun onAck(ack: DeltaAck)`, `suspend fun resendUnacked()`, `suspend fun resync()`, `fun claim(): SessionClaim?`.
+  - Rules: only the **oldest** held session is sent (live deltas of a newer session stay buffered until the older one's final ack, then `resync()` claims and replays it). `begin` never touches older sessions.
 
 - [ ] **Step 1: Write the failing test** — `WatchSessionRecorderTest.kt`:
 
@@ -2719,6 +2845,7 @@ import com.debasish.livefit.model.DeltaAck
 import com.debasish.livefit.model.EndReason
 import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.Sample
+import com.debasish.livefit.model.SessionClaim
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutPhase
@@ -2728,6 +2855,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -2736,47 +2864,48 @@ class WatchSessionRecorderTest {
     private fun tmp(): File = Files.createTempDirectory("lfbuf").toFile()
 
     @Test fun deltasArePersistedBeforeSendAndPrunedOnAck() = runTest {
-        val dir = tmp()
+        val root = tmp()
         val sent = mutableListOf<SessionDelta>()
-        val rec = WatchSessionRecorder(FileDeltaBuffer(dir), live) { d ->
-            assertTrue(File(dir, "d-${d.seq}.json").exists(), "persisted before send")
+        val rec = WatchSessionRecorder(root, live, send = { d ->
+            assertTrue(File(root, "s/d-${d.seq}.json").exists(), "persisted before send")
             sent += d
-        }
+        })
         rec.begin("s", WorkoutType.Run, 1_000)
         rec.sample(Sample(2_000, hr = 120))
         rec.sample(Sample(3_000, hr = 125))
         assertEquals(listOf(0L, 1L, 2L), sent.map { it.seq })
         rec.onAck(DeltaAck(sessionId = "s", seq = 1))
-        assertEquals(listOf(2L), FileDeltaBuffer(dir).unacked().map { it.seq })
+        assertEquals(listOf(2L), FileDeltaBuffer(File(root, "s")).unacked().map { it.seq })
     }
 
     @Test fun ackForAnotherSessionIsIgnored() = runTest {
-        val dir = tmp()
-        val rec = WatchSessionRecorder(FileDeltaBuffer(dir), live) {}
+        val root = tmp()
+        val rec = WatchSessionRecorder(root, live, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.onAck(DeltaAck(sessionId = "other", seq = 0))
-        assertEquals(1, FileDeltaBuffer(dir).unacked().size)
+        assertEquals(1, FileDeltaBuffer(File(root, "s")).unacked().size)
     }
 
-    @Test fun finalAckClearsTheBuffer() = runTest {
-        val dir = tmp()
-        val rec = WatchSessionRecorder(FileDeltaBuffer(dir), live) {}
+    @Test fun finalAckClearsTheSession() = runTest {
+        val root = tmp()
+        val rec = WatchSessionRecorder(root, live, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
         assertTrue(rec.isFinalized)
         rec.onAck(DeltaAck(sessionId = "s", seq = 1))
-        assertNull(FileDeltaBuffer(dir).readHeader())
+        assertFalse(File(root, "s").exists())
         assertNull(rec.sessionId)
+        assertFalse(rec.holdsData)
     }
 
     @Test fun survivesProcessRestartAndResendsUnacked() = runTest {
-        val dir = tmp()
-        WatchSessionRecorder(FileDeltaBuffer(dir), live) { error("phone unreachable") }.apply {
+        val root = tmp()
+        WatchSessionRecorder(root, live, send = { error("phone unreachable") }).apply {
             begin("s", WorkoutType.Walk, 0)
             sample(Sample(1_000, hr = 100))
         }
         val resent = mutableListOf<Long>()
-        val rec = WatchSessionRecorder(FileDeltaBuffer(dir), live) { resent += it.seq }
+        val rec = WatchSessionRecorder(root, live, send = { resent += it.seq })
         assertEquals("s", rec.sessionId)
         rec.resendUnacked()
         assertEquals(listOf(0L, 1L), resent)
@@ -2785,7 +2914,7 @@ class WatchSessionRecorderTest {
     }
 
     @Test fun claimDescribesTheHeldSession() = runTest {
-        val rec = WatchSessionRecorder(FileDeltaBuffer(tmp()), live) {}
+        val rec = WatchSessionRecorder(tmp(), live, send = {})
         rec.begin("s", WorkoutType.Run, 0)
         rec.sample(Sample(10_000, hr = 130))
         rec.event(SessionEvent.Paused(10_000))
@@ -2795,6 +2924,52 @@ class WatchSessionRecorderTest {
         assertEquals(WorkoutPhase.Paused, c.phase)
         assertEquals(10_000, c.activeMs)
         assertEquals(2, c.lastSeq)
+    }
+
+    /** Codex P1: acked (deleted) deltas must still count after a watch restart. */
+    @Test fun restartAfterPruningRestoresStateFromTheCheckpoint() = runTest {
+        val root = tmp()
+        WatchSessionRecorder(root, live, send = {}).apply {
+            begin("s", WorkoutType.Walk, 0)
+            sample(Sample(10_000, hr = 110, stepsTotal = 20))
+            event(SessionEvent.Paused(10_000))
+            onAck(DeltaAck(sessionId = "s", seq = 2)) // phone stored everything; files deleted
+        }
+        assertTrue(FileDeltaBuffer(File(root, "s")).unacked().isEmpty())
+        val rec = WatchSessionRecorder(root, live, send = {})
+        assertEquals(WorkoutPhase.Paused, rec.assembler!!.phase())
+        assertEquals(10_000, rec.assembler!!.activeMs())
+        assertEquals(20, rec.assembler!!.snapshot().metrics.steps)
+        assertEquals(WorkoutPhase.Paused, rec.claim()!!.phase)
+        assertEquals(10_000, rec.claim()!!.activeMs)
+        rec.sample(Sample(11_000, hr = 111))
+        assertEquals(3L, FileDeltaBuffer(File(root, "s")).unacked().single().seq)
+    }
+
+    /** Codex P1: stop A offline → start B → reconnect → both recovered, A first. */
+    @Test fun endedSessionIsKeptWhenAnotherStartsAndSyncsFirst() = runTest {
+        val root = tmp()
+        WatchSessionRecorder(root, live, send = { error("phone unreachable") }).apply {
+            begin("a", WorkoutType.Walk, 0)
+            event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
+            begin("b", WorkoutType.Run, 10_000)
+            sample(Sample(11_000, hr = 140))
+        }
+        val sent = mutableListOf<Pair<String, Long>>()
+        val claims = mutableListOf<SessionClaim>()
+        val rec = WatchSessionRecorder(root, live, send = { sent += it.sessionId to it.seq }, sendClaim = { claims += it })
+        assertEquals("b", rec.sessionId, "the newest session is the one shown and recorded")
+        rec.resync() // reconnect
+        assertEquals(listOf("a"), claims.map { it.sessionId })
+        assertEquals(listOf("a" to 0L, "a" to 1L), sent, "b waits until a is fully stored")
+        rec.sample(Sample(12_000, hr = 141)) // b keeps recording, still held back
+        assertEquals(2, sent.size)
+        rec.onAck(DeltaAck(sessionId = "a", seq = 1)) // a complete → b's turn
+        assertFalse(File(root, "a").exists())
+        assertEquals(listOf("a", "b"), claims.map { it.sessionId })
+        assertEquals(listOf("b" to 0L, "b" to 1L, "b" to 2L), sent.drop(2))
+        rec.sample(Sample(13_000, hr = 142))
+        assertEquals("b" to 3L, sent.last(), "b is now sent live")
     }
 }
 ```
@@ -2829,10 +3004,14 @@ import kotlinx.serialization.Serializable
 import java.io.File
 
 @Serializable
-data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long)
+data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long, val finalSeq: Long? = null)
 
-/** One directory per watch; files are written atomically (temp + rename). */
-class FileDeltaBuffer(private val dir: File) {
+/**
+ * One directory per session; files are written atomically (temp + rename).
+ * Acked deltas are folded into `checkpoint.json` (all events + the last [CHECKPOINT_SAMPLES] samples,
+ * stored as one SessionDelta whose seq = highest folded seq) before their files are deleted.
+ */
+class FileDeltaBuffer(val dir: File) {
     init { dir.mkdirs() }
 
     private fun atomicWrite(name: String, text: String) {
@@ -2841,28 +3020,53 @@ class FileDeltaBuffer(private val dir: File) {
         if (!tmp.renameTo(File(dir, name))) { File(dir, name).delete(); tmp.renameTo(File(dir, name)) }
     }
 
-    fun readHeader(): WatchSessionHeader? =
-        File(dir, HEADER).takeIf { it.exists() }?.let { runCatching { Wire.decode<WatchSessionHeader>(it.readText()) }.getOrNull() }
+    private inline fun <reified T> read(name: String): T? =
+        File(dir, name).takeIf { it.exists() }?.let { runCatching { Wire.decode<T>(it.readText()) }.getOrNull() }
 
+    fun readHeader(): WatchSessionHeader? = read(HEADER)
     fun writeHeader(h: WatchSessionHeader) = atomicWrite(HEADER, Wire.encode(h))
+    fun readCheckpoint(): SessionDelta? = read(CHECKPOINT)
 
     fun put(d: SessionDelta) = atomicWrite("d-${d.seq}.json", Wire.encode(d))
 
-    fun unacked(): List<SessionDelta> =
-        (dir.listFiles { f -> f.name.startsWith("d-") && f.name.endsWith(".json") } ?: emptyArray())
+    private fun deltaFiles() = dir.listFiles { f -> f.name.startsWith("d-") && f.name.endsWith(".json") }?.toList().orEmpty()
+    private fun seqOf(f: File) = f.name.removePrefix("d-").removeSuffix(".json").toLongOrNull()
+
+    /** Unacked deltas in seq order; anything the checkpoint already covers is excluded. */
+    fun unacked(): List<SessionDelta> {
+        val folded = readCheckpoint()?.seq ?: -1
+        return deltaFiles().filter { (seqOf(it) ?: -1) > folded }
             .mapNotNull { runCatching { Wire.decode<SessionDelta>(it.readText()) }.getOrNull() }
             .sortedBy { it.seq }
-
-    fun ackUpTo(seq: Long) {
-        dir.listFiles { f -> f.name.startsWith("d-") && f.name.endsWith(".json") }?.forEach { f ->
-            val s = f.name.removePrefix("d-").removeSuffix(".json").toLongOrNull()
-            if (s != null && s <= seq) f.delete()
-        }
     }
 
-    fun clear() { dir.listFiles()?.forEach { it.delete() } }
+    /** Checkpoint first, then delete: a crash in between leaves files the checkpoint covers, which [unacked] ignores. */
+    fun ackUpTo(seq: Long) {
+        val pruned = unacked().filter { it.seq <= seq }
+        if (pruned.isNotEmpty()) {
+            val old = readCheckpoint()
+            val cp = SessionDelta(
+                sessionId = pruned.last().sessionId,
+                seq = pruned.last().seq,
+                events = old?.events.orEmpty() + pruned.flatMap { it.events },
+                samples = (old?.samples.orEmpty() + pruned.flatMap { it.samples }).takeLast(CHECKPOINT_SAMPLES),
+                provenance = pruned.last().provenance,
+                final = false,
+            )
+            atomicWrite(CHECKPOINT, Wire.encode(cp))
+        }
+        val folded = readCheckpoint()?.seq ?: return
+        deltaFiles().forEach { f -> seqOf(f)?.let { if (it <= folded) f.delete() } }
+    }
 
-    private companion object { const val HEADER = "header.json" }
+    fun delete() { dir.deleteRecursively() }
+
+    companion object {
+        private const val HEADER = "header.json"
+        private const val CHECKPOINT = "checkpoint.json"
+        /** Enough for the watch's 60 s trend line; avg/max HR on the watch after a restart cover this tail only (the phone's summary is authoritative). */
+        const val CHECKPOINT_SAMPLES = 120
+    }
 }
 ```
 
@@ -2879,33 +3083,54 @@ import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.workout.SessionAssembler
+import java.io.File
 
 /**
- * Watch side of spec §4.4: every delta is persisted before it is sent; deleted only when the phone
- * acks it; the whole buffer is cleared once the final delta is acked. Keeps an in-memory
- * [SessionAssembler] of the session so the watch can show it while the phone is offline.
+ * Watch side of spec §4.4: every delta is persisted before it is sent and deleted only when the phone
+ * acks it; a session's directory is removed once its final delta is acked.
+ *
+ * Several sessions can be held (an ended one awaiting its final ack + a newer one). Only the **oldest**
+ * is sent, so the phone replays one session at a time and never adopts the newer one while the older
+ * is still Syncing (adoption would finalize the older one as Incomplete).
  */
 class WatchSessionRecorder(
-    private val buffer: FileDeltaBuffer,
+    private val root: File,
     private val provenance: Provenance,
     private val send: suspend (SessionDelta) -> Unit,
+    private val sendClaim: suspend (SessionClaim) -> Unit = {},
 ) {
-    private var header: WatchSessionHeader? = buffer.readHeader()
-    private var nextSeq: Long = (header?.lastSeq ?: -1) + 1
-    private var finalSeq: Long? = buffer.unacked().lastOrNull { it.final }?.seq
+    private class Held(val buffer: FileDeltaBuffer, var header: WatchSessionHeader, val assembler: SessionAssembler)
 
-    var assembler: SessionAssembler? = header?.let { h -> SessionAssembler(h.sessionId).also { a -> buffer.unacked().forEach { a.add(it) } } }
-        private set
+    /** Oldest first. */
+    private val held = mutableListOf<Held>()
 
-    val sessionId: String? get() = header?.sessionId
-    val isFinalized: Boolean get() = finalSeq != null
+    init {
+        root.mkdirs()
+        root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { dir ->
+            val buffer = FileDeltaBuffer(dir)
+            val h = buffer.readHeader() ?: run { buffer.delete(); return@mapNotNull null }
+            val cp = buffer.readCheckpoint()
+            if (h.finalSeq != null && cp != null && cp.seq >= h.finalSeq) { buffer.delete(); return@mapNotNull null } // crashed after the final ack
+            val a = SessionAssembler(h.sessionId)
+            cp?.let { a.add(it) }
+            buffer.unacked().forEach { a.add(it) }
+            Held(buffer, h, a)
+        }.sortedBy { it.header.startMs }.let { held += it }
+    }
+
+    private val newest get() = held.lastOrNull()
+
+    val sessionId: String? get() = newest?.header?.sessionId
+    val assembler: SessionAssembler? get() = newest?.assembler
+    val type: WorkoutType? get() = newest?.header?.type
+    val isFinalized: Boolean get() = newest?.header?.finalSeq != null
+    val holdsData: Boolean get() = held.isNotEmpty()
 
     suspend fun begin(sessionId: String, type: WorkoutType, tMs: Long) {
-        buffer.clear()
-        header = WatchSessionHeader(sessionId, type, tMs, lastSeq = -1).also { buffer.writeHeader(it) }
-        nextSeq = 0
-        finalSeq = null
-        assembler = SessionAssembler(sessionId)
+        check(newest == null || isFinalized) { "session ${this.sessionId} is still recording" }
+        val buffer = FileDeltaBuffer(File(root, sessionId))
+        val h = WatchSessionHeader(sessionId, type, tMs, lastSeq = -1).also { buffer.writeHeader(it) }
+        held += Held(buffer, h, SessionAssembler(sessionId))
         record(listOf(SessionEvent.Started(tMs, type)), emptyList(), final = false)
     }
 
@@ -2913,41 +3138,46 @@ class WatchSessionRecorder(
     suspend fun sample(s: Sample) = record(emptyList(), listOf(s), final = false)
 
     private suspend fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
-        val h = header ?: return
-        val d = SessionDelta(sessionId = h.sessionId, seq = nextSeq++, events = events, samples = samples, provenance = provenance, final = final)
-        buffer.put(d)
-        header = h.copy(lastSeq = d.seq).also { buffer.writeHeader(it) }
-        if (final) finalSeq = d.seq
-        assembler?.add(d)
-        runCatching { send(d) } // unreachable phone: stays buffered, resent later
+        val h = newest?.takeIf { it.header.finalSeq == null } ?: return
+        val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final)
+        h.buffer.put(d)
+        h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null).also { h.buffer.writeHeader(it) }
+        h.assembler.add(d)
+        if (h === held.first()) runCatching { send(d) } // unreachable phone, or an older session first: stays buffered
     }
 
-    fun onAck(ack: DeltaAck) {
-        if (ack.sessionId != sessionId) return
-        buffer.ackUpTo(ack.seq)
-        val f = finalSeq
-        if (f != null && ack.seq >= f) {
-            buffer.clear()
-            header = null
-            assembler = null
-            finalSeq = null
-        }
+    suspend fun onAck(ack: DeltaAck) {
+        val h = held.firstOrNull { it.header.sessionId == ack.sessionId } ?: return
+        h.buffer.ackUpTo(ack.seq)
+        val f = h.header.finalSeq ?: return
+        if (ack.seq < f) return
+        val wasOldest = h === held.first()
+        h.buffer.delete()
+        held.remove(h)
+        if (wasOldest && held.isNotEmpty()) resync() // next session's turn
     }
 
+    /** Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). */
     suspend fun resendUnacked() {
-        for (d in buffer.unacked()) runCatching { send(d) }
+        val h = held.firstOrNull() ?: return
+        for (d in h.buffer.unacked()) runCatching { send(d) }
+    }
+
+    /** Claims the oldest held session and replays it (on reconnect, and when the previous session completes). */
+    suspend fun resync() {
+        claim()?.let { runCatching { sendClaim(it) } }
+        resendUnacked()
     }
 
     fun claim(): SessionClaim? {
-        val h = header ?: return null
-        val a = assembler
+        val h = held.firstOrNull() ?: return null
         return SessionClaim(
-            sessionId = h.sessionId,
-            type = h.type,
-            startMs = h.startMs,
-            phase = a?.phase() ?: com.debasish.livefit.model.WorkoutPhase.Active,
-            activeMs = a?.activeMs() ?: 0,
-            lastSeq = h.lastSeq,
+            sessionId = h.header.sessionId,
+            type = h.header.type,
+            startMs = h.header.startMs,
+            phase = h.assembler.phase(),
+            activeMs = h.assembler.activeMs(),
+            lastSeq = h.header.lastSeq,
         )
     }
 }
@@ -2956,13 +3186,13 @@ class WatchSessionRecorder(
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test`
-Expected: PASS (12 tests).
+Expected: PASS (14 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add services/sync
-git commit -m "feat(sync): watch file delta buffer and session recorder"
+git commit -m "feat(sync): per-session watch buffer with checkpoint and ordered replay"
 ```
 
 ---
@@ -2983,7 +3213,8 @@ git commit -m "feat(sync): watch file delta buffer and session recorder"
 - Consumes: `SessionStore` (Task 6), `Wire`, `SessionDelta`, `SessionSummary`, `Sample`, `Provenance` (Task 2).
 - Produces:
   - `interface HistoryStore : SessionStore { val sessions: Flow<List<SessionSummary>>; suspend fun samples(sessionId: String): List<Sample>; suspend fun clearAll() }`
-  - `class RoomSessionStore(db: HistoryDatabase) : HistoryStore`; `HistoryDatabase.create(context: Context, inMemory: Boolean = false): HistoryDatabase`
+  - `class RoomSessionStore(db: HistoryDatabase) : HistoryStore` (implements `lifecycle` / `markEnded` / tombstoning `discard` from Task 6)
+  - `HistoryDatabase.create(context: Context, inMemory: Boolean = false): HistoryDatabase`; `HistoryDatabase.shared(context: Context): HistoryDatabase` (one instance per process — the service graph and, in V2, the Health Connect worker use it)
 
 - [ ] **Step 1: Append the interface to `Services.kt`**
 
@@ -3011,6 +3242,8 @@ import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.SessionStatus
 import com.debasish.livefit.model.SessionSummary
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.services.SessionLifecycle
+import com.debasish.livefit.services.StoredSessionState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -3055,8 +3288,24 @@ class RoomSessionStoreTest {
         val s = store()
         s.storeDelta(d(0)); s.discard("s")
         assertTrue(s.deltas("s").isEmpty())
-        s.storeDelta(d(0)); s.clearAll()
         assertTrue(s.openSessionIds().isEmpty())
+        s.clearAll()
+        assertTrue(s.sessions.first().isEmpty())
+    }
+
+    /** The hub's restart memory (Codex P1): tombstones, end time and reason survive in the database. */
+    @Test fun lifecycleIsPersisted() = runTest {
+        val s = store()
+        assertEquals(null, s.lifecycle("s"))
+        s.storeDelta(d(0, events = listOf(SessionEvent.Started(0, WorkoutType.Walk))))
+        s.markEnded("s", null, 5_000)
+        s.markEnded("s", EndReason.OtherApp, 9_000) // first time kept, missing reason filled
+        assertEquals(SessionLifecycle(StoredSessionState.Open, EndReason.OtherApp, 5_000), s.lifecycle("s"))
+        s.finalize(SessionSummary(id = "s", type = WorkoutType.Walk, startMs = 0, endMs = 5_000, activeMs = 5_000, provenance = live, status = SessionStatus.Complete))
+        assertEquals(StoredSessionState.Finalized, s.lifecycle("s")!!.state)
+        s.discard("never-started") // abandoned start: no deltas, still remembered
+        assertEquals(StoredSessionState.Discarded, s.lifecycle("never-started")!!.state)
+        assertTrue("never-started" !in s.openSessionIds())
     }
 }
 ```
@@ -3081,9 +3330,13 @@ data class SessionEntity(
     val id: String,
     /** JSON of SessionSummary once finalized; null while open. */
     val summaryJson: String?,
+    /** SessionStatus name while open/finalized, or "Discarded" (tombstone of an abandoned start). */
     val status: String,
     val startMs: Long,
     val createdAtMs: Long,
+    /** Set once the session's end is known (hub restart keeps Stopping and the 24 h deadline). */
+    val endedAtMs: Long? = null,
+    val endReason: String? = null,
 )
 
 @Entity(tableName = "delta", primaryKeys = ["sessionId", "seq"])
@@ -3121,7 +3374,10 @@ interface HistoryDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertSession(s: SessionEntity)
     @Query("SELECT seq FROM delta WHERE sessionId = :id ORDER BY seq") suspend fun seqs(id: String): List<Long>
     @Query("SELECT json FROM delta WHERE sessionId = :id ORDER BY seq") suspend fun deltaJson(id: String): List<String>
-    @Query("SELECT id FROM session WHERE summaryJson IS NULL ORDER BY createdAtMs") suspend fun openIds(): List<String>
+    @Query("SELECT id FROM session WHERE summaryJson IS NULL AND status != 'Discarded' ORDER BY createdAtMs") suspend fun openIds(): List<String>
+    @Query("SELECT * FROM session WHERE id = :id") suspend fun session(id: String): SessionEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSession(s: SessionEntity)
+    @Query("UPDATE session SET endedAtMs = COALESCE(endedAtMs, :at), endReason = COALESCE(endReason, :reason) WHERE id = :id") suspend fun markEnded(id: String, reason: String?, at: Long)
     @Query("UPDATE session SET summaryJson = :json, status = :status WHERE id = :id") suspend fun finalize(id: String, json: String, status: String)
     @Query("SELECT summaryJson FROM session WHERE summaryJson IS NOT NULL ORDER BY startMs DESC") fun summaries(): Flow<List<String>>
     @Query("SELECT * FROM sample WHERE sessionId = :id ORDER BY tMs") suspend fun samples(id: String): List<SampleEntity>
@@ -3140,8 +3396,20 @@ interface HistoryDao {
         return seqs(delta.sessionId)
     }
 
+    /** Deletes the data but keeps a tombstone row so late deltas/claims for an abandoned start are rejected after a restart. */
     @Transaction
-    suspend fun discard(id: String) { deleteDeltas(id); deleteSamples(id); deleteSession(id) }
+    suspend fun discard(id: String, now: Long) {
+        deleteDeltas(id); deleteSamples(id)
+        upsertSession(SessionEntity(id, summaryJson = null, status = DISCARDED, startMs = 0, createdAtMs = now))
+    }
+
+    @Transaction
+    suspend fun markEndedOrCreate(id: String, reason: String?, at: Long, now: Long) {
+        insertSession(SessionEntity(id, summaryJson = null, status = "Active", startMs = 0, createdAtMs = now))
+        markEnded(id, reason, at)
+    }
+
+    companion object { const val DISCARDED = "Discarded" }
 
     @Transaction
     suspend fun clearAll() { clearDeltas(); clearSamples(); clearSessions() }
@@ -3166,6 +3434,12 @@ abstract class HistoryDatabase : RoomDatabase() {
         fun create(context: Context, inMemory: Boolean = false): HistoryDatabase =
             (if (inMemory) Room.inMemoryDatabaseBuilder(context, HistoryDatabase::class.java).allowMainThreadQueries()
             else Room.databaseBuilder(context, HistoryDatabase::class.java, "livefit-history.db")).build()
+
+        @Volatile private var instance: HistoryDatabase? = null
+
+        /** One Room instance per process (two instances on one file break change notifications). */
+        fun shared(context: Context): HistoryDatabase =
+            instance ?: synchronized(this) { instance ?: create(context.applicationContext).also { instance = it } }
     }
 }
 ```
@@ -3180,8 +3454,11 @@ import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionStatus
 import com.debasish.livefit.model.SessionSummary
+import com.debasish.livefit.model.EndReason
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.HistoryStore
+import com.debasish.livefit.services.SessionLifecycle
+import com.debasish.livefit.services.StoredSessionState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -3204,7 +3481,20 @@ class RoomSessionStore(private val db: HistoryDatabase, private val now: () -> L
     override suspend fun deltas(sessionId: String): List<SessionDelta> = dao.deltaJson(sessionId).map { Wire.decode(it) }
     override suspend fun openSessionIds(): List<String> = dao.openIds()
     override suspend fun finalize(summary: SessionSummary) = dao.finalize(summary.id, Wire.encode(summary), summary.status.name)
-    override suspend fun discard(sessionId: String) = dao.discard(sessionId)
+    override suspend fun discard(sessionId: String) = dao.discard(sessionId, now())
+
+    override suspend fun lifecycle(sessionId: String): SessionLifecycle? {
+        val e = dao.session(sessionId) ?: return null
+        val state = when {
+            e.status == HistoryDao.DISCARDED -> StoredSessionState.Discarded
+            e.summaryJson != null -> StoredSessionState.Finalized
+            else -> StoredSessionState.Open
+        }
+        return SessionLifecycle(state, e.endReason?.let { EndReason.valueOf(it) }, e.endedAtMs)
+    }
+
+    override suspend fun markEnded(sessionId: String, endReason: EndReason?, endedAtMs: Long) =
+        dao.markEndedOrCreate(sessionId, endReason?.name, endedAtMs, now())
 
     override val sessions: Flow<List<SessionSummary>> = dao.summaries().map { list -> list.map { Wire.decode<SessionSummary>(it) } }
     override suspend fun samples(sessionId: String): List<Sample> =
@@ -3218,7 +3508,7 @@ Note: `finalize` on a session that has no `session` row (adopted with zero delta
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:history:testDebugUnitTest`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 7: Commit**
 
@@ -3598,7 +3888,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val clock = Clock { System.currentTimeMillis() }
     val settings = SettingsStore(app)
-    val history = RoomSessionStore(HistoryDatabase.create(app))
+    val history = RoomSessionStore(HistoryDatabase.shared(app))
     val confirm = DefaultConfirmationService(clock)
 
     val watchGateway: WatchExerciseGateway = SimulatedWatchGateway(scope, clock) // Task 13 binds the Data Layer link when liveWatch
@@ -5100,6 +5390,30 @@ class LiveVoiceServiceTest {
         assertEquals(1, stt.sessions)
     }
 
+    /** Codex P1: "stop workout" waits on its confirmation; the auto-opened mic must accept the spoken "yes". */
+    @Test fun spokenAnswerIsAcceptedWhileTheCommandAwaitsConfirmation() = runTest {
+        val heard = ArrayDeque(listOf("stop workout", "yes"))
+        val stt = object : SpeechToText {
+            override fun isAvailable(locale: String) = true
+            override fun start(locale: String): SttSession = object : SttSession {
+                override fun feed(pcm: ByteArray) = Unit
+                override fun end() = Unit
+                override suspend fun awaitFinal(timeoutMs: Long): String? = heard.removeFirst()
+            }
+        }
+        val confirmed = CompletableDeferred<Unit>()
+        val v = LiveVoiceService(backgroundScope, stt, locale = { "en-IN" }, pendingConfirmationId = { pending },
+            onCommand = { commands += it; pending = "c1"; confirmed.await() }, // like dispatchVoice(StopWorkout) inside confirm.ask
+            onAnswer = { id, yes -> answers += id to yes; pending = null; confirmed.complete(Unit) },
+            toast = { toasts += it })
+        assertTrue(v.startExternal()); v.endExternal(); runCurrent()
+        assertEquals(listOf<Command>(Command.StopWorkout), commands)
+        assertTrue(v.startExternal(), "the mic must open for the spoken answer while stop waits")
+        v.endExternal(); runCurrent()
+        assertEquals(listOf("c1" to true), answers)
+        assertEquals(VoiceState.Idle, v.state.value)
+    }
+
     @Test fun missingPackDisablesVoiceWithHint() = runTest {
         val v = voice(FakeStt(available = false))
         assertFalse(v.startExternal())
@@ -5213,12 +5527,13 @@ class LiveVoiceService(
             session = null
             val pack = LanguageRegistry.forLocale(locale())
             val confirmationId = pendingConfirmationId()
+            // Release the mic before acting: a command may wait on a confirmation whose answer is spoken (stop → "yes").
+            _state.value = VoiceState.Idle
             when {
                 text.isNullOrBlank() || pack == null -> toast("Didn't catch that")
                 confirmationId != null -> pack.parseYesNo(text)?.let { onAnswer(confirmationId, it) } ?: toast("Say yes or no")
                 else -> pack.parseCommand(text)?.let { onCommand(it) } ?: toast("Didn't catch that")
             }
-            _state.value = VoiceState.Idle
         }
     }
 }
@@ -5377,6 +5692,8 @@ git commit -m "feat(voice): on-device STT, live voice service, energy VAD and ph
 ### Task 17: Watch exercise controller (session-scoped) and Health Services backend
 
 **Files:**
+- Create: `services/workout/src/main/kotlin/com/debasish/livefit/services/workout/AutoTypeDetector.kt`
+- Test: `services/workout/src/test/kotlin/com/debasish/livefit/services/workout/AutoTypeDetectorTest.kt`
 - Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/WatchExerciseController.kt`
 - Test: `services/sync/src/test/kotlin/com/debasish/livefit/sync/WatchExerciseControllerTest.kt`
 - Create: `watch/src/main/java/com/debasish/livefit/watch/HealthServicesExercise.kt`
@@ -5387,14 +5704,106 @@ git commit -m "feat(voice): on-device STT, live voice service, energy VAD and ph
 - Delete: `watch/src/main/java/com/debasish/livefit/watch/PhoneLink.kt`, `PhoneHub.kt`, `WatchGraph.kt` (replaced by `WatchRuntime`/`WatchClient`)
 
 **Interfaces:**
-- Consumes: `WatchSessionRecorder`, `FileDeltaBuffer` (Task 10), protocol types (Task 2), `Clock`.
+- Consumes: `WatchSessionRecorder` (Task 10), `SessionAssembler.lastSample()` (Task 5), protocol types (Task 2), `Clock`.
 - Produces:
-  - `interface ExerciseBackend { fun missingPermissions(): List<String>; suspend fun otherAppTracking(): String?; suspend fun start(type: WorkoutType, useGps: Boolean): Boolean; suspend fun pause(); suspend fun resume(); suspend fun end(); val updates: Flow<BackendUpdate> }`
+  - `class AutoTypeDetector(windowMs = 30_000, stableMs = 30_000) { fun reset(alreadyReported: WorkoutType? = null); fun onSample(s: Sample): WorkoutType? }` (in `:services:workout`; replaces `DefaultWorkoutService.detect`)
+  - `interface ExerciseBackend { fun missingPermissions(): List<String>; suspend fun otherAppTracking(): String?; suspend fun start(type: WorkoutType, useGps: Boolean): Boolean; suspend fun pause(): Boolean; suspend fun resume(): Boolean; suspend fun end(): Boolean; suspend fun reattach(last: Sample?): Boolean?; val updates: Flow<BackendUpdate> }`
   - `sealed interface BackendUpdate { data class Reading(val sample: Sample); data class Ended(val by: EndReason) }`
-  - `class WatchExerciseController(scope, backend, recorder, clock, sendResult: suspend (ExerciseResult) -> Unit, sendState: suspend (ExerciseStateReport) -> Unit)` — GPS comes from `ExerciseOp.Start.gps` with `suspend fun handle(req: ExerciseRequest)`, `suspend fun localPause()`, `suspend fun localResume()`, `suspend fun localStop()`, `val activeSessionId: String?`, `val lastError: StateFlow<ExerciseError?>`.
-  - `object WatchRuntime { fun init(context: Context); val recorder: WatchSessionRecorder; val controller: WatchExerciseController; suspend fun send(path: String, bytes: ByteArray) }`
+  - `class WatchExerciseController(scope, backend, recorder, clock, sendResult: suspend (ExerciseResult) -> Unit, sendState: suspend (ExerciseStateReport) -> Unit, newId: () -> String = UUID, endTimeoutMs: Long = 5_000)` — GPS comes from `ExerciseOp.Start.gps` — with `suspend fun handle(req: ExerciseRequest)`, `suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError?`, `suspend fun localPause(): Boolean`, `suspend fun localResume(): Boolean`, `suspend fun localStop(): Boolean`, `suspend fun recover()`, `val activeSessionId: String?`, `val lastError: StateFlow<ExerciseError?>`, `const val SYNCING_PREVIOUS`.
+  - Rules: pause/resume/stop record their event only after Health Services succeeded; a failure answers `Internal(reason)`. Stop writes the final delta **after** `end()` succeeded and the final readings arrived. A hub `Start` while an older session still awaits its final ack → `Internal(SYNCING_PREVIOUS)`.
+  - `object WatchRuntime { fun init(context: Context); val recorder: WatchSessionRecorder; val controller: WatchExerciseController; suspend fun send(path: String, bytes: ByteArray); fun ensureExerciseService() }` — `init` (from any entry point: listener, service, activity) also runs `controller.recover()` and starts `WatchClient`'s sync loop, so tracking and retries never depend on the watch UI being opened.
 
-- [ ] **Step 1: Write the failing controller test**
+- [ ] **Step 1: Write the failing auto-detector test** — `services/workout/src/test/kotlin/com/debasish/livefit/services/workout/AutoTypeDetectorTest.kt`:
+
+```kotlin
+package com.debasish.livefit.services.workout
+
+import com.debasish.livefit.model.Sample
+import com.debasish.livefit.model.WorkoutType
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class AutoTypeDetectorTest {
+    /** 1 Hz samples from cumulative steps and an instantaneous speed — what Health Services delivers. */
+    private fun feed(d: AutoTypeDetector, fromS: Int, toS: Int, speedKmh: Double, stepsPerMin: Int, stepsAtStart: Int = 0): List<WorkoutType> =
+        (fromS until toS).mapNotNull { t ->
+            d.onSample(Sample(t * 1_000L, hr = 120, stepsTotal = stepsAtStart + (t - fromS) * stepsPerMin / 60, speedKmh = speedKmh))
+        }
+
+    @Test fun runningIsDetectedOnceFromSpeedAndCadence() =
+        assertEquals(listOf(WorkoutType.Run), feed(AutoTypeDetector(), 0, 120, speedKmh = 9.5, stepsPerMin = 160))
+
+    @Test fun cyclingIsFastWithAlmostNoSteps() =
+        assertEquals(listOf(WorkoutType.Cycle), feed(AutoTypeDetector(), 0, 120, speedKmh = 20.0, stepsPerMin = 0))
+
+    @Test fun walkingIsTheDefault() =
+        assertEquals(listOf(WorkoutType.Walk), feed(AutoTypeDetector(), 0, 120, speedKmh = 5.0, stepsPerMin = 110))
+
+    @Test fun briefSprintDoesNotFlipTheType() {
+        val d = AutoTypeDetector()
+        assertEquals(listOf(WorkoutType.Walk), feed(d, 0, 90, speedKmh = 5.0, stepsPerMin = 110))
+        assertEquals(emptyList(), feed(d, 90, 100, speedKmh = 10.0, stepsPerMin = 165, stepsAtStart = 165))
+        assertEquals(emptyList(), feed(d, 100, 160, speedKmh = 5.0, stepsPerMin = 110, stepsAtStart = 192))
+    }
+
+    @Test fun sustainedChangeIsReported() {
+        val d = AutoTypeDetector()
+        feed(d, 0, 90, speedKmh = 5.0, stepsPerMin = 110)
+        assertEquals(listOf(WorkoutType.Run), feed(d, 90, 200, speedKmh = 10.0, stepsPerMin = 165, stepsAtStart = 165))
+    }
+}
+```
+
+- [ ] **Step 2: Implement `AutoTypeDetector.kt`** — `services/workout/src/main/kotlin/com/debasish/livefit/services/workout/AutoTypeDetector.kt` (replaces `DefaultWorkoutService.detect`, which Task 26 deletes; same thresholds)
+
+```kotlin
+package com.debasish.livefit.services.workout
+
+import com.debasish.livefit.model.Sample
+import com.debasish.livefit.model.WorkoutType
+
+/**
+ * Classifies an Auto workout from its samples: cycling ≥ 15 km/h with < 20 steps/min, running ≥ 7.5 km/h
+ * or ≥ 140 steps/min, else walking. Speed is the median over a [windowMs] window (or distance/time when the
+ * watch reports no speed). A type is reported only after it has held for [stableMs], and only when it changes.
+ */
+class AutoTypeDetector(private val windowMs: Long = 30_000, private val stableMs: Long = 30_000) {
+    private val window = ArrayDeque<Sample>()
+    private var candidate: WorkoutType? = null
+    private var candidateSinceMs = 0L
+    private var reported: WorkoutType? = null
+
+    /** [alreadyReported] = the type detected before a restart, so it isn't reported twice. */
+    fun reset(alreadyReported: WorkoutType? = null) {
+        window.clear(); candidate = null; candidateSinceMs = 0; reported = alreadyReported
+    }
+
+    /** Returns a newly detected type, or null when nothing changed. */
+    fun onSample(s: Sample): WorkoutType? {
+        window.addLast(s)
+        while (window.first().tMs < s.tMs - windowMs) window.removeFirst()
+        val first = window.first()
+        val spanMs = s.tMs - first.tMs
+        if (spanMs < windowMs / 2) return null // not enough data yet
+        val cadence = (s.stepsTotal - first.stepsTotal) * 60_000.0 / spanMs
+        val speeds = window.mapNotNull { it.speedKmh }.sorted()
+        val speed = if (speeds.isNotEmpty()) speeds[speeds.size / 2] else (s.distanceKmTotal - first.distanceKmTotal) * 3_600_000.0 / spanMs
+        val type = when {
+            speed >= 15 && cadence < 20 -> WorkoutType.Cycle
+            speed >= 7.5 || cadence >= 140 -> WorkoutType.Run
+            else -> WorkoutType.Walk
+        }
+        if (type != candidate) { candidate = type; candidateSinceMs = s.tMs; return null }
+        if (s.tMs - candidateSinceMs < stableMs || type == reported) return null
+        reported = type
+        return type
+    }
+}
+```
+
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:workout:test --tests '*AutoTypeDetectorTest*'` → PASS (5).
+
+- [ ] **Step 3: Write the failing controller test**
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -5417,10 +5826,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -5428,24 +5840,38 @@ class WatchExerciseControllerTest {
     private class FakeBackend : ExerciseBackend {
         var missing = emptyList<String>()
         var other: String? = null
+        var pauseOk = true
+        var endOk = true
+        /** What reattach() answers after "process death": true = our exercise still runs, false = gone, null = unknown. */
+        var reattachAnswer: Boolean? = true
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
         override suspend fun otherAppTracking() = other
         override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; return true }
-        override suspend fun pause() { calls += "pause" }
-        override suspend fun resume() { calls += "resume" }
-        override suspend fun end() { calls += "end" }
+        override suspend fun pause(): Boolean { calls += "pause"; return pauseOk }
+        override suspend fun resume(): Boolean { calls += "resume"; return true }
+        override suspend fun end(): Boolean {
+            calls += "end"
+            if (endOk) { // Health Services delivers the last metrics together with the ENDED state
+                updates.emit(BackendUpdate.Reading(Sample(500, hr = 99, stepsTotal = 42)))
+                updates.emit(BackendUpdate.Ended(EndReason.User))
+            }
+            return endOk
+        }
+        override suspend fun reattach(last: Sample?): Boolean? { calls += "reattach:${last?.stepsTotal}"; return reattachAnswer }
     }
 
     private val results = mutableListOf<ExerciseResult>()
     private val states = mutableListOf<ExerciseStateReport>()
     private val sent = mutableListOf<SessionDelta>()
+    private val live = Provenance.Live("galaxy-watch/health-services")
 
-    private fun TestScope.rig(backend: FakeBackend = FakeBackend()): Pair<FakeBackend, WatchExerciseController> {
-        val recorder = WatchSessionRecorder(FileDeltaBuffer(Files.createTempDirectory("w").toFile()), Provenance.Live("galaxy-watch/health-services")) { sent += it }
+    private fun TestScope.rig(backend: FakeBackend = FakeBackend(), root: File = Files.createTempDirectory("w").toFile()): Pair<FakeBackend, WatchExerciseController> {
+        val recorder = WatchSessionRecorder(root, live, send = { sent += it })
+        var n = 0
         val c = WatchExerciseController(backgroundScope, backend, recorder, Clock { testScheduler.currentTime },
-            sendResult = { results += it }, sendState = { states += it })
+            sendResult = { results += it }, sendState = { states += it }, newId = { "local${n++}" })
         return backend to c
     }
     private fun req(id: String, session: String, op: ExerciseOp) = ExerciseRequest(requestId = id, sessionId = session, op = op)
@@ -5491,6 +5917,40 @@ class WatchExerciseControllerTest {
         val last = sent.last()
         assertTrue(last.final)
         assertEquals(SessionEvent.Stopped(0, EndReason.User), last.events.single())
+        assertEquals(ExerciseState.Ended, results.last().state)
+    }
+
+    /** Codex P1: readings delivered while Health Services shuts down are kept, and the final delta comes after them. */
+    @Test fun stopKeepsShutdownReadingsBeforeTheFinalDelta() = runTest {
+        val (_, c) = rig(); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        c.handle(req("r2", "s", ExerciseOp.Stop))
+        val shutdown = sent[sent.size - 2]
+        assertEquals(42, shutdown.samples.single().stepsTotal)
+        assertTrue(shutdown.samples.single().tMs <= 0, "clamped to the stop time so active time doesn't grow")
+        assertTrue(sent.last().final)
+        assertTrue(states.isEmpty(), "a user stop is not reported as an unsolicited end")
+    }
+
+    /** Codex P1: a failed end must not finalize a workout that is still running. */
+    @Test fun failedEndIsReportedAndTheSessionKeepsRunning() = runTest {
+        val backend = FakeBackend().apply { endOk = false }
+        val (_, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        c.handle(req("r2", "s", ExerciseOp.Stop))
+        assertFalse(results.last().ok)
+        assertIs<ExerciseError.Internal>(results.last().error)
+        assertFalse(sent.last().final)
+        assertEquals("s", c.activeSessionId)
+    }
+
+    @Test fun failedPauseRecordsNoPause() = runTest {
+        val backend = FakeBackend().apply { pauseOk = false }
+        val (_, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        c.handle(req("r2", "s", ExerciseOp.Pause))
+        assertFalse(results.last().ok)
+        assertTrue(sent.none { d -> d.events.any { it is SessionEvent.Paused } })
     }
 
     @Test fun endedByAnotherAppRecordsFinalStopAndReports() = runTest {
@@ -5512,15 +5972,73 @@ class WatchExerciseControllerTest {
         assertEquals(2, results.size)
         assertEquals(results[0], results[1])
     }
+
+    /** Codex P2: Auto is classified from the readings themselves; nothing injects TypeDetected. */
+    @Test fun autoWorkoutRecordsTheDetectedTypeFromReadings() = runTest {
+        val (b, c) = rig(); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Auto)))
+        for (t in 1..90) { b.updates.emit(BackendUpdate.Reading(Sample(t * 1_000L, hr = 150, stepsTotal = t * 160 / 60, speedKmh = 9.5))); runCurrent() }
+        val detected = sent.flatMap { it.events }.filterIsInstance<SessionEvent.TypeDetected>()
+        assertEquals(listOf(WorkoutType.Run), detected.map { it.type })
+    }
+
+    /** Codex P1: after process death the controller reattaches to the running exercise without the watch UI. */
+    @Test fun recoverReattachesAndKeepsRecording() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        val (b2, c2) = rig(root = root); runCurrent() // new process, same buffer
+        c2.recover()
+        assertEquals(listOf("reattach:null"), b2.calls)
+        b2.updates.emit(BackendUpdate.Reading(Sample(2_000, hr = 101))); runCurrent()
+        assertEquals(101, sent.last().samples.single().hr)
+        assertEquals("s", c2.activeSessionId)
+    }
+
+    @Test fun recoverFinalizesWhenTheExerciseIsGone() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        val (b2, c2) = rig(FakeBackend().apply { reattachAnswer = false }, root); runCurrent()
+        c2.recover()
+        assertTrue(sent.last().final)
+        assertEquals(SessionEvent.Stopped(0, EndReason.System), sent.last().events.single())
+        assertEquals(ExerciseStateReport(sessionId = "s", state = ExerciseState.Ended, endedBy = EndReason.System), states.single())
+        assertNull(c2.activeSessionId)
+        assertTrue(b2.calls.single().startsWith("reattach"))
+    }
+
+    /** Codex P2: watch-only start while the phone is unreachable (spec §4.4). */
+    @Test fun localStartChecksPermissionsAndTakeoverThenStarts() = runTest {
+        val backend = FakeBackend().apply { missing = listOf("android.permission.BODY_SENSORS") }
+        val (_, c) = rig(backend); runCurrent()
+        assertIs<ExerciseError.PermissionMissing>(c.localStart(WorkoutType.Walk))
+        assertIs<ExerciseError.PermissionMissing>(c.lastError.value)
+        backend.missing = emptyList(); backend.other = "WALKING"
+        assertEquals(ExerciseError.OtherAppTracking("WALKING"), c.localStart(WorkoutType.Walk))
+        assertNull(c.localStart(WorkoutType.Walk, force = true))
+        assertEquals("local0", c.activeSessionId)
+        assertIs<SessionEvent.Started>(sent.single().events.single())
+    }
+
+    /** One session at a time on the phone: a phone start waits until the previous session is stored. */
+    @Test fun phoneStartIsRefusedWhileAnOlderSessionAwaitsSync() = runTest {
+        val (b, c) = rig(); runCurrent()
+        c.handle(req("r1", "a", ExerciseOp.Start(WorkoutType.Walk)))
+        c.handle(req("r2", "a", ExerciseOp.Stop)) // final delta not acked yet
+        c.handle(req("r3", "b", ExerciseOp.Start(WorkoutType.Walk)))
+        assertEquals(ExerciseError.Internal(WatchExerciseController.SYNCING_PREVIOUS), results.last().error)
+        assertEquals(1, b.calls.count { it.startsWith("start") })
+    }
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 4: Run test to verify it fails**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test --tests '*WatchExerciseControllerTest*'`
 Expected: FAIL — unresolved controller types.
 
-- [ ] **Step 3: Implement `WatchExerciseController.kt`**
+- [ ] **Step 5: Implement `WatchExerciseController.kt`**
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -5537,20 +6055,31 @@ import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
+import com.debasish.livefit.services.workout.AutoTypeDetector
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 
 interface ExerciseBackend {
     fun missingPermissions(): List<String>
     /** Exercise type name if another app currently owns an exercise, else null. */
     suspend fun otherAppTracking(): String?
     suspend fun start(type: WorkoutType, useGps: Boolean): Boolean
-    suspend fun pause()
-    suspend fun resume()
-    suspend fun end()
+    /** Each returns false when Health Services refused or failed — never swallowed. */
+    suspend fun pause(): Boolean
+    suspend fun resume(): Boolean
+    suspend fun end(): Boolean
+    /**
+     * After process death: re-registers for updates if our exercise still runs (true), reports it gone (false),
+     * or null when Health Services couldn't be asked. [last] seeds the cumulative totals.
+     */
+    suspend fun reattach(last: Sample?): Boolean?
     val updates: Flow<BackendUpdate>
 }
 
@@ -5567,10 +6096,18 @@ class WatchExerciseController(
     private val clock: Clock,
     private val sendResult: suspend (ExerciseResult) -> Unit,
     private val sendState: suspend (ExerciseStateReport) -> Unit,
+    private val newId: () -> String = { UUID.randomUUID().toString() },
+    private val endTimeoutMs: Long = 5_000,
 ) {
     private val recent = LinkedHashMap<String, ExerciseResult>()
     private val _lastError = MutableStateFlow<ExerciseError?>(null)
     val lastError: StateFlow<ExerciseError?> = _lastError
+    private val detector = AutoTypeDetector()
+    /** GPS choice of the phone's last Start per type; reused for offline starts (the phone setting isn't reachable then). */
+    private val lastGps = HashMap<WorkoutType, Boolean>()
+    /** Set while a user stop waits for Health Services' final update. */
+    private var stopping: CompletableDeferred<Unit>? = null
+    private var stopAtMs = 0L
 
     val activeSessionId: String? get() = recorder.sessionId?.takeIf { !recorder.isFinalized }
 
@@ -5578,24 +6115,33 @@ class WatchExerciseController(
         scope.launch {
             backend.updates.collect { u ->
                 when (u) {
-                    is BackendUpdate.Reading -> if (activeSessionId != null) recorder.sample(u.sample)
+                    is BackendUpdate.Reading -> onReading(u.sample)
                     is BackendUpdate.Ended -> {
+                        stopping?.let { it.complete(Unit); return@collect } // our own stop: localStop writes the final delta
                         val id = activeSessionId ?: return@collect
                         recorder.event(SessionEvent.Stopped(clock.nowMs(), u.by), final = true)
-                        sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = u.by))
+                        runCatching { sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = u.by)) }
                     }
                 }
             }
         }
     }
 
+    private suspend fun onReading(s: Sample) {
+        if (activeSessionId == null) return
+        // Readings that arrive while stopping belong to the session but must not extend its active time.
+        val sample = if (stopping != null) s.copy(tMs = minOf(s.tMs, stopAtMs)) else s
+        recorder.sample(sample)
+        if (recorder.type == WorkoutType.Auto) detector.onSample(sample)?.let { recorder.event(SessionEvent.TypeDetected(sample.tMs, it)) }
+    }
+
     suspend fun handle(req: ExerciseRequest) {
-        recent[req.requestId]?.let { sendResult(it); return }
+        recent[req.requestId]?.let { runCatching { sendResult(it) }; return }
         val result = execute(req)
         recent[req.requestId] = result
         if (recent.size > 20) recent.remove(recent.keys.first())
         _lastError.value = result.error
-        sendResult(result)
+        runCatching { sendResult(result) } // phone unreachable: it times out and reconciles (spec §4.8)
     }
 
     private suspend fun execute(req: ExerciseRequest): ExerciseResult {
@@ -5607,51 +6153,112 @@ class WatchExerciseController(
             is ExerciseOp.Start -> when {
                 active == req.sessionId -> result(true, state = ExerciseState.Active)
                 active != null -> result(false, ExerciseError.WrongSession(active), ExerciseState.Active)
+                // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
+                recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
                 else -> {
-                    val missing = backend.missingPermissions()
-                    val other = if (op.force) null else backend.otherAppTracking()
-                    when {
-                        missing.isNotEmpty() -> result(false, ExerciseError.PermissionMissing(missing), ExerciseState.Idle)
-                        other != null -> result(false, ExerciseError.OtherAppTracking(other), ExerciseState.Idle)
-                        !backend.start(op.type, op.gps) -> result(false, ExerciseError.SensorUnavailable, ExerciseState.Idle)
-                        else -> { recorder.begin(req.sessionId, op.type, clock.nowMs()); result(true, state = ExerciseState.Active) }
+                    lastGps[op.type] = op.gps
+                    when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
+                        null -> result(true, state = ExerciseState.Active)
+                        else -> result(false, e, ExerciseState.Idle)
                     }
                 }
             }
             else -> if (active != req.sessionId) result(false, ExerciseError.WrongSession(active), if (active == null) ExerciseState.Idle else ExerciseState.Active)
             else when (op) {
-                ExerciseOp.Pause -> { localPause(); result(true, state = ExerciseState.Paused) }
-                ExerciseOp.Resume -> { localResume(); result(true, state = ExerciseState.Active) }
-                else -> { localStop(); result(true, state = ExerciseState.Ended) }
+                ExerciseOp.Pause -> if (localPause()) result(true, state = ExerciseState.Paused) else result(false, ExerciseError.Internal("Couldn't pause on the watch"), ExerciseState.Active)
+                ExerciseOp.Resume -> if (localResume()) result(true, state = ExerciseState.Active) else result(false, ExerciseError.Internal("Couldn't resume on the watch"), ExerciseState.Paused)
+                else -> if (localStop()) result(true, state = ExerciseState.Ended) else result(false, ExerciseError.Internal("Couldn't end the workout on the watch"), ExerciseState.Active)
             }
         }
     }
 
-    /** Offline controls from the watch UI use the same paths and are recorded as events. */
-    suspend fun localPause() {
-        if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Active) return
-        backend.pause(); recorder.event(SessionEvent.Paused(clock.nowMs()))
+    /** Shared by hub and offline starts: permission → other app → Health Services → recording. */
+    private suspend fun startExercise(sessionId: () -> String, type: WorkoutType, force: Boolean, gps: Boolean): ExerciseError? {
+        val missing = backend.missingPermissions()
+        if (missing.isNotEmpty()) return ExerciseError.PermissionMissing(missing)
+        if (!force) backend.otherAppTracking()?.let { return ExerciseError.OtherAppTracking(it) }
+        if (!backend.start(type, gps)) return ExerciseError.SensorUnavailable
+        detector.reset()
+        recorder.begin(sessionId(), type, clock.nowMs()) // id made only once the start succeeded
+        return null
     }
 
-    suspend fun localResume() {
-        if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Paused) return
-        backend.resume(); recorder.event(SessionEvent.Resumed(clock.nowMs()))
+    /**
+     * Watch-only start while the phone is unreachable (spec §4.4 "Started on the watch with no phone"): local UUID,
+     * same permission and takeover checks; the caller asks the takeover question on the watch.
+     */
+    suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? {
+        activeSessionId?.let { return ExerciseError.WrongSession(it) }
+        val e = startExercise(newId, type, force, lastGps[type] ?: false)
+        _lastError.value = e
+        return e
     }
 
-    suspend fun localStop() {
-        if (activeSessionId == null) return
-        recorder.event(SessionEvent.Stopped(clock.nowMs(), EndReason.User), final = true) // finalize first: backend Ended is then ignored
-        backend.end()
+    /** Offline controls from the watch UI use the same paths and are recorded as events only on success. */
+    suspend fun localPause(): Boolean {
+        if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Active) return false
+        if (!backend.pause()) return false
+        recorder.event(SessionEvent.Paused(clock.nowMs()))
+        return true
     }
+
+    suspend fun localResume(): Boolean {
+        if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Paused) return false
+        if (!backend.resume()) return false
+        recorder.event(SessionEvent.Resumed(clock.nowMs()))
+        return true
+    }
+
+    /**
+     * Ends the exercise, keeps recording the readings Health Services delivers while shutting down, then writes
+     * the final delta. If end() fails nothing is finalized and the workout keeps running.
+     */
+    suspend fun localStop(): Boolean {
+        if (activeSessionId == null) return false
+        if (stopping != null) return true // a stop from another device is already in progress
+        val waiter = CompletableDeferred<Unit>()
+        stopAtMs = clock.nowMs()
+        stopping = waiter
+        try {
+            if (!backend.end()) return false
+            withTimeoutOrNull(endTimeoutMs) { waiter.await() } // no ENDED update in time: end() itself succeeded
+        } finally {
+            stopping = null
+        }
+        recorder.event(SessionEvent.Stopped(stopAtMs, EndReason.User), final = true)
+        return true
+    }
+
+    /**
+     * Called by WatchRuntime.init in every new process (no Activity needed): reattach to our running exercise,
+     * or record the end of a session whose exercise is gone ("actual state wins", spec §4.8).
+     */
+    suspend fun recover() {
+        val id = activeSessionId ?: return
+        detector.reset(alreadyReported = recorder.assembler?.snapshot()?.detectedType)
+        repeat(3) {
+            when (backend.reattach(recorder.assembler?.lastSample())) {
+                true -> return
+                false -> {
+                    recorder.event(SessionEvent.Stopped(clock.nowMs(), EndReason.System), final = true)
+                    runCatching { sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)) }
+                    return
+                }
+                null -> delay(5_000) // Health Services not reachable yet; leave the session as is after 3 tries
+            }
+        }
+    }
+
+    companion object { const val SYNCING_PREVIOUS = "Watch is still saving the previous workout — try again in a moment" }
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test`
-Expected: PASS. (Note `pauseResumeStopRecordEventsAndFinalDelta` expects `end` last: `localStop` records first, then calls `backend.end()`.)
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:workout:test :services:sync:test`
+Expected: PASS. (`pauseResumeStopRecordEventsAndFinalDelta` expects `end` last and the final `Stopped` after the shutdown reading: `localStop` calls `backend.end()`, waits for the ENDED update, then records.)
 
-- [ ] **Step 5: Watch build** — `watch/build.gradle.kts` dependencies: replace `:services:workout`, `:services:metrics`, `:services:music` with
+- [ ] **Step 7: Watch build** — `watch/build.gradle.kts` dependencies: replace `:services:workout`, `:services:metrics`, `:services:music` with
 
 ```kotlin
     implementation(project(":services:sync"))
@@ -5661,7 +6268,7 @@ Expected: PASS. (Note `pauseResumeStopRecordEventsAndFinalDelta` expects `end` l
 
 (`:services:sync` brings `:services:workout` and `:core:*` via `api`.)
 
-- [ ] **Step 6: Health Services backend** — `HealthServicesExercise.kt` (from the verified spike `ExerciseService`):
+- [ ] **Step 8: Health Services backend** — `HealthServicesExercise.kt` (from the verified spike `ExerciseService`):
 
 ```kotlin
 package com.debasish.livefit.watch
@@ -5728,9 +6335,19 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         true
     }.getOrDefault(false)
 
-    override suspend fun pause() { runCatching { client.pauseExerciseAsync().await() } }
-    override suspend fun resume() { runCatching { client.resumeExerciseAsync().await() } }
-    override suspend fun end() { runCatching { client.endExerciseAsync().await() } }
+    override suspend fun pause() = runCatching { client.pauseExerciseAsync().await() }.isSuccess
+    override suspend fun resume() = runCatching { client.resumeExerciseAsync().await() }.isSuccess
+    override suspend fun end() = runCatching { client.endExerciseAsync().await() }.isSuccess
+
+    /** New process, exercise maybe still running: Health Services keeps it, but our callback died with the old process. */
+    override suspend fun reattach(last: Sample?): Boolean? = runCatching {
+        val info = client.getCurrentExerciseInfoAsync().await()
+        if (info.exerciseTrackedStatus != ExerciseTrackedStatus.OWNED_EXERCISE_IN_PROGRESS) return@runCatching false
+        // Totals only arrive when they change; seed them so the next reading doesn't report 0 steps.
+        steps = last?.stepsTotal ?: 0; km = last?.distanceKmTotal ?: 0.0; kcal = last?.kcalTotal ?: 0.0; speed = last?.speedKmh
+        client.setUpdateCallback(callback)
+        true
+    }.getOrNull()
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
@@ -5761,7 +6378,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
 
 Units note: Health Services reports `DISTANCE_TOTAL` in metres and `SPEED` in m/s; the conversions above produce km and km/h.
 
-- [ ] **Step 7: `WatchRuntime.kt`** — process-wide watch singletons
+- [ ] **Step 9: `WatchRuntime.kt`** — process-wide watch singletons
 
 ```kotlin
 package com.debasish.livefit.watch
@@ -5772,13 +6389,13 @@ import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
-import com.debasish.livefit.sync.FileDeltaBuffer
 import com.debasish.livefit.sync.WatchExerciseController
 import com.debasish.livefit.sync.WatchSessionRecorder
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.io.File
 
@@ -5794,19 +6411,27 @@ object WatchRuntime {
     fun init(context: Context) {
         if (initialized) return
         app = context.applicationContext
-        recorder = WatchSessionRecorder(FileDeltaBuffer(File(app.filesDir, "lf-buffer")), Provenance.Live("galaxy-watch/health-services")) { d ->
-            send(WatchPaths.DELTA, Wire.encode(d).toByteArray())
-        }
+        recorder = WatchSessionRecorder(
+            File(app.filesDir, "lf-buffer"), Provenance.Live("galaxy-watch/health-services"),
+            send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
+            sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
+        )
         controller = WatchExerciseController(
             scope, HealthServicesExercise(app), recorder, Clock { System.currentTimeMillis() },
             sendResult = { r ->
+                ensureExerciseService() // before sending: the result may fail if the phone just went away
                 send(WatchPaths.EXERCISE_RES, Wire.encode(r).toByteArray())
-                if (r.ok && controller.activeSessionId != null) ExerciseService.start(app)
             },
             sendState = { s -> send(WatchPaths.EXERCISE_STATE, Wire.encode(s).toByteArray()) },
         )
         initialized = true
+        // Every entry point (phone message, sticky service restart, activity) gets the same recovery and sync loop.
+        scope.launch { controller.recover(); ensureExerciseService() }
+        WatchClient.start()
     }
+
+    /** Health foreground service while a session is recording or still has unacked data. */
+    fun ensureExerciseService() { if (recorder.holdsData) ExerciseService.start(app) }
 
     /** Sends to the phone; throws if unreachable so the recorder keeps the delta buffered. */
     suspend fun send(path: String, bytes: ByteArray) {
@@ -5819,7 +6444,7 @@ object WatchRuntime {
 }
 ```
 
-- [ ] **Step 8: Rewrite `ExerciseService.kt`** — health foreground service + ongoing activity, stops when the session ends
+- [ ] **Step 10: Rewrite `ExerciseService.kt`** — health foreground service + ongoing activity, stops when the session ends
 
 ```kotlin
 package com.debasish.livefit.watch
@@ -5866,7 +6491,7 @@ class ExerciseService : Service() {
             // Stop once the session is finalized AND its buffer is fully acked (recorder clears it).
             while (true) {
                 delay(5_000)
-                if (WatchRuntime.recorder.sessionId == null) { stopSelf(); break }
+                if (!WatchRuntime.recorder.holdsData) { stopSelf(); break }
             }
         }
     }
@@ -5882,7 +6507,7 @@ class ExerciseService : Service() {
 }
 ```
 
-- [ ] **Step 9: Rewrite `PhoneCommandListener.kt`** — routes phone → watch messages
+- [ ] **Step 11: Rewrite `PhoneCommandListener.kt`** — routes phone → watch messages
 
 ```kotlin
 package com.debasish.livefit.watch
@@ -5921,23 +6546,25 @@ class PhoneCommandListener : WearableListenerService() {
 }
 ```
 
-(`WatchClient` is created in Task 18; until then add a temporary `object WatchClient { fun onFrame(json: String) {}; fun onOutdated() {} }` in `WatchClient.kt` so the module compiles.)
+(`WatchClient` is created in Task 18; until then add a temporary `object WatchClient { fun start() {}; fun onFrame(json: String) {}; fun onOutdated() {} }` in `WatchClient.kt` so the module compiles.)
 
 Manifest: change the listener `<data android:pathPrefix="/rf" />` to `android:pathPrefix="/lf"`; keep `ExerciseService` with `foregroundServiceType="health"`; add `<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />` (GPS outdoors).
 
-- [ ] **Step 10: Make the watch UI compile** — in `MainActivity.kt` replace `PhoneHub.init(this)` / `WatchApp(WatchGraph.workout, WatchGraph.music, …)` with `WatchRuntime.init(this)` and a temporary `WatchApp(...)` call using `FakeMusicService` and a `DefaultWorkoutService` demo, or comment the `setContent` body to a `Text("LiveFit")` placeholder screen until Task 18 — Task 18 replaces it. Delete `PhoneLink.kt`, `PhoneHub.kt`, `WatchGraph.kt`.
+- [ ] **Step 12: Make the watch UI compile** — in `MainActivity.kt` replace `PhoneHub.init(this)` / `WatchApp(WatchGraph.workout, WatchGraph.music, …)` with `WatchRuntime.init(this)` and a temporary `WatchApp(...)` call using `FakeMusicService` and a `DefaultWorkoutService` demo, or comment the `setContent` body to a `Text("LiveFit")` placeholder screen until Task 18 — Task 18 replaces it. Delete `PhoneLink.kt`, `PhoneHub.kt`, `WatchGraph.kt`.
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :watch:assembleDebug`
 Expected: BUILD SUCCESSFUL.
 
-- [ ] **Step 11: Device check (real sensors, takeover)**
+- [ ] **Step 13: Device check (real sensors, takeover, process death)**
 
 1. `tools/install-all.sh`.
 2. On the phone start a Walk. Expected: watch shows the workout notification icon (ongoing activity); phone Workout screen shows **real** heart rate within ~1 s.
 3. Stop on the phone. Expected: "Saving workout…" then Summary; `adb -s $WATCH shell ls /data/data/com.debasish.livefit/files/lf-buffer` → empty.
 4. Start a Samsung Health walk on the watch; then start on the phone. Expected: "Take over workout?" appears on the phone (watch/glasses after Tasks 18/21); answering Yes ends Samsung Health's walk and LiveFit tracks.
+5. Process death: start a Walk from the phone **without opening the watch app**; `adb -s $WATCH shell am kill com.debasish.livefit` (or wait for the system to kill it with the screen off). Expected: within ~5 s the sticky `ExerciseService` restarts, heart rate keeps arriving on the phone (callback reattached), and `logcat -s LiveFitWatch` shows no second `start`.
+   (The "exercise gone after process death" path can't be timed reliably on a device; `recoverFinalizesWhenTheExerciseIsGone` covers it.)
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 git add services/sync watch
@@ -5958,7 +6585,8 @@ git commit -m "feat(watch): session-scoped exercise controller on Health Service
 - Consumes: `WatchRuntime` (Task 17), `LivenessMonitor` (Task 9), `StateFrame`, `CommandEnvelope`, `SessionClaim` (Task 2).
 - Produces:
   - `data class WatchUiState(val snapshot: WorkoutSnapshot, val music: NowPlaying?, val confirmation: Confirmation?, val phoneOnline: Boolean, val glassesOnline: Boolean, val offline: Boolean, val hrHistory: List<Int>, val needsPermissions: List<String>, val outdated: Boolean, val toast: String?)`
-  - `object WatchClient { val ui: StateFlow<WatchUiState>; fun onFrame(json: String); fun onOutdated(); fun command(c: Command); fun setVolume(level: Float) }`
+  - `object WatchClient { val ui: StateFlow<WatchUiState>; fun start(); fun onFrame(json: String); fun onOutdated(); fun command(c: Command); fun setVolume(level: Float) }` — `start()` is called by `WatchRuntime.init` (Task 17), never only by the Activity.
+  - Offline: `StartWorkout` → `controller.localStart` (local UUID); `OtherAppTracking` → a watch-only `TakeOverWorkout` confirmation (15 s, No on timeout); `PermissionMissing` → the permission card.
   - `@Composable fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit)`
 
 - [ ] **Step 1: Implement `WatchClient.kt`**
@@ -5969,6 +6597,7 @@ package com.debasish.livefit.watch
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.Confirmation
+import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.ExerciseError
 import com.debasish.livefit.model.ExerciseState
@@ -5979,6 +6608,7 @@ import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.model.WorkoutSnapshot
+import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.sync.LivenessMonitor
 import kotlinx.coroutines.delay
@@ -6010,6 +6640,9 @@ object WatchClient {
     private var wasOnline = false
     private var started = false
     private var lastVolumeSentMs = 0L
+    /** Takeover question asked on the watch itself while the phone is offline. */
+    private var localConfirm: Pair<Confirmation, WorkoutType>? = null
+    private var localToast: Pair<String, Long>? = null
 
     fun start() {
         if (started) return
@@ -6031,10 +6664,8 @@ object WatchClient {
 
     private suspend fun onReconnected() {
         val rec = WatchRuntime.recorder
-        val claim = rec.claim()
-        if (claim != null) {
-            runCatching { WatchRuntime.send(WatchPaths.CLAIM, Wire.encode(claim).toByteArray()) }
-            rec.resendUnacked()
+        if (rec.holdsData) {
+            rec.resync() // claims the oldest held session and replays it; newer ones follow after its final ack
         } else {
             // Tell the hub we hold nothing (lets it finalize a session whose data is gone, spec §4.9).
             runCatching { WatchRuntime.send(WatchPaths.EXERCISE_STATE, Wire.encode(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)).toByteArray()) }
@@ -6045,7 +6676,7 @@ object WatchClient {
         val online = liveness.isOnline()
         if (wasOnline && !online) wasOnline = false
         // Unacked deltas are re-sent every 5 s while online (spec §4.4 step 3).
-        if (online && WatchRuntime.recorder.sessionId != null && (System.currentTimeMillis() / 1_000) % 5 == 0L) WatchRuntime.recorder.resendUnacked()
+        if (online && WatchRuntime.recorder.holdsData && (System.currentTimeMillis() / 1_000) % 5 == 0L) WatchRuntime.recorder.resendUnacked()
         refresh()
     }
 
@@ -6055,20 +6686,39 @@ object WatchClient {
         val offline = !online && local != null && WatchRuntime.controller.activeSessionId != null
         val f = lastFrame
         val missing = (WatchRuntime.controller.lastError.value as? ExerciseError.PermissionMissing)?.permissions ?: emptyList()
+        val now = System.currentTimeMillis()
+        if (localConfirm?.first?.let { now >= it.expiresAtMs } == true) { localConfirm = null; localToast = "Cancelled" to now + 3_000 }
+        val toastLocal = localToast?.takeIf { now < it.second }?.first
         _ui.value = if (offline) WatchUiState(
             snapshot = local!!.snapshot(), phoneOnline = false, offline = true,
-            hrHistory = local.hrHistory(60), needsPermissions = missing,
+            hrHistory = local.hrHistory(60), needsPermissions = missing, toast = toastLocal,
         ) else WatchUiState(
             snapshot = f?.workout ?: WorkoutSnapshot(),
             music = f?.music,
-            confirmation = f?.confirmation,
+            confirmation = localConfirm?.first ?: f?.confirmation,
             phoneOnline = online,
             glassesOnline = f?.devices?.glasses?.link == LinkState.Connected,
             hrHistory = local?.hrHistory(60) ?: emptyList(),
             needsPermissions = missing,
             outdated = _ui.value.outdated,
-            toast = f?.toast,
+            toast = toastLocal ?: f?.toast,
         )
+    }
+
+    private fun toastLocally(text: String) { localToast = text to System.currentTimeMillis() + 3_000 }
+
+    /** Spec §4.4 "Started on the watch with no phone": same checks as a hub start, takeover asked on the watch. */
+    private suspend fun offlineStart(type: WorkoutType, force: Boolean) {
+        when (val e = WatchRuntime.controller.localStart(type, force)) {
+            null -> WatchRuntime.ensureExerciseService()
+            is ExerciseError.OtherAppTracking -> localConfirm = Confirmation(
+                id = "local-takeover-${System.currentTimeMillis()}", kind = ConfirmationKind.TakeOverWorkout,
+                title = "Take over workout?", message = "Another app is tracking a workout on your watch. Take over?",
+                expiresAtMs = System.currentTimeMillis() + 15_000,
+            ) to type
+            is ExerciseError.PermissionMissing -> Unit // the permission card appears via lastError
+            else -> toastLocally("Couldn't start workout")
+        }
     }
 
     fun command(c: Command) {
@@ -6076,14 +6726,20 @@ object WatchClient {
             if (!liveness.isOnline()) {
                 // Offline: only workout controls work, applied locally and recorded as events.
                 when (c) {
-                    Command.PauseWorkout -> WatchRuntime.controller.localPause()
-                    Command.ResumeWorkout -> WatchRuntime.controller.localResume()
-                    Command.StopWorkout -> WatchRuntime.controller.localStop()
+                    is Command.StartWorkout -> offlineStart(c.type, force = false)
+                    Command.PauseWorkout -> if (!WatchRuntime.controller.localPause()) toastLocally("Couldn't pause workout")
+                    Command.ResumeWorkout -> if (!WatchRuntime.controller.localResume()) toastLocally("Couldn't resume workout")
+                    Command.StopWorkout -> if (!WatchRuntime.controller.localStop()) toastLocally("Couldn't stop workout")
+                    is Command.Answer -> localConfirm?.takeIf { it.first.id == c.confirmationId }?.let { (_, type) ->
+                        localConfirm = null
+                        if (c.yes) offlineStart(type, force = true) else toastLocally("Kept the other workout")
+                    }
                     else -> Unit
                 }
                 refresh()
                 return@launch
             }
+            if (c is Command.Answer && localConfirm?.first?.id == c.confirmationId) { localConfirm = null; refresh(); return@launch } // phone came back mid-question
             val env = CommandEnvelope(id = UUID.randomUUID().toString(), origin = DeviceKind.Watch, command = c)
             runCatching { WatchRuntime.send(WatchPaths.COMMAND, Wire.encode(env).toByteArray()) }
         }
@@ -6263,8 +6919,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WatchRuntime.init(this)
-        WatchClient.start()
+        WatchRuntime.init(this) // also starts WatchClient's sync loop (Task 17)
         setContent {
             val state by WatchClient.ui.collectAsStateWithLifecycle()
             WatchApp(state, onCommand = WatchClient::command, onVolume = WatchClient::setVolume, onGrantPermissions = { requestPermissions(perms, 1) })
@@ -6287,6 +6942,9 @@ Expected: BUILD SUCCESSFUL.
 3. Music page on the watch: turn the bezel → phone media volume changes; the arc follows the phone's level.
 4. Offline: `adb -s $PHONE shell cmd bluetooth_manager disable` for 60 s, keep walking, pause and resume on the watch, then `… enable`. Expected: watch shows "Phone offline" after ~12 s and keeps counting; after re-enable the phone shows "Syncing watch data…", then the correct total active time (pause excluded) and continuous HR.
 5. Stop on the watch → phone "Saving workout…" → Summary on all devices.
+6. Offline start: phone Bluetooth off; on the watch tap Walk. Expected: the workout starts with "Phone offline" (with a Samsung Health walk running: "Take over workout?" on the watch first). Re-enable → the phone shows "Syncing watch data…" and adopts it.
+7. Two offline sessions: phone Bluetooth off; start, walk 1 min, stop; start again, walk 1 min. Re-enable. Expected: the first appears in Activity as Complete, then the phone shows the second as the live workout; no Incomplete entries.
+8. Without the watch UI: swipe the watch app away (or reboot the watch), start a Walk from the phone, phone Bluetooth off for 30 s, then on. Expected: the phone shows "Syncing watch data…" and continuous data without the watch app ever being opened.
 
 - [ ] **Step 7: Commit**
 
@@ -7911,7 +8569,7 @@ logcat_clear
 echo "Disabling phone Bluetooth for ${1:-60}s — keep moving; pause+resume on the watch once."
 adb -s "$PHONE" shell cmd bluetooth_manager disable; sleep "${1:-60}"; adb -s "$PHONE" shell cmd bluetooth_manager enable
 sleep 30
-echo "Watch buffer files left (expect 0 after sync):"; adb -s "$WATCH" shell "run-as com.debasish.livefit ls files/lf-buffer 2>/dev/null | grep -c '^d-' || true"
+echo "Watch sessions still buffered (expect 0 after sync):"; adb -s "$WATCH" shell "run-as com.debasish.livefit ls files/lf-buffer 2>/dev/null | wc -l"
 echo "Check the phone now shows continuous time/HR and no 'Syncing' banner."
 ```
 

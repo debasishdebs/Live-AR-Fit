@@ -59,13 +59,14 @@ watch/                      ui/WatchApp.kt (music page: add-to-playlist button)
 **Interfaces:**
 - Consumes: `SessionSummary`, `Sample`, `Provenance`, `SessionStatus` (V1).
 - Produces:
-  - `data class FinishedSession(val summary: SessionSummary, val samples: List<Sample>, val sampleProvenance: List<Provenance>)`
+  - `data class FinishedSession(val summary: SessionSummary, val samples: List<Sample>, val sampleProvenance: List<Provenance>, val pauses: List<Pair<Long, Long>> = emptyList())` (pause intervals, watch-clock ms)
   - `sealed interface SinkResult { Written; Queued(reason: String); Rejected(reason: RejectReason) }`, `enum class RejectReason { NotComplete, NotLive }`
   - `data class DailyTotals(val steps: Long, val activeKcal: Double, val restingHr: Int?)`
   - `data class SinkStatus(val link: HcLink, val queued: Int, val lastSyncMs: Long?)`, `enum class HcLink { Linked, NeedsPermissions, Unavailable, NeedsUpdate }`
   - `interface HealthDataSink { suspend fun write(session: FinishedSession): SinkResult; suspend fun dailyTotals(day: java.time.LocalDate, zone: java.time.ZoneId): DailyTotals?; val status: StateFlow<SinkStatus> }`
   - `object EligibilityGate { fun check(s: FinishedSession): RejectReason? }`
-  - `data class HcRecordPlan(...)` + `object HcPlanner { fun plan(s: FinishedSession): HcRecordPlan }` with `exercise: ExercisePlan`, `heartRateChunks: List<HrChunk>`, `minuteIntervals: List<MinuteInterval>`, `speedSamples: List<Pair<Long, Double>>`; `data class MinuteInterval(startMs, endMs, steps, distanceKm, kcal)`; ids via `HcPlanner.recordId(sessionId, kind, index)`.
+  - `data class HcRecordPlan(...)` + `object HcPlanner { fun plan(s: FinishedSession): HcRecordPlan }` with `exercise: ExercisePlan` (incl. `pauses`), `heartRateChunks: List<HrChunk>`, `minuteIntervals: List<MinuteInterval>`, `speedSamples: List<Pair<Long, Double>>`; `data class MinuteInterval(startMs, endMs, steps, distanceKm, kcal)`; ids via `HcPlanner.recordId(sessionId, kind, index)`; `HcPlanner.pauseIntervals(events: List<SessionEvent>): List<Pair<Long, Long>>`.
+  - Cumulative totals are differenced from a **zero baseline at session start** (not the first sample) with a running maximum (a total that drops is never counted twice).
 
 - [ ] **Step 1: Module** — add the four `include(":services:…")` entries; `services/health/build.gradle.kts`:
 
@@ -117,8 +118,10 @@ class EligibilityGateTest {
 ```kotlin
 package com.debasish.livefit.health
 
+import com.debasish.livefit.model.EndReason
 import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.Sample
+import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.SessionStatus
 import com.debasish.livefit.model.SessionSummary
 import com.debasish.livefit.model.WorkoutType
@@ -163,6 +166,33 @@ class HcRecordPlanTest {
         iv.zipWithNext().forEach { (a, b) -> assertEquals(a.endMs, b.startMs) }
         assertEquals(200L, iv.sumOf { it.steps })
     }
+
+    /** Codex P2: the first reading can arrive late and already be non-zero — it still counts. */
+    @Test fun cumulativeTotalsCountFromAZeroBaseline() {
+        val samples = listOf(Sample(30_000, stepsTotal = 10, distanceKmTotal = 0.01, kcalTotal = 1.0),
+            Sample(120_000, stepsTotal = 100, distanceKmTotal = 0.08, kcalTotal = 6.0))
+        val iv = HcPlanner.plan(finished(samples)).minuteIntervals
+        assertEquals(10L, iv.first().steps)
+        assertEquals(100L, iv.sumOf { it.steps })
+        assertEquals(0.08, iv.sumOf { it.distanceKm }, 1e-9)
+        assertEquals(6.0, iv.sumOf { it.kcal }, 1e-9)
+    }
+
+    @Test fun aTotalThatDropsIsNeverCountedTwice() {
+        val samples = listOf(Sample(60_000, stepsTotal = 500), Sample(90_000, stepsTotal = 0), Sample(180_000, stepsTotal = 560))
+        assertEquals(560L, HcPlanner.plan(finished(samples)).minuteIntervals.sumOf { it.steps })
+    }
+
+    @Test fun pauseIntervalsComeFromEvents() {
+        val events = listOf(SessionEvent.Started(0, WorkoutType.Walk), SessionEvent.Paused(240_000), SessionEvent.Resumed(360_000),
+            SessionEvent.Paused(500_000), SessionEvent.Stopped(600_000, EndReason.User))
+        assertEquals(listOf(240_000L to 360_000L, 500_000L to 600_000L), HcPlanner.pauseIntervals(events))
+    }
+
+    @Test fun pausesArePlannedWithinTheSession() {
+        val s = finished(listOf(Sample(0), Sample(600_000))).copy(pauses = listOf(-5_000L to 10_000L, 120_000L to 240_000L))
+        assertEquals(listOf(0L to 10_000L, 120_000L to 240_000L), HcPlanner.plan(s).exercise.pauses, "clipped to the session")
+    }
 }
 ```
 
@@ -183,7 +213,13 @@ import kotlinx.coroutines.flow.StateFlow
 import java.time.LocalDate
 import java.time.ZoneId
 
-data class FinishedSession(val summary: SessionSummary, val samples: List<Sample>, val sampleProvenance: List<Provenance>)
+/** [pauses] = paused intervals (start, end) in watch-clock ms, from the session's events. */
+data class FinishedSession(
+    val summary: SessionSummary,
+    val samples: List<Sample>,
+    val sampleProvenance: List<Provenance>,
+    val pauses: List<Pair<Long, Long>> = emptyList(),
+)
 
 enum class RejectReason { NotComplete, NotLive }
 
@@ -229,9 +265,10 @@ object EligibilityGate {
 ```kotlin
 package com.debasish.livefit.health
 
+import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 
-data class ExercisePlan(val id: String, val type: String, val title: String, val startMs: Long, val endMs: Long)
+data class ExercisePlan(val id: String, val type: String, val title: String, val startMs: Long, val endMs: Long, val pauses: List<Pair<Long, Long>> = emptyList())
 data class HrChunk(val id: String, val samples: List<Pair<Long, Long>>) // (tMs, bpm)
 data class MinuteInterval(val stepsId: String, val distanceId: String, val kcalId: String, val startMs: Long, val endMs: Long, val steps: Long, val distanceKm: Double, val kcal: Double)
 data class HcRecordPlan(val exercise: ExercisePlan, val heartRateChunks: List<HrChunk>, val minuteIntervals: List<MinuteInterval>, val speedId: String, val speedSamples: List<Pair<Long, Double>>)
@@ -250,30 +287,35 @@ object HcPlanner {
         val hr = s.samples.mapNotNull { smp -> smp.hr?.let { smp.tMs to it.toLong() } }
         val chunks = hr.chunked(1_000).mapIndexed { i, c -> HrChunk(recordId(id, "hr", i), c) }
 
-        // Per-minute deltas of cumulative totals: bucket k covers [start + k·60 s, start + (k+1)·60 s];
-        // its value = last sample at or before the bucket end minus the previous bucket's last sample.
+        // Per-minute deltas of cumulative totals: bucket k covers [start + k·60 s, start + (k+1)·60 s].
+        // Totals count from 0 at session start (Health Services totals are per exercise), so the baseline is zero —
+        // not the first sample, which can arrive late and already be non-zero. A running maximum ignores a total
+        // that drops (e.g. the watch re-registering after process death), so nothing is counted twice.
         val sorted = s.samples.sortedBy { it.tMs }
         val intervals = mutableListOf<MinuteInterval>()
-        if (sorted.isNotEmpty() && end > start) {
-            var prev = sorted.first()
+        if (end > start) {
+            var steps = 0L; var km = 0.0; var kcal = 0.0
+            var i = 0
             val buckets = (end - start - 1) / 60_000
             for (k in 0..buckets) {
                 val bStart = start + k * 60_000
                 val bEnd = minOf(bStart + 60_000, end)
-                val last = sorted.lastOrNull { it.tMs <= bEnd } ?: prev
+                var nSteps = steps; var nKm = km; var nKcal = kcal
+                while (i < sorted.size && sorted[i].tMs <= bEnd) {
+                    val x = sorted[i++]
+                    nSteps = maxOf(nSteps, x.stepsTotal.toLong()); nKm = maxOf(nKm, x.distanceKmTotal); nKcal = maxOf(nKcal, x.kcalTotal)
+                }
                 intervals += MinuteInterval(
                     recordId(id, "steps", k.toInt()), recordId(id, "distance", k.toInt()), recordId(id, "kcal", k.toInt()),
-                    bStart, bEnd,
-                    (last.stepsTotal - prev.stepsTotal).toLong().coerceAtLeast(0),
-                    (last.distanceKmTotal - prev.distanceKmTotal).coerceAtLeast(0.0),
-                    (last.kcalTotal - prev.kcalTotal).coerceAtLeast(0.0),
+                    bStart, bEnd, nSteps - steps, nKm - km, nKcal - kcal,
                 )
-                prev = last
+                steps = nSteps; km = nKm; kcal = nKcal
             }
         }
+        val pauses = s.pauses.map { (a, b) -> maxOf(a, start) to minOf(b, end) }.filter { (a, b) -> b > a }
 
         return HcRecordPlan(
-            exercise = ExercisePlan(recordId(id, "exercise"), type, "LiveFit ${shown.label}", start, end),
+            exercise = ExercisePlan(recordId(id, "exercise"), type, "LiveFit ${shown.label}", start, end, pauses),
             heartRateChunks = chunks,
             minuteIntervals = intervals,
             speedId = recordId(id, "speed"),
@@ -281,13 +323,24 @@ object HcPlanner {
         )
     }
 
+    /** Paused intervals from the session's events; a pause still open at Stopped ends there. */
+    fun pauseIntervals(events: List<SessionEvent>): List<Pair<Long, Long>> {
+        val out = mutableListOf<Pair<Long, Long>>()
+        var pausedAt: Long? = null
+        for (e in events.sortedBy { it.tMs }) when (e) {
+            is SessionEvent.Paused -> if (pausedAt == null) pausedAt = e.tMs
+            is SessionEvent.Resumed, is SessionEvent.Stopped -> pausedAt?.let { out += it to e.tMs; pausedAt = null }
+            else -> Unit
+        }
+        return out
+    }
 }
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:health:test`
-Expected: PASS (5 + 5). Intervals are contiguous by construction (bucket k ends where k+1 starts), which Health Connect requires (no overlaps).
+Expected: PASS (5 + 9). Intervals are contiguous by construction (bucket k ends where k+1 starts), which Health Connect requires (no overlaps).
 
 - [ ] **Step 6: Commit**
 
@@ -307,13 +360,15 @@ git commit -m "feat(health): sink contracts, real-data eligibility gate and HC r
 - Create: `services/health-connect/src/main/kotlin/com/debasish/livefit/healthconnect/HcSyncWorker.kt`
 - Create: `services/health-connect/src/main/kotlin/com/debasish/livefit/healthconnect/PermissionsRationaleActivity.kt`
 - Test: `services/health-connect/src/test/kotlin/com/debasish/livefit/healthconnect/HealthConnectSinkTest.kt`
+- Test: `services/health-connect/src/test/kotlin/com/debasish/livefit/healthconnect/HcSyncWorkerTest.kt`
 
 **Interfaces:**
 - Consumes: `HealthDataSink`, `EligibilityGate`, `HcPlanner`, `FinishedSession` (Task 1).
 - Produces:
   - `class HealthConnectSink(context: Context, client: () -> HealthConnectClient?, outbox: HcOutbox, now: () -> Long = System::currentTimeMillis) : HealthDataSink` with `suspend fun drainOutbox(load: suspend (String) -> FinishedSession?)`, `val permissions: Set<String>`
   - `interface HcOutbox { suspend fun enqueue(sessionId: String, error: String?); suspend fun due(nowMs: Long): List<String>; suspend fun markDone(sessionId: String); suspend fun markFailed(sessionId: String, error: String, nextAttemptMs: Long); suspend fun size(): Int; suspend fun attempts(sessionId: String): Int }` + `InMemoryHcOutbox` (tests) + `PrefsHcOutbox(context)`
-  - `HcSyncWorker` (WorkManager, periodic 15 min + one-time on enqueue)
+  - `HcSyncWorker` (WorkManager, periodic 15 min + one-time on enqueue) + `interface HcSyncHost { suspend fun drainHealthOutbox(): Boolean }` — implemented by the phone's `Application`, which builds the sink and history from durable storage itself. No static callback: WorkManager can start a fresh process where nothing else ran.
+  - Pauses are written as `ExerciseSegment`s of type `EXERCISE_SEGMENT_TYPE_PAUSE` on the `ExerciseSessionRecord`.
 
 - [ ] **Step 1: Module build** — `services/health-connect/build.gradle.kts`:
 
@@ -342,6 +397,7 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("androidx.work:work-testing:2.9.1")
 }
 ```
 
@@ -381,6 +437,7 @@ Manifest (permissions + the rationale activity HC requires before it shows its d
 ```kotlin
 package com.debasish.livefit.healthconnect
 
+import androidx.health.connect.client.records.ExerciseSegment
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.StepsRecord
@@ -450,6 +507,82 @@ class HealthConnectSinkTest {
         val sink = HealthConnectSink(ApplicationProvider.getApplicationContext(), { FakeHealthConnectClient() }, InMemoryHcOutbox(), grantedCheck = { false })
         assertEquals(true, sink.write(session()) is SinkResult.Queued)
     }
+
+    /** Codex P2: a ten-minute session with a two-minute pause exports the pause. */
+    @Test fun pausesAreWrittenAsPauseSegments() = runTest {
+        val fake = FakeHealthConnectClient()
+        val sink = HealthConnectSink(ApplicationProvider.getApplicationContext(), { fake }, InMemoryHcOutbox(), grantedCheck = { true })
+        assertEquals(SinkResult.Written, sink.write(session(n = 600).copy(pauses = listOf(t0 + 240_000 to t0 + 360_000))))
+        val seg = fake.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, all)).records.single().segments.single()
+        assertEquals(ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE, seg.segmentType)
+        assertEquals(Instant.ofEpochMilli(t0 + 240_000), seg.startTime)
+        assertEquals(Instant.ofEpochMilli(t0 + 360_000), seg.endTime)
+    }
+}
+```
+
+`HcSyncWorkerTest.kt` — the worker in a "new process" (Codex P1):
+
+```kotlin
+package com.debasish.livefit.healthconnect
+
+import android.app.Application
+import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.testing.FakeHealthConnectClient
+import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.test.core.app.ApplicationProvider
+import androidx.work.ListenableWorker
+import androidx.work.testing.TestListenableWorkerBuilder
+import com.debasish.livefit.health.FinishedSession
+import com.debasish.livefit.health.SinkResult
+import com.debasish.livefit.model.Provenance
+import com.debasish.livefit.model.Sample
+import com.debasish.livefit.model.SessionStatus
+import com.debasish.livefit.model.SessionSummary
+import com.debasish.livefit.model.WorkoutType
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.time.Instant
+
+@RunWith(RobolectricTestRunner::class)
+@Config(application = HcSyncWorkerTest.HostApp::class)
+class HcSyncWorkerTest {
+    /** Stands in for LiveFitApp: builds the sink from durable storage only (prefs outbox, stored sessions). */
+    class HostApp : Application(), HcSyncHost {
+        override suspend fun drainHealthOutbox(): Boolean {
+            HealthConnectSink(this, { client }, PrefsHcOutbox(this), now = { 120_000L }, grantedCheck = { true }).drainOutbox { stored }
+            return true
+        }
+        companion object { val client = FakeHealthConnectClient(); var stored: FinishedSession? = null }
+    }
+
+    private val live = Provenance.Live("galaxy-watch/health-services")
+    private val t0 = 1_760_000_000_000L
+    private val session = FinishedSession(
+        SessionSummary(id = "s1", type = WorkoutType.Walk, startMs = t0, endMs = t0 + 60_000, activeMs = 60_000, provenance = live, status = SessionStatus.Complete),
+        samples = List(60) { Sample(t0 + it * 1_000L, hr = 110, stepsTotal = it * 2) },
+        sampleProvenance = List(60) { live },
+    )
+
+    @Test fun queuedWorkDrainsAfterProcessRecreation() = runTest {
+        val app = ApplicationProvider.getApplicationContext<HostApp>()
+        HostApp.stored = session
+        // "Process 1": permissions missing → queued in the persistent outbox, next attempt at 60 s.
+        val first = HealthConnectSink(app, { HostApp.client }, PrefsHcOutbox(app), now = { 0L }, grantedCheck = { false })
+        assertTrue(first.write(session) is SinkResult.Queued)
+        // "Process 2": only WorkManager runs; no service graph, no in-memory callback.
+        val result = TestListenableWorkerBuilder<HcSyncWorker>(app).build().doWork()
+        assertEquals(ListenableWorker.Result.success(), result)
+        val all = TimeRangeFilter.between(Instant.ofEpochMilli(t0 - 1), Instant.ofEpochMilli(t0 + 120_000))
+        assertEquals(1, HostApp.client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, all)).records.size)
+        assertEquals(0, PrefsHcOutbox(app).size())
+    }
 }
 ```
 
@@ -515,6 +648,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ExerciseSegment
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.Record
@@ -543,7 +677,6 @@ import kotlinx.coroutines.flow.update
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZoneOffset
 
 /** Writes eligible sessions to Health Connect; anything that can't be written now waits in the outbox (V2 spec §2). */
 class HealthConnectSink(
@@ -603,7 +736,7 @@ class HealthConnectSink(
 
     private suspend fun insertAll(c: HealthConnectClient, s: FinishedSession) {
         val plan = HcPlanner.plan(s)
-        val zone = ZoneOffset.systemDefault().rules.getOffset(Instant.ofEpochMilli(plan.exercise.startMs))
+        val zone = ZoneId.systemDefault().rules.getOffset(Instant.ofEpochMilli(plan.exercise.startMs))
         fun meta(id: String) = Metadata.activelyRecorded(device = Device(type = Device.TYPE_WATCH), clientRecordId = id, clientRecordVersion = 1)
         fun t(ms: Long) = Instant.ofEpochMilli(ms)
 
@@ -612,6 +745,8 @@ class HealthConnectSink(
             startTime = t(plan.exercise.startMs), startZoneOffset = zone, endTime = t(plan.exercise.endMs), endZoneOffset = zone,
             exerciseType = when (plan.exercise.type) { "RUN" -> ExerciseSessionRecord.EXERCISE_TYPE_RUNNING; "BIKE" -> ExerciseSessionRecord.EXERCISE_TYPE_BIKING; else -> ExerciseSessionRecord.EXERCISE_TYPE_WALKING },
             title = plan.exercise.title, metadata = meta(plan.exercise.id),
+            // PAUSE segments are valid for every exercise type; HC excludes them from the session's active duration.
+            segments = plan.exercise.pauses.map { (a, b) -> ExerciseSegment(t(a), t(b), ExerciseSegment.EXERCISE_SEGMENT_TYPE_PAUSE) },
         )
         plan.heartRateChunks.forEach { ch ->
             records += "hr" to HeartRateRecord(t(ch.samples.first().first), zone, t(ch.samples.last().first + 1), zone,
@@ -680,15 +815,25 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.debasish.livefit.health.FinishedSession
 import java.util.concurrent.TimeUnit
 
-/** Drains the outbox periodically and right after a queued write. The app sets [drain] at startup. */
+/** Implemented by the phone's Application. It builds the sink and history from durable storage itself. */
+interface HcSyncHost {
+    /** Drains the outbox; false when Health Connect isn't bound in this build (demo). */
+    suspend fun drainHealthOutbox(): Boolean
+}
+
+/**
+ * Drains the outbox periodically and right after a queued write. WorkManager may start a fresh process just
+ * for this, so nothing here relies on state set up by the UI or the hub service.
+ */
 class HcSyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
-    override suspend fun doWork(): Result { drain?.invoke(); return Result.success() }
+    override suspend fun doWork(): Result {
+        val host = applicationContext as? HcSyncHost ?: return Result.failure() // wiring bug: never a silent success
+        return runCatching { host.drainHealthOutbox() }.fold(onSuccess = { Result.success() }, onFailure = { Result.retry() })
+    }
 
     companion object {
-        @Volatile var drain: (suspend () -> Unit)? = null
         fun schedule(context: Context) {
             val wm = WorkManager.getInstance(context)
             wm.enqueueUniquePeriodicWork("hc-sync", ExistingPeriodicWorkPolicy.KEEP, PeriodicWorkRequestBuilder<HcSyncWorker>(15, TimeUnit.MINUTES).build())
@@ -701,13 +846,13 @@ class HcSyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:health-connect:testDebugUnitTest`
-Expected: PASS (4 tests). Note: `FakeHealthConnectClient` honours `clientRecordId` upserts; if the installed testing artifact version does not, assert record count via `clientRecordId` distinctness instead and keep the behaviour test on device (Task 4 Step 6).
+Expected: PASS (6 tests). Note: `FakeHealthConnectClient` honours `clientRecordId` upserts; if the installed testing artifact version does not, assert record count via `clientRecordId` distinctness instead and keep the behaviour test on device (Task 4 Step 6).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add services/health-connect
-git commit -m "feat(health-connect): idempotent HC sink with outbox, retry worker and rationale screen"
+git commit -m "feat(health-connect): idempotent HC sink with pause segments, outbox, cold-start-safe worker"
 ```
 
 ---
@@ -718,13 +863,15 @@ git commit -m "feat(health-connect): idempotent HC sink with outbox, retry worke
 - Modify: `phone/build.gradle.kts` (deps `:services:health-connect`), `phone/src/main/java/com/debasish/livefit/phone/ServiceGraph.kt`
 - Modify: `core/services/.../Services.kt` — none (uses `HealthDataSink` from `:services:health`)
 - Create: `phone/src/main/java/com/debasish/livefit/phone/HistoryToFinished.kt`
+- Create: `phone/src/main/java/com/debasish/livefit/phone/HealthSync.kt`
+- Modify: `phone/src/main/java/com/debasish/livefit/phone/LiveFitApp.kt` (implements `HcSyncHost`)
 - Create: `phone/src/main/java/com/debasish/livefit/phone/ui/history/DailyTotalsCard.kt`
 - Modify: `phone/src/main/java/com/debasish/livefit/phone/ui/list/ListScreen.kt` (optional header slot), `AppActivity.kt` (Activity route uses the header)
 - Modify: `phone/src/main/java/com/debasish/livefit/phone/SettingsStore.kt` (`saveToHealthConnect`, default true once linked)
 
 **Interfaces:**
 - Consumes: `HealthConnectSink`, `HcSyncWorker`, `PrefsHcOutbox` (Task 2); `HubWorkoutService.finished`, `HistoryStore` (V1).
-- Produces: `suspend fun HistoryStore.finishedSession(id: String): FinishedSession?`; `ServiceGraph.health: HealthConnectSink?`; `@Composable fun DailyTotalsCard(services: ServiceGraph)`; `ListScreen(header: (@Composable () -> Unit)? = null, …)`.
+- Produces: `suspend fun HistoryStore.finishedSession(id: String): FinishedSession?` (incl. pauses from events); `object HealthSync { fun sink(context: Context): HealthConnectSink; suspend fun drain(context: Context, live: Boolean): Boolean }`; `ServiceGraph.health: HealthConnectSink?`; `@Composable fun DailyTotalsCard(services: ServiceGraph)`; `ListScreen(header: (@Composable () -> Unit)? = null, …)`.
 
 - [ ] **Step 1: `HistoryToFinished.kt`**
 
@@ -732,23 +879,65 @@ git commit -m "feat(health-connect): idempotent HC sink with outbox, retry worke
 package com.debasish.livefit.phone
 
 import com.debasish.livefit.health.FinishedSession
+import com.debasish.livefit.health.HcPlanner
 import com.debasish.livefit.services.HistoryStore
 import kotlinx.coroutines.flow.first
 
-/** Rebuilds what the HC sink needs from history; sample provenance comes from the stored deltas. */
+/** Rebuilds what the HC sink needs from history; sample provenance and pauses come from the stored deltas. */
 suspend fun HistoryStore.finishedSession(id: String): FinishedSession? {
     val summary = sessions.first().firstOrNull { it.id == id } ?: return null
     val deltas = deltas(id)
     val samples = deltas.flatMap { d -> d.samples }.sortedBy { it.tMs }
     val provenance = deltas.flatMap { d -> List(d.samples.size) { d.provenance } }
-    return FinishedSession(summary, samples, provenance)
+    return FinishedSession(summary, samples, provenance, pauses = HcPlanner.pauseIntervals(deltas.flatMap { it.events }))
 }
 ```
+
+`HealthSync.kt` — Health Connect wiring that needs no `ServiceGraph` (the graph would start the hub, Rokid authorization and the foreground service, which a background worker must not do):
+
+```kotlin
+package com.debasish.livefit.phone
+
+import android.content.Context
+import com.debasish.livefit.healthconnect.HealthConnectSink
+import com.debasish.livefit.healthconnect.PrefsHcOutbox
+import com.debasish.livefit.history.HistoryDatabase
+import com.debasish.livefit.history.RoomSessionStore
+
+object HealthSync {
+    @Volatile private var instance: HealthConnectSink? = null
+
+    /** One sink per process, shared by the service graph and the worker (one status flow). */
+    fun sink(context: Context): HealthConnectSink = instance ?: synchronized(this) {
+        instance ?: context.applicationContext.let { app -> HealthConnectSink(app, { HealthConnectSink.availableClient(app) }, PrefsHcOutbox(app)) }
+            .also { instance = it }
+    }
+
+    /** Called by HcSyncWorker through LiveFitApp; builds everything from durable storage. */
+    suspend fun drain(context: Context, live: Boolean): Boolean {
+        if (!live) return false // demo builds never write (V2 spec §2.2)
+        val history = RoomSessionStore(HistoryDatabase.shared(context))
+        sink(context).drainOutbox { id -> history.finishedSession(id) }
+        return true
+    }
+}
+```
+
+`LiveFitApp.kt` — add the host (the `services` graph stays lazy and is not touched by the worker):
+
+```kotlin
+class LiveFitApp : Application(), HcSyncHost {
+    val services: ServiceGraph by lazy { /* unchanged from V1 Task 12 */ }
+
+    override suspend fun drainHealthOutbox(): Boolean = HealthSync.drain(this, live = BuildConfig.LIVE_WATCH)
+}
+```
+(import `com.debasish.livefit.healthconnect.HcSyncHost`.)
 
 - [ ] **Step 2: Bind in `ServiceGraph`**
 
 ```kotlin
-    val health: HealthConnectSink? = if (bindings.liveWatch) HealthConnectSink(app, { HealthConnectSink.availableClient(app) }, PrefsHcOutbox(app)) else null
+    val health: HealthConnectSink? = if (bindings.liveWatch) HealthSync.sink(app) else null
 ```
 (Bound only when the metrics source is Live — demo builds can't write, V2 spec §2.2.)
 
@@ -756,7 +945,6 @@ In `start()`:
 
 ```kotlin
         health?.let { sink ->
-            HcSyncWorker.drain = { sink.drainOutbox { id -> history.finishedSession(id) } }
             HcSyncWorker.schedule(app)
             scope.launch {
                 workout.finished.collect { summary ->
@@ -1402,9 +1590,9 @@ git commit -m "feat(playlists): add-to-playlist flow with captured track and bou
 **Interfaces:**
 - Consumes: `TokenProvider`, `YouTubeOps`, `AddToPlaylistFlow`, `Playlist`, `AccountState` (Tasks 5–6).
 - Produces:
-  - `class YouTubeApi(baseUrl: String = "https://www.googleapis.com/youtube/v3/", http: OkHttpClient = OkHttpClient(), token: suspend () -> String) : YouTubeOps` + `suspend fun myPlaylists(): List<Playlist>`; throws `YouTubeError.Quota`, `YouTubeError.Auth`, `YouTubeError.Network(uncertain: Boolean)`, `YouTubeError.Http(code)`.
+  - `class YouTubeApi(baseUrl: String = "https://www.googleapis.com/youtube/v3/", http: OkHttpClient = OkHttpClient(), onUnauthorized: () -> Unit = {}, token: suspend () -> String) : YouTubeOps` — HTTP 401 → `onUnauthorized()` (drop the cached token) and one retry with a fresh token; a second 401 → `YouTubeError.Auth` + `suspend fun myPlaylists(): List<Playlist>`; throws `YouTubeError.Quota`, `YouTubeError.Auth`, `YouTubeError.Network(uncertain: Boolean)`, `YouTubeError.Http(code)`.
   - `suspend fun YouTubeOps.insertVerified(playlistId: String, videoId: String)` — on `Network(uncertain = true)` checks `contains` before one retry.
-  - `class YouTubePlaylistService(context: Context, scope: CoroutineScope, tokens: GoogleTokenProvider, confirm: ConfirmationService) : PlaylistService` with `fun connectIntent(): Any?` (last `NeedsConsent` pending intent for the Linked services button).
+  - `class YouTubePlaylistService(context: Context, scope: CoroutineScope, tokens: GoogleTokenProvider, confirm: ConfirmationService) : PlaylistService` with `fun connectIntent(): Any?` (last `NeedsConsent` pending intent for the Linked services button). Any `YouTubeError.Auth` sets `account = NeedsConsent` (Linked services shows "Reconnect YouTube"); a failed authorize() call (`TokenResult.Failed`, e.g. offline) is a network error, not a sign-out.
 
 - [ ] **Step 1: Write the failing test** — `YouTubeApiTest.kt` (MockWebServer)
 
@@ -1458,6 +1646,23 @@ class YouTubeApiTest {
         assertEquals("GET", server.takeRequest().method)
     }
 
+    /** Codex P2: a rejected (revoked/expired) token is dropped and re-requested once; a second rejection is Auth. */
+    @Test fun unauthorizedDropsTheTokenAndRetriesOnce() = runTest {
+        var invalidated = 0
+        var issued = 0
+        val api2 = YouTubeApi(server.url("/").toString(), OkHttpClient(), onUnauthorized = { invalidated++ }) { "tok${issued++}" }
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.enqueue(MockResponse().setBody("""{"items":[]}"""))
+        assertEquals(emptyList<String>(), api2.search("x"))
+        assertEquals(1, invalidated)
+        assertEquals("Bearer tok0", server.takeRequest().getHeader("Authorization"))
+        assertEquals("Bearer tok1", server.takeRequest().getHeader("Authorization"))
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.enqueue(MockResponse().setResponseCode(401))
+        assertFailsWith<YouTubeError.Auth> { api2.search("y") }
+        assertEquals(3, invalidated)
+    }
+
     @Test fun uncertainInsertRetriesOnceWhenMissing() = runTest {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
         server.enqueue(MockResponse().setBody("""{"items":[]}"""))
@@ -1506,11 +1711,20 @@ sealed class YouTubeError(msg: String) : Exception(msg) {
 class YouTubeApi(
     private val baseUrl: String = "https://www.googleapis.com/youtube/v3/",
     private val http: OkHttpClient = OkHttpClient(),
+    private val onUnauthorized: () -> Unit = {},
     private val token: suspend () -> String,
 ) : YouTubeOps {
     private val json = Json { ignoreUnknownKeys = true }
+    private class Unauthorized : Exception()
 
-    private suspend fun call(path: String, query: Map<String, String>, body: JsonObject? = null): JsonObject = withContext(Dispatchers.IO) {
+    /** A 401 means the request was not executed, so retrying (even a POST) is safe. */
+    private suspend fun call(path: String, query: Map<String, String>, body: JsonObject? = null): JsonObject =
+        try { attempt(path, query, body) } catch (e: Unauthorized) {
+            onUnauthorized() // the cached token is stale/revoked: the next token() re-authorizes silently
+            try { attempt(path, query, body) } catch (e2: Unauthorized) { onUnauthorized(); throw YouTubeError.Auth() }
+        }
+
+    private suspend fun attempt(path: String, query: Map<String, String>, body: JsonObject?): JsonObject = withContext(Dispatchers.IO) {
         val url = (baseUrl + path).toHttpUrl().newBuilder().apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
         val req = Request.Builder().url(url).header("Authorization", "Bearer ${token()}")
             .apply { if (body != null) post(body.toString().toRequestBody("application/json".toMediaType())) }.build()
@@ -1518,7 +1732,7 @@ class YouTubeApi(
         resp.use { r ->
             val text = r.body?.string().orEmpty()
             when {
-                r.code == 401 -> throw YouTubeError.Auth()
+                r.code == 401 -> throw Unauthorized()
                 r.code == 403 && text.contains("quota", ignoreCase = true) -> throw YouTubeError.Quota()
                 !r.isSuccessful -> throw YouTubeError.Http(r.code)
                 else -> json.parseToJsonElement(text.ifBlank { "{}" }).jsonObject
@@ -1606,11 +1820,15 @@ class YouTubePlaylistService(context: Context, private val tokens: GoogleTokenPr
     override val account: StateFlow<AccountState> = _account
     @Volatile var consentIntent: Any? = null; private set
 
-    private val api = YouTubeApi { when (val t = tokens.token(interactive = false)) {
+    private val api = YouTubeApi(onUnauthorized = { tokens.clear() }) { when (val t = tokens.token(interactive = false)) {
         is TokenResult.Token -> t.value
         is TokenResult.NeedsConsent -> { consentIntent = t.pendingIntent; _account.value = AccountState.NeedsConsent; throw YouTubeError.Auth() }
-        is TokenResult.Failed -> throw YouTubeError.Auth()
+        is TokenResult.Failed -> throw YouTubeError.Network(uncertain = false) // authorize() itself failed (offline): not a sign-out
     } }
+
+    /** Google rejected even a freshly authorized token (access revoked): the user must reconnect. */
+    private suspend fun <T> authGuarded(block: suspend () -> T): T =
+        try { block() } catch (e: YouTubeError.Auth) { _account.value = AccountState.NeedsConsent; throw e }
     private val flow = AddToPlaylistFlow(api, PrefsTrackCache(context), confirm)
 
     /** Called by Linked services after the consent PendingIntent returned OK. */
@@ -1626,13 +1844,15 @@ class YouTubePlaylistService(context: Context, private val tokens: GoogleTokenPr
 
     fun signOut() { tokens.clear(); prefs.edit().clear().apply(); _account.value = AccountState.SignedOut }
 
-    override suspend fun playlists(): List<Playlist> = runCatching { api.myPlaylists() }.getOrDefault(emptyList())
+    override suspend fun playlists(): List<Playlist> = runCatching { authGuarded { api.myPlaylists() } }.getOrDefault(emptyList())
 
     override suspend fun addCurrent(track: NowPlaying, playlistId: String, playlistTitle: String): AddResult = try {
-        flow.add(track, playlistId, playlistTitle)
+        authGuarded { flow.add(track, playlistId, playlistTitle) }
     } catch (e: YouTubeError) { AddResult.Failed(e.message ?: "YouTube error") }
 }
 ```
+
+Token cache note: `tokens.clear()` drops LiveFit's in-memory copy. If the Identity library in use offers `AuthorizationClient.clearToken(ClearTokenRequest)`, call it from `GoogleTokenProvider.clear()` with the cached token, so Google's own cache can't return the rejected token again. Without it, the retry may get the same token; the second 401 then shows "Reconnect YouTube", which is still correct for a revoked grant.
 
 Sign-out note: `AuthorizationClient.revokeAccess(...)` exists only in newer Identity releases; if available in the version used, call it in `signOut()`; otherwise show "Remove LiveFit's access in your Google account → Security → Third-party access" under the button (V2 spec §3.1).
 
