@@ -146,4 +146,87 @@ class WatchSessionRecorderTest {
         rec.sample(Sample(13_000, hr = 142))
         assertEquals("b" to 3L, sent.last(), "b is now sent live")
     }
+
+    private fun snapshotFiles(dir: File): Map<String, String> =
+        dir.listFiles { f -> f.name.startsWith("d-") }!!.associate { it.name to it.readText() }
+
+    @Test fun crashBetweenCheckpointAndDeleteDoesNotDoubleCount() = runTest {
+        val root = tmp()
+        val rec = WatchSessionRecorder(root, live, send = {})
+        rec.begin("s", WorkoutType.Walk, 0)
+        rec.sample(Sample(10_000, hr = 110, stepsTotal = 20))
+        rec.sample(Sample(20_000, hr = 130, stepsTotal = 40))
+        val before = snapshotFiles(File(root, "s"))
+        rec.onAck(DeltaAck(sessionId = "s", seq = 2))
+        before.forEach { (n, t) -> File(root, "s/$n").writeText(t) } // crash before deletion
+        val r = WatchSessionRecorder(root, live, send = {})
+        assertTrue(FileDeltaBuffer(File(root, "s")).unacked().isEmpty())
+        val snap = r.assembler!!.snapshot()
+        assertEquals(40, snap.metrics.steps)
+        assertEquals(120, snap.avgHeartRate)
+        assertEquals(130, snap.maxHeartRate)
+        assertEquals(20_000, r.assembler!!.activeMs())
+        r.onAck(DeltaAck(sessionId = "s", seq = 2))
+        assertTrue(File(root, "s").listFiles { f -> f.name.startsWith("d-") }!!.isEmpty())
+    }
+
+    @Test fun crashAfterFinalAckRemovesTheSession() = runTest {
+        val root = tmp()
+        val rec = WatchSessionRecorder(root, live, send = {})
+        rec.begin("s", WorkoutType.Walk, 0)
+        rec.event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
+        val dir = File(root, "s")
+        val header = File(dir, "header.json").readText()
+        val files = snapshotFiles(dir)
+        rec.onAck(DeltaAck(sessionId = "s", seq = 1))
+        // crash after the checkpoint but before the directory was deleted
+        FileDeltaBuffer(dir).also { b ->
+            b.writeHeader(com.debasish.livefit.model.Wire.decode<WatchSessionHeader>(header))
+            val tmpDir = tmp()
+            files.forEach { (n, t) -> File(tmpDir, n).writeText(t) }
+            val cpBuf = FileDeltaBuffer(File(tmpDir, "x"))
+            files.forEach { (n, t) -> File(cpBuf.dir, n).writeText(t) }
+            cpBuf.writeHeader(com.debasish.livefit.model.Wire.decode<WatchSessionHeader>(header))
+            cpBuf.ackUpTo(1)
+            File(cpBuf.dir, "checkpoint.json").copyTo(File(dir, "checkpoint.json"))
+        }
+        val r = WatchSessionRecorder(root, live, send = {})
+        assertFalse(r.holdsData)
+        assertFalse(dir.exists())
+    }
+
+    @Test fun secondAckMergesIntoTheExistingCheckpoint() = runTest {
+        val root = tmp()
+        val rec = WatchSessionRecorder(root, live, send = {})
+        rec.begin("s", WorkoutType.Run, 0)
+        rec.sample(Sample(1_000, hr = 100))
+        rec.onAck(DeltaAck(sessionId = "s", seq = 1))
+        rec.sample(Sample(2_000, hr = 180))
+        rec.event(SessionEvent.Paused(2_000))
+        rec.onAck(DeltaAck(sessionId = "s", seq = 3))
+        val cp = FileDeltaBuffer(File(root, "s")).readCheckpoint()!!
+        assertEquals(3L, cp.delta.seq)
+        assertEquals(280L, cp.hrSum)
+        assertEquals(2, cp.hrCount)
+        assertEquals(180, cp.hrMax)
+        assertEquals(2, cp.delta.events.size)
+        assertEquals(2, cp.delta.samples.size)
+    }
+
+    @Test fun crashBeforeHeaderUpdateKeepsTheDelta() = runTest {
+        val root = tmp()
+        WatchSessionRecorder(root, live, send = {}).apply { begin("s", WorkoutType.Walk, 0) }
+        val buf = FileDeltaBuffer(File(root, "s"))
+        // put(d) landed, writeHeader did not
+        buf.put(SessionDelta(sessionId = "s", seq = 1, events = listOf(SessionEvent.Stopped(5_000, EndReason.User)), provenance = live, final = true))
+        val sent = mutableListOf<Long>()
+        val r = WatchSessionRecorder(root, live, send = { sent += it.seq })
+        assertTrue(r.isFinalized)
+        assertEquals(1L, buf.readHeader()!!.finalSeq)
+        r.sample(Sample(6_000, hr = 90)) // finalized: ignored, must not overwrite d-1
+        assertEquals(1L, buf.unacked().last().seq)
+        assertTrue(buf.unacked().last().final)
+        r.resendUnacked()
+        assertEquals(listOf(0L, 1L), sent)
+    }
 }

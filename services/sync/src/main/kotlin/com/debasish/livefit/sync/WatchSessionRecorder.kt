@@ -10,6 +10,7 @@ import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.workout.HrStats
 import com.debasish.livefit.services.workout.SessionAssembler
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Watch side of spec §4.4: every delta is persisted before it is sent and deleted only when the phone
@@ -34,12 +35,18 @@ class WatchSessionRecorder(
         root.mkdirs()
         root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { dir ->
             val buffer = FileDeltaBuffer(dir)
-            val h = buffer.readHeader() ?: run { buffer.delete(); return@mapNotNull null }
+            val stored = buffer.readHeader() ?: run { buffer.delete(); return@mapNotNull null }
             val cp = buffer.readCheckpoint()
+            val pending = buffer.unacked()
+            // A crash between put(d) and writeHeader leaves the header stale: trust the files too.
+            val h = stored.copy(
+                lastSeq = maxOf(stored.lastSeq, cp?.delta?.seq ?: -1, pending.maxOfOrNull { it.seq } ?: -1),
+                finalSeq = stored.finalSeq ?: pending.lastOrNull { it.final }?.seq,
+            ).also { if (it != stored) buffer.writeHeader(it) }
             if (h.finalSeq != null && cp != null && cp.delta.seq >= h.finalSeq) { buffer.delete(); return@mapNotNull null } // crashed after the final ack
             val a = SessionAssembler(h.sessionId)
             cp?.let { a.addCheckpoint(it.delta, HrStats(it.hrSum, it.hrCount, it.hrMax)) }
-            buffer.unacked().forEach { a.add(it) }
+            pending.forEach { a.add(it) }
             Held(buffer, h, a)
         }.sortedBy { it.header.startMs }.let { held += it }
     }
@@ -69,7 +76,12 @@ class WatchSessionRecorder(
         h.buffer.put(d)
         h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null).also { h.buffer.writeHeader(it) }
         h.assembler.add(d)
-        if (h === held.first()) runCatching { send(d) } // unreachable phone, or an older session first: stays buffered
+        if (h === held.first()) trySend(d) // unreachable phone, or an older session first: stays buffered
+    }
+
+    /** Failures keep the delta buffered; cancellation must propagate. */
+    private suspend fun trySend(d: SessionDelta) {
+        try { send(d) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
     }
 
     suspend fun onAck(ack: DeltaAck) {
@@ -86,12 +98,14 @@ class WatchSessionRecorder(
     /** Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). */
     suspend fun resendUnacked() {
         val h = held.firstOrNull() ?: return
-        for (d in h.buffer.unacked()) runCatching { send(d) }
+        for (d in h.buffer.unacked()) trySend(d)
     }
 
     /** Claims the oldest held session and replays it (on reconnect, and when the previous session completes). */
     suspend fun resync() {
-        claim()?.let { runCatching { sendClaim(it) } }
+        claim()?.let { c ->
+            try { sendClaim(c) } catch (e: CancellationException) { throw e } catch (_: Exception) { /* retried on next resync */ }
+        }
         resendUnacked()
     }
 
