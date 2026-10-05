@@ -90,3 +90,37 @@ interface ConfirmationService {
     /** Returns true only for the first answer to the currently pending confirmation. */
     fun answer(confirmationId: String, yes: Boolean): Boolean
 }
+
+/** Phone side of hub → watch exercise control and watch → phone session data (spec §4.4, §4.8). */
+interface WatchExerciseGateway {
+    suspend fun send(request: com.debasish.livefit.model.ExerciseRequest)
+    suspend fun ack(ack: com.debasish.livefit.model.DeltaAck)
+    val results: Flow<com.debasish.livefit.model.ExerciseResult>
+    val stateReports: Flow<com.debasish.livefit.model.ExerciseStateReport>
+    val deltas: Flow<com.debasish.livefit.model.SessionDelta>
+    val claims: Flow<com.debasish.livefit.model.SessionClaim>
+}
+
+/** Durable session storage on the phone. */
+interface SessionStore {
+    /** Stores durably (idempotent by sessionId+seq); returns the highest contiguous seq now stored. */
+    suspend fun storeDelta(delta: com.debasish.livefit.model.SessionDelta): Long
+    suspend fun deltas(sessionId: String): List<com.debasish.livefit.model.SessionDelta>
+    /** Sessions with stored deltas but no finalized summary, oldest first. */
+    suspend fun openSessionIds(): List<String>
+    suspend fun finalize(summary: com.debasish.livefit.model.SessionSummary)
+    /** Deletes the session's data but keeps a Discarded tombstone, so late data for it is still ignored after a restart. */
+    suspend fun discard(sessionId: String)
+    /** What the hub must remember across a phone restart (spec §4.8 abandoned starts, §4.9 end time); null = never seen. */
+    suspend fun lifecycle(sessionId: String): SessionLifecycle?
+    /** Records the end event. The first [endedAtMs] is kept (it starts the 24 h deadline); a later non-null reason fills a missing one. */
+    suspend fun markEnded(sessionId: String, endReason: com.debasish.livefit.model.EndReason?, endedAtMs: Long)
+}
+
+enum class StoredSessionState { Open, Finalized, Discarded }
+
+data class SessionLifecycle(
+    val state: StoredSessionState,
+    val endReason: com.debasish.livefit.model.EndReason? = null,
+    val endedAtMs: Long? = null,
+)

@@ -12,6 +12,7 @@ dependencies {
 
 dependencies {
     testImplementation(kotlin("test"))
+    testImplementation(project(":services:confirm"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }
 
