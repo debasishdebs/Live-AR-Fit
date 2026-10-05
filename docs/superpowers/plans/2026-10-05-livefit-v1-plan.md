@@ -1068,6 +1068,8 @@ git commit -m "feat(voice): yes/no parser and per-locale language registry"
   - `fun activeMs(): Long`, `fun snapshot(): WorkoutSnapshot`, `fun hrHistory(limit: Int = 120): List<Int>`
   - `fun provenance(): Provenance`, `fun summary(status: SessionStatus, endReasonOverride: EndReason? = null): SessionSummary`
   - `fun lastSample(): Sample?` (latest sample by timestamp; the watch seeds Health Services totals with it after process death)
+  - `data class HrStats(val sum: Long = 0, val count: Int = 0, val max: Int? = null)`; `fun addCheckpoint(delta: SessionDelta, hr: HrStats)` — the watch's restart checkpoint: its samples feed the chart and totals, while `hr` (covering every folded sample) feeds average/max HR
+  - Cumulative totals (steps, distance, kcal) are the **running maximum** over samples in time order — a dipping reading never lowers them. V2's Health Connect planner uses the same rule, so history and Health Connect agree.
 
 - [ ] **Step 1: Write the failing test** — `SessionAssemblerTest.kt`:
 
@@ -1157,6 +1159,29 @@ class SessionAssemblerTest {
         assertEquals(listOf(100, 140), a.hrHistory())
     }
 
+    /** Codex plan round 2: a dipping total (e.g. watch reattach) must not lower history totals — same rule as the HC export. */
+    @Test fun totalsNeverDropEvenWhenTheSessionEndsDuringTheDip() {
+        val a = SessionAssembler("s")
+        a.add(delta(0, listOf(SessionEvent.Started(0, WorkoutType.Walk)), samples = listOf(Sample(60_000, stepsTotal = 100, distanceKmTotal = 0.08, kcalTotal = 5.0))))
+        a.add(delta(1, listOf(SessionEvent.Stopped(120_000, EndReason.User)), samples = listOf(Sample(120_000, stepsTotal = 50, distanceKmTotal = 0.04, kcalTotal = 2.0)), final = true))
+        val s = a.summary(SessionStatus.Complete)
+        assertEquals(100, s.steps)
+        assertEquals(0.08, s.distanceKm, 1e-9)
+        assertEquals(5, s.kcal)
+        assertEquals(100, a.snapshot().metrics.steps)
+    }
+
+    @Test fun checkpointStatsGiveFullSessionHeartRateAverageAndMax() {
+        val a = SessionAssembler("s")
+        // checkpoint: folded 200 samples, of which only the last 2 are kept as samples
+        a.addCheckpoint(delta(5, listOf(SessionEvent.Started(0, WorkoutType.Run)), samples = listOf(Sample(1_000, hr = 100), Sample(2_000, hr = 100))),
+            HrStats(sum = 200L * 120, count = 200, max = 180))
+        a.add(delta(6, samples = listOf(Sample(3_000, hr = 130))))
+        assertEquals((200 * 120 + 130) / 201, a.snapshot().avgHeartRate)
+        assertEquals(180, a.snapshot().maxHeartRate)
+        assertEquals(listOf(100, 100, 130), a.hrHistory())
+    }
+
     @Test fun provenanceIsFakeIfAnyDeltaIsFake() {
         val a = SessionAssembler("s")
         a.add(delta(0, listOf(SessionEvent.Started(0, WorkoutType.Walk))))
@@ -1206,8 +1231,13 @@ import java.util.TreeMap
  * phone hub (authoritative) and by the watch over its own buffer while offline. All times are
  * watch-clock timestamps from the deltas; no wall clock is read here.
  */
+data class HrStats(val sum: Long = 0, val count: Int = 0, val max: Int? = null)
+
 class SessionAssembler(val sessionId: String) {
     private val deltas = TreeMap<Long, SessionDelta>()
+    /** Watch restart: HR stats of every folded sample, and the checkpoint delta's seq whose samples they already cover. */
+    private var hrBaseline = HrStats()
+    private var baselineSeq: Long? = null
 
     var finalSeq: Long? = null
         private set
@@ -1267,13 +1297,32 @@ class SessionAssembler(val sessionId: String) {
     private fun detectedType(): WorkoutType? =
         events().filterIsInstance<SessionEvent.TypeDetected>().lastOrNull()?.type
 
+    /** Restores a watch checkpoint (Task 10): [delta] carries the folded events + sample tail, [hr] all folded heart rates. */
+    fun addCheckpoint(delta: SessionDelta, hr: HrStats) {
+        if (!add(delta)) return
+        hrBaseline = hr
+        baselineSeq = delta.seq
+    }
+
     private fun heartRates() = samples().mapNotNull { it.hr }
 
     fun hrHistory(limit: Int = 120): List<Int> = heartRates().takeLast(limit)
 
+    private fun hrStats(): HrStats {
+        val rest = deltas.values.filter { it.seq != baselineSeq }.flatMap { it.samples }.mapNotNull { it.hr }
+        return HrStats(hrBaseline.sum + rest.sum(), hrBaseline.count + rest.size, listOfNotNull(hrBaseline.max, rest.maxOrNull()).maxOrNull())
+    }
+
+    /** Cumulative totals as a running maximum: a reading that dips (e.g. after the watch reattaches) never lowers them. */
+    private data class Totals(val steps: Int, val km: Double, val kcal: Double)
+    private fun totals(): Totals = samples().fold(Totals(0, 0.0, 0.0)) { t, s ->
+        Totals(maxOf(t.steps, s.stepsTotal), maxOf(t.km, s.distanceKmTotal), maxOf(t.kcal, s.kcalTotal))
+    }
+
     fun snapshot(): WorkoutSnapshot {
         val last = samples().lastOrNull()
-        val hrs = heartRates()
+        val hr = hrStats()
+        val t = totals()
         return WorkoutSnapshot(
             sessionId = sessionId,
             phase = phase(),
@@ -1282,13 +1331,13 @@ class SessionAssembler(val sessionId: String) {
             elapsedMs = activeMs(),
             metrics = Metrics(
                 heartRate = samples().lastOrNull { it.hr != null }?.hr,
-                calories = last?.kcalTotal?.toInt() ?: 0,
-                steps = last?.stepsTotal ?: 0,
-                distanceKm = last?.distanceKmTotal ?: 0.0,
-                speedKmh = last?.speedKmh ?: 0.0,
+                calories = t.kcal.toInt(),
+                steps = t.steps,
+                distanceKm = t.km,
+                speedKmh = last?.speedKmh ?: 0.0, // instantaneous, not cumulative
             ),
-            avgHeartRate = if (hrs.isEmpty()) null else hrs.average().toInt(),
-            maxHeartRate = hrs.maxOrNull(),
+            avgHeartRate = if (hr.count == 0) null else (hr.sum / hr.count).toInt(),
+            maxHeartRate = hr.max,
         )
     }
 
@@ -1329,7 +1378,7 @@ class SessionAssembler(val sessionId: String) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:workout:test`
-Expected: PASS (8 new + 5 existing).
+Expected: PASS (10 new + 5 existing).
 
 - [ ] **Step 5: Commit**
 
@@ -2831,8 +2880,9 @@ The watch's temporary durable buffer (spec §4.4): per session, a header + unack
 **Interfaces:**
 - Consumes: `Wire`, `SessionDelta`, `DeltaAck`, `SessionClaim`, `SessionEvent`, `Sample`, `Provenance` (Task 2); `SessionAssembler` (Task 5).
 - Produces:
+  - `@Serializable data class Checkpoint(val delta: SessionDelta, val hrSum: Long, val hrCount: Int, val hrMax: Int?)` — folded events + last 120 samples (chart), plus heart-rate sum/count/max over **every** folded sample (full-session average/max after a restart)
   - `@Serializable data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long, val finalSeq: Long? = null)`
-  - `class FileDeltaBuffer(dir: File)` — one directory per session: `fun readHeader(): WatchSessionHeader?; fun writeHeader(h: WatchSessionHeader); fun put(d: SessionDelta); fun unacked(): List<SessionDelta>; fun readCheckpoint(): SessionDelta?; fun ackUpTo(seq: Long); fun delete()`
+  - `class FileDeltaBuffer(dir: File)` — one directory per session: `fun readHeader(): WatchSessionHeader?; fun writeHeader(h: WatchSessionHeader); fun put(d: SessionDelta); fun unacked(): List<SessionDelta>; fun readCheckpoint(): Checkpoint?; fun ackUpTo(seq: Long); fun delete()`
   - `class WatchSessionRecorder(root: File, provenance: Provenance, send: suspend (SessionDelta) -> Unit, sendClaim: suspend (SessionClaim) -> Unit = {})` with `val sessionId: String?` (newest held session), `val assembler: SessionAssembler?` (newest), `val type: WorkoutType?` (newest), `val isFinalized: Boolean` (newest), `val holdsData: Boolean` (any session not yet fully acked), `suspend fun begin(sessionId: String, type: WorkoutType, tMs: Long)`, `suspend fun event(e: SessionEvent, final: Boolean = false)`, `suspend fun sample(s: Sample)`, `suspend fun onAck(ack: DeltaAck)`, `suspend fun resendUnacked()`, `suspend fun resync()`, `fun claim(): SessionClaim?`.
   - Rules: only the **oldest** held session is sent (live deltas of a newer session stay buffered until the older one's final ack, then `resync()` claims and replays it). `begin` never touches older sessions.
 
@@ -2946,6 +2996,22 @@ class WatchSessionRecorderTest {
         assertEquals(3L, FileDeltaBuffer(File(root, "s")).unacked().single().seq)
     }
 
+    /** Average/max HR still cover the whole session after a restart, though only a 120-sample tail is kept. */
+    @Test fun restartKeepsFullSessionHeartRateStats() = runTest {
+        val root = tmp()
+        WatchSessionRecorder(root, live, send = {}).apply {
+            begin("s", WorkoutType.Run, 0)
+            sample(Sample(1_000, hr = 190)) // the peak, soon outside the tail
+            for (t in 2..300) sample(Sample(t * 1_000L, hr = 100))
+            onAck(DeltaAck(sessionId = "s", seq = 300))
+        }
+        val rec = WatchSessionRecorder(root, live, send = {})
+        val snap = rec.assembler!!.snapshot()
+        assertEquals(190, snap.maxHeartRate)
+        assertEquals((190 + 299 * 100) / 300, snap.avgHeartRate)
+        assertEquals(FileDeltaBuffer.CHECKPOINT_SAMPLES, rec.assembler!!.hrHistory(1_000).size)
+    }
+
     /** Codex P1: stop A offline → start B → reconnect → both recovered, A first. */
     @Test fun endedSessionIsKeptWhenAnotherStartsAndSyncsFirst() = runTest {
         val root = tmp()
@@ -3003,13 +3069,17 @@ import com.debasish.livefit.model.WorkoutType
 import kotlinx.serialization.Serializable
 import java.io.File
 
+/** Folded acked deltas: [delta] = all events + the last [FileDeltaBuffer.CHECKPOINT_SAMPLES] samples; hr* cover every folded sample. */
+@Serializable
+data class Checkpoint(val delta: SessionDelta, val hrSum: Long = 0, val hrCount: Int = 0, val hrMax: Int? = null)
+
 @Serializable
 data class WatchSessionHeader(val sessionId: String, val type: WorkoutType, val startMs: Long, val lastSeq: Long, val finalSeq: Long? = null)
 
 /**
  * One directory per session; files are written atomically (temp + rename).
- * Acked deltas are folded into `checkpoint.json` (all events + the last [CHECKPOINT_SAMPLES] samples,
- * stored as one SessionDelta whose seq = highest folded seq) before their files are deleted.
+ * Acked deltas are folded into `checkpoint.json` (all events + the last [CHECKPOINT_SAMPLES] samples as one
+ * SessionDelta whose seq = highest folded seq, plus HR sum/count/max of every folded sample) before their files are deleted.
  */
 class FileDeltaBuffer(val dir: File) {
     init { dir.mkdirs() }
@@ -3025,7 +3095,7 @@ class FileDeltaBuffer(val dir: File) {
 
     fun readHeader(): WatchSessionHeader? = read(HEADER)
     fun writeHeader(h: WatchSessionHeader) = atomicWrite(HEADER, Wire.encode(h))
-    fun readCheckpoint(): SessionDelta? = read(CHECKPOINT)
+    fun readCheckpoint(): Checkpoint? = read(CHECKPOINT)
 
     fun put(d: SessionDelta) = atomicWrite("d-${d.seq}.json", Wire.encode(d))
 
@@ -3034,7 +3104,7 @@ class FileDeltaBuffer(val dir: File) {
 
     /** Unacked deltas in seq order; anything the checkpoint already covers is excluded. */
     fun unacked(): List<SessionDelta> {
-        val folded = readCheckpoint()?.seq ?: -1
+        val folded = readCheckpoint()?.delta?.seq ?: -1
         return deltaFiles().filter { (seqOf(it) ?: -1) > folded }
             .mapNotNull { runCatching { Wire.decode<SessionDelta>(it.readText()) }.getOrNull() }
             .sortedBy { it.seq }
@@ -3045,17 +3115,23 @@ class FileDeltaBuffer(val dir: File) {
         val pruned = unacked().filter { it.seq <= seq }
         if (pruned.isNotEmpty()) {
             val old = readCheckpoint()
-            val cp = SessionDelta(
-                sessionId = pruned.last().sessionId,
-                seq = pruned.last().seq,
-                events = old?.events.orEmpty() + pruned.flatMap { it.events },
-                samples = (old?.samples.orEmpty() + pruned.flatMap { it.samples }).takeLast(CHECKPOINT_SAMPLES),
-                provenance = pruned.last().provenance,
-                final = false,
+            val hrs = pruned.flatMap { it.samples }.mapNotNull { it.hr }
+            val cp = Checkpoint(
+                delta = SessionDelta(
+                    sessionId = pruned.last().sessionId,
+                    seq = pruned.last().seq,
+                    events = old?.delta?.events.orEmpty() + pruned.flatMap { it.events },
+                    samples = (old?.delta?.samples.orEmpty() + pruned.flatMap { it.samples }).takeLast(CHECKPOINT_SAMPLES),
+                    provenance = pruned.last().provenance,
+                    final = false,
+                ),
+                hrSum = (old?.hrSum ?: 0) + hrs.sumOf { it.toLong() },
+                hrCount = (old?.hrCount ?: 0) + hrs.size,
+                hrMax = listOfNotNull(old?.hrMax, hrs.maxOrNull()).maxOrNull(),
             )
             atomicWrite(CHECKPOINT, Wire.encode(cp))
         }
-        val folded = readCheckpoint()?.seq ?: return
+        val folded = readCheckpoint()?.delta?.seq ?: return
         deltaFiles().forEach { f -> seqOf(f)?.let { if (it <= folded) f.delete() } }
     }
 
@@ -3064,7 +3140,7 @@ class FileDeltaBuffer(val dir: File) {
     companion object {
         private const val HEADER = "header.json"
         private const val CHECKPOINT = "checkpoint.json"
-        /** Enough for the watch's 60 s trend line; avg/max HR on the watch after a restart cover this tail only (the phone's summary is authoritative). */
+        /** Enough for the watch's 60 s trend line; average/max HR come from the checkpoint's hr* fields instead. */
         const val CHECKPOINT_SAMPLES = 120
     }
 }
@@ -3082,6 +3158,7 @@ import com.debasish.livefit.model.SessionClaim
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.services.workout.HrStats
 import com.debasish.livefit.services.workout.SessionAssembler
 import java.io.File
 
@@ -3110,9 +3187,9 @@ class WatchSessionRecorder(
             val buffer = FileDeltaBuffer(dir)
             val h = buffer.readHeader() ?: run { buffer.delete(); return@mapNotNull null }
             val cp = buffer.readCheckpoint()
-            if (h.finalSeq != null && cp != null && cp.seq >= h.finalSeq) { buffer.delete(); return@mapNotNull null } // crashed after the final ack
+            if (h.finalSeq != null && cp != null && cp.delta.seq >= h.finalSeq) { buffer.delete(); return@mapNotNull null } // crashed after the final ack
             val a = SessionAssembler(h.sessionId)
-            cp?.let { a.add(it) }
+            cp?.let { a.addCheckpoint(it.delta, HrStats(it.hrSum, it.hrCount, it.hrMax)) }
             buffer.unacked().forEach { a.add(it) }
             Held(buffer, h, a)
         }.sortedBy { it.header.startMs }.let { held += it }
@@ -3186,7 +3263,7 @@ class WatchSessionRecorder(
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test`
-Expected: PASS (14 tests).
+Expected: PASS (15 tests).
 
 - [ ] **Step 7: Commit**
 
@@ -5694,6 +5771,7 @@ git commit -m "feat(voice): on-device STT, live voice service, energy VAD and ph
 **Files:**
 - Create: `services/workout/src/main/kotlin/com/debasish/livefit/services/workout/AutoTypeDetector.kt`
 - Test: `services/workout/src/test/kotlin/com/debasish/livefit/services/workout/AutoTypeDetectorTest.kt`
+- Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/GpsPreferences.kt`
 - Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/WatchExerciseController.kt`
 - Test: `services/sync/src/test/kotlin/com/debasish/livefit/sync/WatchExerciseControllerTest.kt`
 - Create: `watch/src/main/java/com/debasish/livefit/watch/HealthServicesExercise.kt`
@@ -5709,7 +5787,8 @@ git commit -m "feat(voice): on-device STT, live voice service, energy VAD and ph
   - `class AutoTypeDetector(windowMs = 30_000, stableMs = 30_000) { fun reset(alreadyReported: WorkoutType? = null); fun onSample(s: Sample): WorkoutType? }` (in `:services:workout`; replaces `DefaultWorkoutService.detect`)
   - `interface ExerciseBackend { fun missingPermissions(): List<String>; suspend fun otherAppTracking(): String?; suspend fun start(type: WorkoutType, useGps: Boolean): Boolean; suspend fun pause(): Boolean; suspend fun resume(): Boolean; suspend fun end(): Boolean; suspend fun reattach(last: Sample?): Boolean?; val updates: Flow<BackendUpdate> }`
   - `sealed interface BackendUpdate { data class Reading(val sample: Sample); data class Ended(val by: EndReason) }`
-  - `class WatchExerciseController(scope, backend, recorder, clock, sendResult: suspend (ExerciseResult) -> Unit, sendState: suspend (ExerciseStateReport) -> Unit, newId: () -> String = UUID, endTimeoutMs: Long = 5_000)` — GPS comes from `ExerciseOp.Start.gps` — with `suspend fun handle(req: ExerciseRequest)`, `suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError?`, `suspend fun localPause(): Boolean`, `suspend fun localResume(): Boolean`, `suspend fun localStop(): Boolean`, `suspend fun recover()`, `val activeSessionId: String?`, `val lastError: StateFlow<ExerciseError?>`, `const val SYNCING_PREVIOUS`.
+  - `class GpsPreferences(file: File) { fun get(type: WorkoutType): Boolean; fun set(type: WorkoutType, on: Boolean) }` — the phone's last GPS choice per workout type, persisted (file `gps.json` next to the buffer); offline starts reuse it, also after a watch restart
+  - `class WatchExerciseController(scope, backend, recorder, clock, sendResult: suspend (ExerciseResult) -> Unit, sendState: suspend (ExerciseStateReport) -> Unit, gpsPrefs: GpsPreferences, newId: () -> String = UUID, endTimeoutMs: Long = 5_000)` — GPS comes from `ExerciseOp.Start.gps` — with `suspend fun handle(req: ExerciseRequest)`, `suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError?`, `suspend fun localPause(): Boolean`, `suspend fun localResume(): Boolean`, `suspend fun localStop(): Boolean`, `suspend fun recover()`, `val activeSessionId: String?`, `val lastError: StateFlow<ExerciseError?>`, `const val SYNCING_PREVIOUS`.
   - Rules: pause/resume/stop record their event only after Health Services succeeded; a failure answers `Internal(reason)`. Stop writes the final delta **after** `end()` succeeded and the final readings arrived. A hub `Start` while an older session still awaits its final ack → `Internal(SYNCING_PREVIOUS)`.
   - `object WatchRuntime { fun init(context: Context); val recorder: WatchSessionRecorder; val controller: WatchExerciseController; suspend fun send(path: String, bytes: ByteArray); fun ensureExerciseService() }` — `init` (from any entry point: listener, service, activity) also runs `controller.recover()` and starts `WatchClient`'s sync loop, so tracking and retries never depend on the watch UI being opened.
 
@@ -5868,10 +5947,10 @@ class WatchExerciseControllerTest {
     private val live = Provenance.Live("galaxy-watch/health-services")
 
     private fun TestScope.rig(backend: FakeBackend = FakeBackend(), root: File = Files.createTempDirectory("w").toFile()): Pair<FakeBackend, WatchExerciseController> {
-        val recorder = WatchSessionRecorder(root, live, send = { sent += it })
+        val recorder = WatchSessionRecorder(File(root, "buffer"), live, send = { sent += it })
         var n = 0
         val c = WatchExerciseController(backgroundScope, backend, recorder, Clock { testScheduler.currentTime },
-            sendResult = { results += it }, sendState = { states += it }, newId = { "local${n++}" })
+            sendResult = { results += it }, sendState = { states += it }, gpsPrefs = GpsPreferences(File(root, "gps.json")), newId = { "local${n++}" })
         return backend to c
     }
     private fun req(id: String, session: String, op: ExerciseOp) = ExerciseRequest(requestId = id, sessionId = session, op = op)
@@ -6021,6 +6100,20 @@ class WatchExerciseControllerTest {
         assertIs<SessionEvent.Started>(sent.single().events.single())
     }
 
+    /** Codex plan round 2: phone-started Run with GPS → watch restart → offline Run still uses GPS. */
+    @Test fun offlineStartReusesThePersistedGpsChoiceAfterRestart() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "a", ExerciseOp.Start(WorkoutType.Run, gps = true)))
+        first.handle(req("r2", "a", ExerciseOp.Stop))
+        val (b2, c2) = rig(root = root); runCurrent() // watch process restarted, phone unreachable
+        assertNull(c2.localStart(WorkoutType.Run))
+        assertEquals("start:Run:true", b2.calls.last())
+        assertTrue(c2.localStop())
+        assertNull(c2.localStart(WorkoutType.Walk))
+        assertEquals("start:Walk:false", b2.calls.last(), "no GPS choice for Walk yet → off")
+    }
+
     /** One session at a time on the phone: a phone start waits until the previous session is stored. */
     @Test fun phoneStartIsRefusedWhileAnOlderSessionAwaitsSync() = runTest {
         val (b, c) = rig(); runCurrent()
@@ -6038,7 +6131,37 @@ class WatchExerciseControllerTest {
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test --tests '*WatchExerciseControllerTest*'`
 Expected: FAIL — unresolved controller types.
 
-- [ ] **Step 5: Implement `WatchExerciseController.kt`**
+- [ ] **Step 5: Implement `GpsPreferences.kt` and `WatchExerciseController.kt`**
+
+`GpsPreferences.kt`:
+
+```kotlin
+package com.debasish.livefit.sync
+
+import com.debasish.livefit.model.Wire
+import com.debasish.livefit.model.WorkoutType
+import java.io.File
+
+/** The phone's last GPS choice per workout type, on disk so offline starts after a watch restart still honour it. */
+class GpsPreferences(private val file: File) {
+    private val map: MutableMap<WorkoutType, Boolean> =
+        runCatching { Wire.decode<Map<WorkoutType, Boolean>>(file.readText()).toMutableMap() }.getOrDefault(mutableMapOf())
+
+    /** Unknown type (never started from the phone) → off: step-based distance. */
+    fun get(type: WorkoutType): Boolean = map[type] ?: false
+
+    fun set(type: WorkoutType, on: Boolean) {
+        if (map[type] == on) return
+        map[type] = on
+        file.parentFile?.mkdirs()
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(Wire.encode(map.toMap()))
+        tmp.renameTo(file)
+    }
+}
+```
+
+`WatchExerciseController.kt`:
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -6096,6 +6219,8 @@ class WatchExerciseController(
     private val clock: Clock,
     private val sendResult: suspend (ExerciseResult) -> Unit,
     private val sendState: suspend (ExerciseStateReport) -> Unit,
+    /** The phone's GPS choice per type, persisted; reused for offline starts (the phone setting isn't reachable then). */
+    private val gpsPrefs: GpsPreferences,
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val endTimeoutMs: Long = 5_000,
 ) {
@@ -6103,8 +6228,6 @@ class WatchExerciseController(
     private val _lastError = MutableStateFlow<ExerciseError?>(null)
     val lastError: StateFlow<ExerciseError?> = _lastError
     private val detector = AutoTypeDetector()
-    /** GPS choice of the phone's last Start per type; reused for offline starts (the phone setting isn't reachable then). */
-    private val lastGps = HashMap<WorkoutType, Boolean>()
     /** Set while a user stop waits for Health Services' final update. */
     private var stopping: CompletableDeferred<Unit>? = null
     private var stopAtMs = 0L
@@ -6156,7 +6279,7 @@ class WatchExerciseController(
                 // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
                 recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
                 else -> {
-                    lastGps[op.type] = op.gps
+                    gpsPrefs.set(op.type, op.gps)
                     when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
                         null -> result(true, state = ExerciseState.Active)
                         else -> result(false, e, ExerciseState.Idle)
@@ -6189,7 +6312,7 @@ class WatchExerciseController(
      */
     suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? {
         activeSessionId?.let { return ExerciseError.WrongSession(it) }
-        val e = startExercise(newId, type, force, lastGps[type] ?: false)
+        val e = startExercise(newId, type, force, gpsPrefs.get(type))
         _lastError.value = e
         return e
     }
@@ -6389,6 +6512,7 @@ import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
+import com.debasish.livefit.sync.GpsPreferences
 import com.debasish.livefit.sync.WatchExerciseController
 import com.debasish.livefit.sync.WatchSessionRecorder
 import com.google.android.gms.wearable.Wearable
@@ -6423,6 +6547,7 @@ object WatchRuntime {
                 send(WatchPaths.EXERCISE_RES, Wire.encode(r).toByteArray())
             },
             sendState = { s -> send(WatchPaths.EXERCISE_STATE, Wire.encode(s).toByteArray()) },
+            gpsPrefs = GpsPreferences(File(app.filesDir, "gps.json")),
         )
         initialized = true
         // Every entry point (phone message, sticky service restart, activity) gets the same recovery and sync loop.

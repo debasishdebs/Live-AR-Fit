@@ -66,7 +66,7 @@ watch/                      ui/WatchApp.kt (music page: add-to-playlist button)
   - `interface HealthDataSink { suspend fun write(session: FinishedSession): SinkResult; suspend fun dailyTotals(day: java.time.LocalDate, zone: java.time.ZoneId): DailyTotals?; val status: StateFlow<SinkStatus> }`
   - `object EligibilityGate { fun check(s: FinishedSession): RejectReason? }`
   - `data class HcRecordPlan(...)` + `object HcPlanner { fun plan(s: FinishedSession): HcRecordPlan }` with `exercise: ExercisePlan` (incl. `pauses`), `heartRateChunks: List<HrChunk>`, `minuteIntervals: List<MinuteInterval>`, `speedSamples: List<Pair<Long, Double>>`; `data class MinuteInterval(startMs, endMs, steps, distanceKm, kcal)`; ids via `HcPlanner.recordId(sessionId, kind, index)`; `HcPlanner.pauseIntervals(events: List<SessionEvent>): List<Pair<Long, Long>>`.
-  - Cumulative totals are differenced from a **zero baseline at session start** (not the first sample) with a running maximum (a total that drops is never counted twice).
+  - Cumulative totals are differenced from a **zero baseline at session start** (not the first sample) with a running maximum (a total that drops is never counted twice) — the same rule as V1's `SessionAssembler`, so history and Health Connect report the same totals.
 
 - [ ] **Step 1: Module** — add the four `include(":services:…")` entries; `services/health/build.gradle.kts`:
 
@@ -181,6 +181,12 @@ class HcRecordPlanTest {
     @Test fun aTotalThatDropsIsNeverCountedTwice() {
         val samples = listOf(Sample(60_000, stepsTotal = 500), Sample(90_000, stepsTotal = 0), Sample(180_000, stepsTotal = 560))
         assertEquals(560L, HcPlanner.plan(finished(samples)).minuteIntervals.sumOf { it.steps })
+    }
+
+    /** Codex plan round 2: ends during a dip → same 100 steps the V1 history summary shows. */
+    @Test fun sessionEndingDuringADipMatchesTheHistorySummary() {
+        val samples = listOf(Sample(60_000, stepsTotal = 100), Sample(120_000, stepsTotal = 50))
+        assertEquals(100L, HcPlanner.plan(finished(samples)).minuteIntervals.sumOf { it.steps })
     }
 
     @Test fun pauseIntervalsComeFromEvents() {
@@ -340,7 +346,7 @@ object HcPlanner {
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:health:test`
-Expected: PASS (5 + 9). Intervals are contiguous by construction (bucket k ends where k+1 starts), which Health Connect requires (no overlaps).
+Expected: PASS (5 + 10). Intervals are contiguous by construction (bucket k ends where k+1 starts), which Health Connect requires (no overlaps).
 
 - [ ] **Step 6: Commit**
 
