@@ -80,8 +80,9 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(LiveFitColors.HeaderGradient).statusBarsPadding().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().background(LiveFitColors.HeaderGradient).statusBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         LinearProgressIndicator(progress = { (step.ordinal + 1) / SetupStep.entries.size.toFloat() }, modifier = Modifier.fillMaxWidth(), color = LiveFitColors.Mint)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         val (icon, title, body) = when (step) {
             SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Rokid LiveFit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
@@ -131,7 +132,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         (if (step == SetupStep.Voice) voiceNote else pairNote)?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
         }
-        Spacer(Modifier.weight(1f))
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             TextButton(onClick = { flow.back(); step = flow.step; pairNote = null }, enabled = step != SetupStep.Welcome) { Text("Back") }
             Row {

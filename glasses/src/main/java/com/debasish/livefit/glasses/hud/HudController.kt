@@ -50,6 +50,7 @@ class HudController(private val scope: CoroutineScope, private val bridge: CXRSe
     private val _hrHistory = MutableStateFlow<List<Int>>(emptyList())
     val hrHistory: StateFlow<List<Int>> = _hrHistory
     @Volatile private var lastSampleSecond = -1L
+    @Volatile private var lastLatencySample: Long? = null
 
     fun start() {
         bridge.subscribe(GlassesChannels.STATE, CXRServiceBridge.MsgCallback { _, caps, _ -> onState(caps) })
@@ -66,7 +67,10 @@ class HudController(private val scope: CoroutineScope, private val bridge: CXRSe
         everReceived = true
         liveness.onFrame()
         _frame.value = f
-        f.workout.latestSampleMs?.let { Log.i("LiveFitLatency", "sample=$it render=${System.currentTimeMillis()}") }
+        f.workout.latestSampleMs?.takeIf { it != lastLatencySample }?.let {
+            lastLatencySample = it
+            Log.i("LiveFitLatency", "sample=$it render=${System.currentTimeMillis()}")
+        }
         val sec = f.workout.elapsedMs / 1_000
         val hr = f.workout.metrics.heartRate
         if (f.workout.elapsedMs == 0L) _hrHistory.value = emptyList()
