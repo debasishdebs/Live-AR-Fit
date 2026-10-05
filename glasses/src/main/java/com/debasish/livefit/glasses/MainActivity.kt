@@ -12,17 +12,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.debasish.livefit.glasses.hud.ConfirmInput
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudMode
+import com.debasish.livefit.glasses.hud.HudOverlay
 import com.debasish.livefit.glasses.hud.HudScreen
+import com.debasish.livefit.glasses.voice.PushToTalk
 import com.rokid.cxr.CXRServiceBridge
 
 /** Glasses HUD. Touchpad: tap = talk, swipe = toggle full/glance, double-tap (back) = exit. */
 class MainActivity : ComponentActivity() {
 
     private lateinit var controller: HudController
+    private lateinit var ptt: PushToTalk
     private var mode by mutableStateOf(HudMode.Full)
     private var lastSwipe = 0L
+    private val confirmInput = ConfirmInput()
+    private var highlightYes by mutableStateOf(true)
+    private var localToast by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,7 +43,16 @@ class MainActivity : ComponentActivity() {
             override fun onRokidAccountChanged(p0: String?) {}
             override fun onAudioNoise(p0: Float) {}
         })
-        controller = HudController(lifecycleScope, bridge).also { it.start() }
+        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0)).also { it.start() }
+        ptt = PushToTalk(
+            controller::sendRaw,
+            hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
+            onError = {
+                Log.w(TAG, "push-to-talk: $it")
+                // Called from the recording thread; snapshot state is safe to write from any thread.
+                localToast = if (it.startsWith("Mic") || it.contains("RECORD_AUDIO")) "Mic unavailable" else "Push-to-talk failed"
+            },
+        )
         val batteryManager = getSystemService(BatteryManager::class.java)
         setContent {
             var battery by androidx.compose.runtime.remember { mutableStateOf(batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)) }
@@ -44,23 +60,64 @@ class MainActivity : ComponentActivity() {
                 while (true) { kotlinx.coroutines.delay(30_000); battery = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }
             }
             val frame by controller.frame.collectAsStateWithLifecycle()
+            val settings by controller.settings.collectAsStateWithLifecycle()
+            val connection by controller.connection.collectAsStateWithLifecycle()
             val history by controller.hrHistory.collectAsStateWithLifecycle()
-            HudScreen(frame, mode, battery, history)
+            val listening by ptt.recording.collectAsStateWithLifecycle()
+            androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
+                // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
+                ptt.stop()
+                localToast = null
+                if (confirmInput.onConfirmation(frame?.confirmation)) ptt.start(maxMs = 6_000) // auto mic for a spoken answer
+                highlightYes = confirmInput.highlightYes
+            }
+            androidx.compose.runtime.LaunchedEffect(localToast) {
+                // While a confirmation is shown the error stays inside it; the id effect clears it.
+                if (localToast != null && frame?.confirmation == null) { kotlinx.coroutines.delay(3_000); localToast = null }
+            }
+            val confirmation = frame?.confirmation
+            val toastText = localToast
+            val overlay = when {
+                confirmation != null -> HudOverlay.Confirm(confirmation, highlightYes, listening, micError = toastText)
+                toastText != null -> HudOverlay.LocalToast(toastText)
+                listening -> HudOverlay.LocalListening
+                else -> HudOverlay.None
+            }
+            HudScreen(frame, settings, connection, mode, battery, history, overlay = overlay)
         }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
         when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> controller.listen()
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER ->
+                if (pending) confirmInput.onTap()?.let { controller.send(it); ptt.stop() } else ptt.toggle()
             // One swipe can emit several key events; debounce like the UPI app does.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 val now = System.currentTimeMillis()
-                if (now - lastSwipe > 350) mode = if (mode == HudMode.Full) HudMode.Glance else HudMode.Full
+                if (now - lastSwipe > 350) {
+                    if (pending) { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
+                    else mode = if (mode == HudMode.Full) HudMode.Glance else HudMode.Full
+                }
                 lastSwipe = now
             }
             else -> return super.onKeyUp(keyCode, event)
         }
         return true
+    }
+
+    /** Double-tap (back) answers No while a confirmation is pending instead of leaving the app. */
+    @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
+    override fun onBackPressed() {
+        confirmInput.onConfirmation(controller.frame.value?.confirmation)
+        val answer = confirmInput.onBack()
+        if (answer != null) { controller.send(answer); ptt.stop() } else super.onBackPressed()
+    }
+
+    /** Never leave the mic open once the app is no longer in the foreground. */
+    override fun onStop() {
+        ptt.stop()
+        super.onStop()
     }
 
     companion object { const val TAG = "LiveFitGlasses" }

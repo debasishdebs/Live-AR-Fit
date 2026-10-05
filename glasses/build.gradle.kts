@@ -25,10 +25,10 @@ android {
 }
 
 dependencies {
-    implementation(project(":services:workout"))
-    implementation(project(":services:metrics"))
-    implementation(project(":services:music"))
+    implementation(project(":services:sync"))
     implementation(project(":services:voice"))
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")

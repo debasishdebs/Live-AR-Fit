@@ -56,12 +56,14 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.BasicText
+import com.debasish.livefit.model.Confirmation
 import com.debasish.livefit.model.HeartZones
-import com.debasish.livefit.model.HudFrame
 import com.debasish.livefit.model.HudItem
 import com.debasish.livefit.model.HudPosition
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.zoneLabel
 import com.debasish.livefit.model.VoiceState
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
@@ -95,33 +97,66 @@ private val WorkoutType.hudIcon: ImageVector
     }
 
 
+sealed interface HudOverlay {
+    data object None : HudOverlay
+    /** Shown the instant the user taps, before the phone's frame reports [VoiceState.Listening]. */
+    data object LocalListening : HudOverlay
+    /** Local (glasses-side) notice, e.g. push-to-talk failure. */
+    data class LocalToast(val text: String) : HudOverlay
+    data class Confirm(val confirmation: Confirmation, val highlightYes: Boolean, val listening: Boolean, val micError: String? = null) : HudOverlay
+}
+
 @Composable
-fun HudScreen(frame: HudFrame?, mode: HudMode, glassesBattery: Int?, hrHistory: List<Int> = emptyList()) {
+fun HudScreen(
+    frame: StateFrame?,
+    settings: HudSettings,
+    connection: HudConnection,
+    mode: HudMode,
+    glassesBattery: Int?,
+    hrHistory: List<Int>,
+    overlay: HudOverlay = HudOverlay.None,
+) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle
-    val inWorkout = phase == WorkoutPhase.Starting || phase == WorkoutPhase.Active || phase == WorkoutPhase.Paused || phase == WorkoutPhase.Stopping
-    // One size/position (Settings -> Glasses display) for every LiveFit screen and overlay.
-    val settings = frame?.settings ?: HudSettings()
+    val inWorkout = phase == WorkoutPhase.Starting || phase == WorkoutPhase.Active || phase == WorkoutPhase.Paused || phase == WorkoutPhase.Syncing
     Box(Modifier.fillMaxSize().background(Color.Black).padding(10.dp)) {
         Scaled(settings.scale.coerceIn(0.3f, 1f), settings.position.alignment) {
             Box(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
                 when {
-                    frame == null -> WaitingForPhone()
-                    inWorkout && mode == HudMode.Full -> Full(frame, glassesBattery, hrHistory)
+                    connection == HudConnection.Outdated -> Message("Update LiveFit", "on your glasses")
+                    frame == null && connection == HudConnection.OpenPhoneApp -> WaitingForPhone()
+                    frame == null -> Message("Connecting…", "to your phone")
+                    inWorkout && mode == HudMode.Full -> Full(frame, settings, glassesBattery, hrHistory)
                     inWorkout -> Glance(frame)
+                    phase == WorkoutPhase.Stopping -> Message("Saving workout…", formatElapsed(frame.workout.elapsedMs))
                     phase == WorkoutPhase.Summary -> SummaryCard(frame)
                     else -> Ready(frame, glassesBattery)
                 }
-                // Overlays sit in the clear middle band of the same block.
-                if (frame != null) {
-                    val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
+                val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
+                if (overlay is HudOverlay.Confirm) {
+                    ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, overlay.micError, band)
+                } else if (overlay is HudOverlay.LocalToast) {
+                    Toast(overlay.text, band)
+                } else if (overlay == HudOverlay.LocalListening) {
+                    Listening(band, VoiceState.Listening)
+                } else if (frame != null) {
                     when {
                         frame.voice != VoiceState.Idle -> Listening(band, frame.voice)
                         frame.toast != null -> Toast(frame.toast!!, band)
+                        phase == WorkoutPhase.Syncing -> Toast("Syncing watch…", band)
                         phase == WorkoutPhase.Paused -> PausedBadge(band)
                     }
                 }
+                if (connection == HudConnection.Connecting && frame != null) Label("phone reconnecting…", 22.sp, Hud.TERTIARY)
             }
         }
+    }
+}
+
+@Composable
+private fun Message(title: String, subtitle: String) {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Label(title, 32.sp, Hud.SECONDARY, FontWeight.Bold)
+        Label(subtitle, 26.sp, Hud.TERTIARY)
     }
 }
 
@@ -148,11 +183,11 @@ private fun WaitingForPhone() {
 
 /** No workout running: device status and how to start. */
 @Composable
-private fun Ready(frame: HudFrame, battery: Int?) {
+private fun Ready(frame: StateFrame, battery: Int?) {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            BatteryRing(Icons.Outlined.Watch, frame.watchBattery, frame.watch == LinkState.Connected)
-            BatteryRing(Icons.Outlined.PhoneAndroid, frame.phoneBattery, frame.phone == LinkState.Connected)
+            BatteryRing(Icons.Outlined.Watch, frame.devices.watch.batteryPct, frame.devices.watch.link == LinkState.Connected)
+            BatteryRing(Icons.Outlined.PhoneAndroid, frame.devices.phone.batteryPct, frame.devices.phone.link == LinkState.Connected)
             BatteryRing(GlassesIcon, battery, connected = true)
         }
         Spacer(Modifier.height(28.dp))
@@ -168,7 +203,7 @@ private fun Ready(frame: HudFrame, battery: Int?) {
 }
 
 @Composable
-private fun SummaryCard(frame: HudFrame) {
+private fun SummaryCard(frame: StateFrame) {
     val w = frame.workout
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Glyph(w.displayType.hudIcon, 56.dp, Hud.PRIMARY)
@@ -187,18 +222,18 @@ private fun SummaryCard(frame: HudFrame) {
 }
 
 @Composable
-private fun Full(frame: HudFrame, battery: Int?, hrHistory: List<Int>) {
+private fun Full(frame: StateFrame, settings: HudSettings, battery: Int?, hrHistory: List<Int>) {
     val w = frame.workout
     val m = w.metrics
-    val show = frame.settings.items
+    val show = settings.items
     Column(Modifier.fillMaxSize()) {
         // Status row (tertiary)
         if (HudItem.StatusBar in show) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (w.phase == WorkoutPhase.Active) RecDot()
             Spacer(Modifier.weight(1f))
-            BatteryRing(Icons.Outlined.Watch, frame.watchBattery, frame.watch == LinkState.Connected)
+            BatteryRing(Icons.Outlined.Watch, frame.devices.watch.batteryPct, frame.devices.watch.link == LinkState.Connected)
             Spacer(Modifier.width(12.dp))
-            BatteryRing(Icons.Outlined.PhoneAndroid, frame.phoneBattery, frame.phone == LinkState.Connected)
+            BatteryRing(Icons.Outlined.PhoneAndroid, frame.devices.phone.batteryPct, frame.devices.phone.link == LinkState.Connected)
             Spacer(Modifier.width(12.dp))
             Glyph(Icons.Outlined.MusicNote, 26.dp, if (frame.music?.isPlaying == true) Hud.SECONDARY else Hud.TERTIARY)
             Spacer(Modifier.width(12.dp))
@@ -260,7 +295,7 @@ private fun Full(frame: HudFrame, battery: Int?, hrHistory: List<Int>) {
 
 /** Glance mode: only timer and heart rate, low in the field of view. */
 @Composable
-private fun Glance(frame: HudFrame) {
+private fun Glance(frame: StateFrame) {
     val w = frame.workout
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -303,26 +338,12 @@ private fun HeartTrend(history: List<Int>, zone: Int?) {
             }
             drawPath(path, Hud.Green.copy(alpha = Hud.PRIMARY), style = Stroke(width = 4.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
         }
-        Label("  Z${zone ?: "-"}", 30.sp, Hud.SECONDARY, FontWeight.Bold)
+        Label("  ${zoneLabel(zone)}", 30.sp, Hud.SECONDARY, FontWeight.Bold)
     }
 }
 
 /** Number of 1 s samples kept for the trend line. */
 const val HR_HISTORY = 120
-
-@Composable
-private fun ZoneBar(zone: Int?) {
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        for (z in 1..5) {
-            val on = zone != null && z <= zone
-            Box(
-                Modifier.weight(1f).height(10.dp).border(2.dp, Hud.Green.copy(alpha = if (on) Hud.SECONDARY else Hud.TERTIARY), RoundedCornerShape(5.dp))
-                    .then(if (zone == z) Modifier.background(Hud.Green.copy(alpha = Hud.SECONDARY), RoundedCornerShape(5.dp)) else Modifier),
-            )
-        }
-        Label(" Z${zone ?: "-"}", 18.sp, Hud.SECONDARY, FontWeight.Bold)
-    }
-}
 
 @Composable
 private fun Metric(icon: ImageVector, value: String) {
