@@ -40,7 +40,11 @@ class MainActivity : ComponentActivity() {
             override fun onAudioNoise(p0: Float) {}
         })
         controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0)).also { it.start() }
-        ptt = PushToTalk(controller::sendRaw)
+        ptt = PushToTalk(
+            controller::sendRaw,
+            hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
+            onError = { Log.w(TAG, "push-to-talk: $it") },
+        )
         val batteryManager = getSystemService(BatteryManager::class.java)
         setContent {
             var battery by androidx.compose.runtime.remember { mutableStateOf(batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)) }

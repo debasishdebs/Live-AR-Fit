@@ -18,11 +18,35 @@ object AudioChunks {
         (pcm.indices step chunkBytes).map { pcm.copyOfRange(it, minOf(it + chunkBytes, pcm.size)) }
 }
 
+/** Blocking PCM16 mono 16 kHz source; [read] returns bytes read, <= 0 on end/error. */
+interface PcmSource {
+    fun start()
+    fun read(buf: ByteArray): Int
+    fun close()
+}
+
+private class AudioRecordSource : PcmSource {
+    @SuppressLint("MissingPermission") // caller checks RECORD_AUDIO first
+    private val rec: AudioRecord = run {
+        val min = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        AudioRecord(MediaRecorder.AudioSource.MIC, 16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, 6_400))
+    }.also { if (it.state != AudioRecord.STATE_INITIALIZED) { it.release(); error("AudioRecord not initialized") } }
+    override fun start() = rec.startRecording()
+    override fun read(buf: ByteArray) = rec.read(buf, 0, buf.size)
+    override fun close() { runCatching { rec.stop() }; rec.release() }
+}
+
 /**
  * Tap-to-talk on the glasses: records with the glasses' own mic (the CXR-L stream is silent —
  * spec §2.1), stops on VAD or [maxMs], streams 100 ms chunks to the phone.
+ * [onError] is called (from the recording thread) when the mic can't be used; nothing is sent then.
  */
-class PushToTalk(private val sendRaw: (String, String) -> Unit) {
+class PushToTalk(
+    private val sendRaw: (String, String) -> Unit,
+    private val hasPermission: () -> Boolean = { true },
+    private val onError: (String) -> Unit = {},
+    private val sourceFactory: () -> PcmSource = { AudioRecordSource() },
+) {
     private val _recording = MutableStateFlow(false)
     val recording: StateFlow<Boolean> = _recording
     @Volatile private var stopRequested = false
@@ -31,30 +55,33 @@ class PushToTalk(private val sendRaw: (String, String) -> Unit) {
 
     fun stop() { stopRequested = true }
 
-    @SuppressLint("MissingPermission") // RECORD_AUDIO granted at install via adb / first-run prompt
     fun start(maxMs: Int = 6_000) {
         if (_recording.value) return
+        if (!hasPermission()) { onError("RECORD_AUDIO not granted"); return }
         _recording.value = true
         stopRequested = false
-        sendRaw(GlassesChannels.LISTEN, "{}")
         thread(name = "ptt") {
-            val min = AudioRecord.getMinBufferSize(16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val rec = AudioRecord(MediaRecorder.AudioSource.MIC, 16_000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, 6_400))
-            val vad = EnergyVad(maxMs = maxMs)
-            val chunk = ByteArray(3_200)
+            var source: PcmSource? = null
+            var listenSent = false
             try {
-                rec.startRecording()
+                source = sourceFactory()
+                source.start()
+                sendRaw(GlassesChannels.LISTEN, "{}")
+                listenSent = true
+                val vad = EnergyVad(maxMs = maxMs)
+                val chunk = ByteArray(3_200)
                 while (!stopRequested) {
-                    val n = rec.read(chunk, 0, chunk.size)
+                    val n = source.read(chunk)
                     if (n <= 0) break
                     val bytes = chunk.copyOf(n)
                     sendRaw(GlassesChannels.AUDIO, AudioChunks.encode(bytes))
                     if (vad.feed(bytes) != VadDecision.Continue) break
                 }
+            } catch (e: Exception) {
+                onError("Mic unavailable: ${e.message}")
             } finally {
-                runCatching { rec.stop() }
-                rec.release()
-                sendRaw(GlassesChannels.LISTEN_END, "{}")
+                runCatching { source?.close() }
+                if (listenSent) runCatching { sendRaw(GlassesChannels.LISTEN_END, "{}") }
                 _recording.value = false
             }
         }
