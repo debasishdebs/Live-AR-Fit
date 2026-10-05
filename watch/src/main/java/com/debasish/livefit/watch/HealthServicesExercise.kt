@@ -20,14 +20,16 @@ import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.sync.BackendUpdate
 import com.debasish.livefit.sync.ExerciseBackend
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.guava.await
 
 /** Health Services implementation of [ExerciseBackend] (spec §5.1). */
 class HealthServicesExercise(context: Context) : ExerciseBackend {
     private val app = context.applicationContext
     private val client = HealthServices.getClient(app).exerciseClient
-    override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 64)
+    private val queue = Channel<BackendUpdate>(Channel.UNLIMITED) // never drops an Ended
+    override val updates = queue.receiveAsFlow()
 
     // Cumulative totals arrive in separate updates from HR; keep the latest of each.
     private var steps = 0; private var km = 0.0; private var kcal = 0.0; private var speed: Double? = null
@@ -84,7 +86,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             m.getData(DataType.CALORIES_TOTAL)?.total?.let { kcal = it }
             m.getData(DataType.SPEED).lastOrNull()?.value?.let { speed = it * 3.6 }
             val hr = m.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value?.toInt()
-            updates.tryEmit(BackendUpdate.Reading(Sample(System.currentTimeMillis(), hr, steps, km, kcal, speed)))
+            queue.trySend(BackendUpdate.Reading(Sample(System.currentTimeMillis(), hr, steps, km, kcal, speed)))
             val st = update.exerciseStateInfo
             if (st.state.isEnded) {
                 val by = when (st.endReason) {
@@ -92,7 +94,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
                     ExerciseEndReason.AUTO_END_SUPERSEDED -> EndReason.OtherApp
                     else -> EndReason.System
                 }
-                updates.tryEmit(BackendUpdate.Ended(by))
+                queue.trySend(BackendUpdate.Ended(by))
             }
         }
         override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) {}

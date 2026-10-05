@@ -20,7 +20,10 @@ import java.io.File
 object WatchRuntime {
     const val TAG = "LiveFitWatch"
     /** Main.immediate: the recorder and controller assume this single-threaded dispatcher, so everything must use it. */
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "uncaught in WatchRuntime.scope", e) },
+    )
     private lateinit var app: Context
     lateinit var recorder: WatchSessionRecorder; private set
     lateinit var controller: WatchExerciseController; private set

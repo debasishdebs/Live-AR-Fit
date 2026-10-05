@@ -15,9 +15,13 @@ class GpsPreferences(private val file: File) {
     fun set(type: WorkoutType, on: Boolean) {
         if (map[type] == on) return
         map[type] = on
-        file.parentFile?.mkdirs()
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(Wire.encode(map.toMap()))
-        tmp.renameTo(file)
+        try { // a failed write only loses the offline GPS default; it must never break a start
+            file.parentFile?.mkdirs()
+            val tmp = File(file.path + ".tmp")
+            tmp.writeText(Wire.encode(map.toMap()))
+            tmp.renameTo(file)
+        } catch (e: java.io.IOException) {
+            java.util.logging.Logger.getLogger("GpsPreferences").warning("gps.json write failed: $e")
+        }
     }
 }

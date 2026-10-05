@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -65,6 +66,8 @@ class WatchExerciseController(
     /** Set while a user stop waits for Health Services' final update. */
     private var stopping: CompletableDeferred<Unit>? = null
     private var stopAtMs = 0L
+    /** The in-flight stop; a concurrent stop awaits it and returns the same outcome. */
+    private var stopOutcome: CompletableDeferred<Boolean>? = null
 
     val activeSessionId: String? get() = recorder.sessionId?.takeIf { !recorder.isFinalized }
 
@@ -130,7 +133,12 @@ class WatchExerciseController(
     }
 
     /** Shared by hub and offline starts: permission → other app → Health Services → recording. */
-    private suspend fun startExercise(sessionId: () -> String, type: WorkoutType, force: Boolean, gps: Boolean): ExerciseError? {
+    private suspend fun startExercise(sessionId: () -> String, type: WorkoutType, force: Boolean, gps: Boolean): ExerciseError? =
+        try { doStartExercise(sessionId, type, force, gps) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { ExerciseError.Internal(e.message ?: e.javaClass.simpleName) }
+
+    private suspend fun doStartExercise(sessionId: () -> String, type: WorkoutType, force: Boolean, gps: Boolean): ExerciseError? {
         val missing = backend.missingPermissions()
         if (missing.isNotEmpty()) return ExerciseError.PermissionMissing(missing)
         if (!force) backend.otherAppTracking()?.let { return ExerciseError.OtherAppTracking(it) }
@@ -171,13 +179,29 @@ class WatchExerciseController(
      * the final delta. If end() fails nothing is finalized and the workout keeps running.
      */
     suspend fun localStop(): Boolean {
+        stopOutcome?.let { return it.await() } // a stop is already in progress: share its outcome
         if (activeSessionId == null) return false
-        if (stopping != null) return true // a stop from another device is already in progress
+        val outcome = CompletableDeferred<Boolean>()
+        stopOutcome = outcome
+        val ok = try { doStop() } catch (e: Throwable) { outcome.completeExceptionally(e); stopOutcome = null; throw e }
+        outcome.complete(ok)
+        stopOutcome = null
+        return ok
+    }
+
+    private suspend fun doStop(): Boolean {
+        val id = activeSessionId ?: return false
         val waiter = CompletableDeferred<Unit>()
         stopAtMs = clock.nowMs()
         stopping = waiter
         try {
-            if (!backend.end()) return false
+            if (!backend.end()) {
+                // end() failed: if the exercise is in fact gone, finalize instead of leaving a zombie session.
+                if (backend.reattach(recorder.assembler?.lastSample()) != false) return false
+                recorder.event(SessionEvent.Stopped(stopAtMs, EndReason.System), final = true)
+                runCatching { sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)) }
+                return true
+            }
             withTimeoutOrNull(endTimeoutMs) { waiter.await() } // no ENDED update in time: end() itself succeeded
         } finally {
             stopping = null
@@ -193,7 +217,9 @@ class WatchExerciseController(
     suspend fun recover() {
         val id = activeSessionId ?: return
         detector.reset(alreadyReported = recorder.assembler?.snapshot()?.detectedType)
-        repeat(3) {
+        // Health Services not reachable (null): keep retrying with back-off until it answers.
+        var attempt = 0
+        while (true) {
             when (backend.reattach(recorder.assembler?.lastSample())) {
                 true -> return
                 false -> {
@@ -201,10 +227,14 @@ class WatchExerciseController(
                     runCatching { sendState(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)) }
                     return
                 }
-                null -> delay(5_000) // Health Services not reachable yet; leave the session as is after 3 tries
+                null -> delay(RECOVER_BACKOFF_MS[minOf(attempt++, RECOVER_BACKOFF_MS.lastIndex)])
             }
+            if (activeSessionId != id) return // finished meanwhile (stop, or ended by another app)
         }
     }
 
-    companion object { const val SYNCING_PREVIOUS = "Watch is still saving the previous workout — try again in a moment" }
+    companion object {
+        private val RECOVER_BACKOFF_MS = listOf(5_000L, 10_000L, 30_000L, 60_000L)
+        const val SYNCING_PREVIOUS = "Watch is still saving the previous workout — try again in a moment"
+    }
 }

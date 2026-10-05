@@ -9,6 +9,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 
 /** Wakes the watch app for phone messages, even after process death (verified in spikes). */
 class PhoneCommandListener : WearableListenerService() {
@@ -24,10 +25,16 @@ class PhoneCommandListener : WearableListenerService() {
         }
         if (Wire.versionOf(text) != PROTOCOL_VERSION) { WatchClient.onOutdated(); return }
         WatchRuntime.scope.launch {
-            when (event.path) {
-                WatchPaths.EXERCISE_REQ -> WatchRuntime.controller.handle(Wire.decode<ExerciseRequest>(text))
-                WatchPaths.ACK -> WatchRuntime.recorder.onAck(Wire.decode<DeltaAck>(text))
-                WatchPaths.STATE -> WatchClient.onFrame(text)
+            try {
+                when (event.path) {
+                    WatchPaths.EXERCISE_REQ -> WatchRuntime.controller.handle(Wire.decode<ExerciseRequest>(text))
+                    WatchPaths.ACK -> WatchRuntime.recorder.onAck(Wire.decode<DeltaAck>(text))
+                    WatchPaths.STATE -> WatchClient.onFrame(text)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e(WatchRuntime.TAG, "bad ${event.path} message", e)
             }
         }
     }

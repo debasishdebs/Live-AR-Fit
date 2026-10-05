@@ -73,8 +73,13 @@ class WatchSessionRecorder(
     private suspend fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
         val h = newest?.takeIf { it.header.finalSeq == null } ?: return
         val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final)
-        h.buffer.put(d)
-        h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null).also { h.buffer.writeHeader(it) }
+        h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null)
+        try { // disk trouble must not stop tracking: keep the delta in memory and send it
+            h.buffer.put(d)
+            h.buffer.writeHeader(h.header)
+        } catch (e: java.io.IOException) {
+            java.util.logging.Logger.getLogger("WatchSessionRecorder").warning("buffer write failed: $e")
+        }
         h.assembler.add(d)
         if (h === held.first()) trySend(d) // unreachable phone, or an older session first: stays buffered
     }

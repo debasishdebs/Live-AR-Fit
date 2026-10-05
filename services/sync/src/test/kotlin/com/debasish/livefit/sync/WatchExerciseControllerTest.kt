@@ -14,6 +14,7 @@ import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -36,22 +37,27 @@ class WatchExerciseControllerTest {
         var endOk = true
         /** What reattach() answers after "process death": true = our exercise still runs, false = gone, null = unknown. */
         var reattachAnswer: Boolean? = true
+        /** Consumed first, one per reattach call, before [reattachAnswer]. */
+        val reattachScript = ArrayDeque<Boolean?>()
+        var throwOnOther = false
+        var endDelayMs = 0L
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
-        override suspend fun otherAppTracking() = other
+        override suspend fun otherAppTracking(): String? { if (throwOnOther) error("hs down"); return other }
         override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; return true }
         override suspend fun pause(): Boolean { calls += "pause"; return pauseOk }
         override suspend fun resume(): Boolean { calls += "resume"; return true }
         override suspend fun end(): Boolean {
             calls += "end"
+            kotlinx.coroutines.delay(endDelayMs)
             if (endOk) { // Health Services delivers the last metrics together with the ENDED state
                 updates.emit(BackendUpdate.Reading(Sample(500, hr = 99, stepsTotal = 42)))
                 updates.emit(BackendUpdate.Ended(EndReason.User))
             }
             return endOk
         }
-        override suspend fun reattach(last: Sample?): Boolean? { calls += "reattach:${last?.stepsTotal}"; return reattachAnswer }
+        override suspend fun reattach(last: Sample?): Boolean? { calls += "reattach:${last?.stepsTotal}"; return if (reattachScript.isNotEmpty()) reattachScript.removeFirst() else reattachAnswer }
     }
 
     private val results = mutableListOf<ExerciseResult>()
@@ -235,5 +241,46 @@ class WatchExerciseControllerTest {
         c.handle(req("r3", "b", ExerciseOp.Start(WorkoutType.Walk)))
         assertEquals(ExerciseError.Internal(WatchExerciseController.SYNCING_PREVIOUS), results.last().error)
         assertEquals(1, b.calls.count { it.startsWith("start") })
+    }
+
+    @Test fun backendExceptionBecomesInternalError() = runTest {
+        val backend = FakeBackend().apply { throwOnOther = true }
+        val (_, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        assertIs<ExerciseError.Internal>(results.last().error)
+        assertIs<ExerciseError.Internal>(c.localStart(WorkoutType.Walk))
+        assertNull(c.activeSessionId)
+    }
+
+    @Test fun recoverKeepsRetryingUntilHealthServicesAnswers() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        val (b2, c2) = rig(FakeBackend().apply { reattachScript += listOf(null, null, false) }, root); runCurrent()
+        c2.recover()
+        assertEquals(3, b2.calls.size)
+        assertTrue(sent.last().final)
+        assertEquals(ExerciseStateReport(sessionId = "s", state = ExerciseState.Ended, endedBy = EndReason.System), states.single())
+        assertNull(c2.activeSessionId)
+    }
+
+    @Test fun failedEndWithExerciseGoneFinalizesAsSystem() = runTest {
+        val backend = FakeBackend().apply { endOk = false; reattachAnswer = false }
+        val (_, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        assertTrue(c.localStop())
+        assertTrue(sent.last().final)
+        assertEquals(EndReason.System, states.single().endedBy)
+    }
+
+    @Test fun concurrentStopsShareTheOutcome() = runTest {
+        val backend = FakeBackend().apply { endOk = false; endDelayMs = 100 }
+        val (b, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        val a = async { c.localStop() }
+        val b2 = async { c.localStop() }
+        assertEquals(listOf(false, false), listOf(a.await(), b2.await()))
+        assertEquals(1, b.calls.count { it == "end" }, "second stop awaited the first")
+        assertEquals("s", c.activeSessionId)
     }
 }
