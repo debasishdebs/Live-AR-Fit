@@ -13,7 +13,7 @@ enum class WorkoutType(val label: String) {
 }
 
 @Serializable
-enum class WorkoutPhase { Idle, Starting, Active, Paused, Stopping, Summary }
+enum class WorkoutPhase { Idle, Starting, Active, Paused, Syncing, Stopping, Summary }
 
 /** Latest live readings from whichever wearable source is active. Null = not available yet. */
 @Serializable
@@ -29,6 +29,8 @@ data class Metrics(
 data class WorkoutSnapshot(
     val phase: WorkoutPhase = WorkoutPhase.Idle,
     val type: WorkoutType = WorkoutType.Walk,
+    /** Set once the hub has created (or adopted) the session. */
+    val sessionId: String? = null,
     /** Only set when [type] is Auto. */
     val detectedType: WorkoutType? = null,
     val elapsedMs: Long = 0,
@@ -63,3 +65,6 @@ fun formatElapsed(ms: Long): String {
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
+
+/** "Z1".."Z5"; "–" below zone 1 or when unknown (approved HUD wording). */
+fun zoneLabel(zone: Int?): String = if (zone == null || zone < 1) "–" else "Z$zone"

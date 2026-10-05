@@ -62,6 +62,8 @@ class ServiceGraph private constructor(
             Command.PreviousTrack -> music.previous()
             Command.LikeTrack -> music.toggleLike()
             is Command.Volume -> music.setVolume(music.volume.value + if (command.up) 0.1f else -0.1f)
+            is Command.SetVolume -> music.setVolume(command.level)
+            is Command.Answer -> Unit // wired in Task 12
         }
         flash(describe(command))
     }
@@ -141,6 +143,8 @@ class ServiceGraph private constructor(
             Command.PreviousTrack -> "Previous song"
             Command.LikeTrack -> "Liked"
             is Command.Volume -> if (command.up) "Volume up" else "Volume down"
+            is Command.SetVolume -> "Volume ${(command.level * 100).toInt()}%"
+            is Command.Answer -> if (command.yes) "Confirmed" else "Cancelled"
         }
     }
 }
