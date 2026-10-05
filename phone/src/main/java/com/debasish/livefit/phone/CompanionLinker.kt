@@ -52,7 +52,7 @@ object CompanionLinker {
         val id = prefs.getInt(kind.name, -1).takeIf { it >= 0 } ?: return false
         context.getSystemService(CompanionDeviceManager::class.java).disassociate(id)
         prefs.edit().remove(kind.name).apply()
-        present -= id
+        presence.remove(id)
         return true
     }
 
