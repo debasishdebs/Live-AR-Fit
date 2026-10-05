@@ -2,6 +2,7 @@ package com.debasish.livefit.services.workout
 
 import com.debasish.livefit.model.DeltaAck
 import com.debasish.livefit.model.EndReason
+import com.debasish.livefit.model.ExerciseError
 import com.debasish.livefit.model.ExerciseOp
 import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.ExerciseResult
@@ -25,7 +26,10 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** Demo watch: same protocol as the real one, Fake provenance, plausible HR/cadence curves. */
+/**
+ * Demo watch: same protocol as the real one, Fake provenance, plausible HR/cadence curves.
+ * Must be used from a single-threaded scope (the hub's Main.immediate scope); state is unsynchronized by design.
+ */
 class SimulatedWatchGateway(
     private val scope: CoroutineScope,
     private val clock: Clock,
@@ -45,12 +49,24 @@ class SimulatedWatchGateway(
     override suspend fun ack(ack: DeltaAck) = Unit
 
     override suspend fun send(request: ExerciseRequest) {
-        when (val op = request.op) {
+        val op = request.op
+        if (op !is ExerciseOp.Start && request.sessionId != sessionId) {
+            results.emit(
+                ExerciseResult(
+                    requestId = request.requestId, sessionId = request.sessionId, ok = false,
+                    error = ExerciseError.WrongSession(sessionId),
+                    state = when { sessionId == null -> ExerciseState.Idle; paused -> ExerciseState.Paused; else -> ExerciseState.Active },
+                    activeSessionId = sessionId,
+                ),
+            )
+            return
+        }
+        when (op) {
             is ExerciseOp.Start -> {
+                ticker?.cancel()
                 sessionId = request.sessionId; seq = 0; paused = false; steps = 0.0; km = 0.0; kcal = 0.0; t = 0
                 reply(request, ExerciseState.Active)
                 emit(events = listOf(SessionEvent.Started(clock.nowMs(), op.type)))
-                ticker?.cancel()
                 ticker = scope.launch { while (true) { delay(tickMs); if (!paused) tick(op.type) } }
             }
             ExerciseOp.Pause -> { paused = true; reply(request, ExerciseState.Paused); emit(events = listOf(SessionEvent.Paused(clock.nowMs()))) }
@@ -58,7 +74,7 @@ class SimulatedWatchGateway(
             ExerciseOp.Stop -> {
                 ticker?.cancel()
                 reply(request, ExerciseState.Ended)
-                if (request.sessionId == sessionId) emit(events = listOf(SessionEvent.Stopped(clock.nowMs(), EndReason.User)), final = true)
+                emit(events = listOf(SessionEvent.Stopped(clock.nowMs(), EndReason.User)), final = true)
                 sessionId = null
             }
         }
