@@ -37,8 +37,9 @@ class HudController(private val scope: CoroutineScope, private val bridge: CXRSe
     private val clock = Clock { System.currentTimeMillis() }
     private val liveness = LivenessMonitor(clock)
     private val startedAt = clock.nowMs()
-    private var everReceived = false
-    private var outdated = false
+    // Written from CXR bridge callback threads, read from the coroutine refresh loop.
+    @Volatile private var everReceived = false
+    @Volatile private var outdated = false
 
     private val _frame = MutableStateFlow<StateFrame?>(null)
     val frame: StateFlow<StateFrame?> = _frame
@@ -48,7 +49,7 @@ class HudController(private val scope: CoroutineScope, private val bridge: CXRSe
     val connection: StateFlow<HudConnection> = _connection
     private val _hrHistory = MutableStateFlow<List<Int>>(emptyList())
     val hrHistory: StateFlow<List<Int>> = _hrHistory
-    private var lastSampleSecond = -1L
+    @Volatile private var lastSampleSecond = -1L
 
     fun start() {
         bridge.subscribe(GlassesChannels.STATE, CXRServiceBridge.MsgCallback { _, caps, _ -> onState(caps) })

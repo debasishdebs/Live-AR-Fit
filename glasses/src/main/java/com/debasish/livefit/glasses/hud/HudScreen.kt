@@ -96,7 +96,11 @@ private val WorkoutType.hudIcon: ImageVector
     }
 
 
-sealed interface HudOverlay { data object None : HudOverlay }
+sealed interface HudOverlay {
+    data object None : HudOverlay
+    /** Shown the instant the user taps, before the phone's frame reports [VoiceState.Listening]. */
+    data object LocalListening : HudOverlay
+}
 
 @Composable
 fun HudScreen(
@@ -123,8 +127,10 @@ fun HudScreen(
                     phase == WorkoutPhase.Summary -> SummaryCard(frame)
                     else -> Ready(frame, glassesBattery)
                 }
-                if (frame != null) {
-                    val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
+                val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
+                if (overlay == HudOverlay.LocalListening) {
+                    Listening(band, VoiceState.Listening)
+                } else if (frame != null) {
                     when {
                         frame.voice != VoiceState.Idle -> Listening(band, frame.voice)
                         frame.toast != null -> Toast(frame.toast!!, band)
