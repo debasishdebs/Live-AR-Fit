@@ -25,6 +25,9 @@ import com.debasish.livefit.services.WatchLinkService
 import com.debasish.livefit.services.glasses.CxrGlassesLink
 import com.debasish.livefit.services.glasses.FakeGlassesLink
 import com.debasish.livefit.services.music.FakeMusicService
+import com.debasish.livefit.services.music.MusicAction
+import com.debasish.livefit.services.music.WorkoutMusicPolicy
+import com.debasish.livefit.services.music.YtmMediaSessionService
 import com.debasish.livefit.services.voice.FakeVoiceService
 import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.debasish.livefit.services.watch.FakeWatchLink
@@ -62,7 +65,8 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val watchGateway: WatchExerciseGateway = dataLayer ?: SimulatedWatchGateway(scope, clock)
     val watch: WatchLinkService = dataLayer ?: FakeWatchLink()
     val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app) else FakeGlassesLink() // Task 14
-    val music: MusicService = FakeMusicService(scope)                            // Task 15
+    private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope) else null // Task 15
+    val music: MusicService = ytm ?: FakeMusicService(scope)
     // ---- end bindings ----
 
     val workout = HubWorkoutService(scope, watchGateway, history, confirm, clock,
@@ -113,6 +117,19 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
             combine(settings.hud, glasses.status) { hud, st -> hud to st.link }
                 .distinctUntilChanged()
                 .collect { (hud, link) -> if (link == LinkState.Connected) glasses.pushSettings(HudSettingsFrame(settings = hud)) }
+        }
+        // Workout music policy (settings -> Music).
+        scope.launch {
+            var previous = workout.snapshot.value.phase
+            workout.snapshot.collect { s ->
+                when (WorkoutMusicPolicy.actionFor(previous, s.phase, settings.musicOnStart.value, settings.pauseMusicOnStop.value)) {
+                    MusicAction.Resume -> music.play()
+                    MusicAction.PlaySearch -> ytm?.playSearch(settings.musicSearch.value) ?: music.play()
+                    MusicAction.Pause -> music.pause()
+                    MusicAction.None -> Unit
+                }
+                previous = s.phase
+            }
         }
         // ---- end link wiring ----
         // Connecting is owned by Task 14's authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.

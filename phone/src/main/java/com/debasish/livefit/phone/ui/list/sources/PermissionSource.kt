@@ -15,7 +15,7 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.core.content.ContextCompat
-import com.debasish.livefit.phone.MediaListener
+import com.debasish.livefit.services.music.MediaListener
 import com.debasish.livefit.phone.ui.list.ActionResult
 import com.debasish.livefit.phone.ui.list.ItemAction
 import com.debasish.livefit.phone.ui.list.ItemStatus

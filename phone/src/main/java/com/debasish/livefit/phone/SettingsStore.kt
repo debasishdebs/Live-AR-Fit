@@ -3,10 +3,10 @@ package com.debasish.livefit.phone
 import android.content.Context
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.Protocol
+import com.debasish.livefit.services.music.MusicOnStart
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
-enum class MusicOnStart { DontTouch, Resume, PlaySearch }
 
 /** Persists user settings (currently the glasses HUD layout) as JSON in SharedPreferences. */
 class SettingsStore(context: Context) {

@@ -18,7 +18,7 @@ android {
         // Which services are Live (see Bindings in ServiceGraph); later tasks flip these per service.
         buildConfigField("boolean", "LIVE_WATCH", "true")
         buildConfigField("boolean", "LIVE_GLASSES", "true")
-        buildConfigField("boolean", "LIVE_MUSIC", "false")
+        buildConfigField("boolean", "LIVE_MUSIC", "true")
         buildConfigField("boolean", "LIVE_VOICE", "false")
     }
     compileOptions {
