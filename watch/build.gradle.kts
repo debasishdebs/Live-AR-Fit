@@ -26,9 +26,9 @@ android {
 }
 
 dependencies {
-    implementation(project(":services:workout"))
-    implementation(project(":services:metrics"))
+    implementation(project(":services:sync"))
     implementation(project(":services:music"))
+    implementation("androidx.wear:wear-ongoing:1.0.0")
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.wear.compose:compose-material:1.4.0")
