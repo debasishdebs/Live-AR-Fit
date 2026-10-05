@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** Double-tap (back) answers No while a confirmation is pending instead of leaving the app. */
-    @Deprecated("Deprecated in Java")
+    @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
     override fun onBackPressed() {
         val answer = confirmInput.onBack()
         if (controller.frame.value?.confirmation != null && answer != null) controller.send(answer) else super.onBackPressed()
