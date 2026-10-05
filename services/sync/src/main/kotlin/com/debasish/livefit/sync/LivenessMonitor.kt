@@ -7,7 +7,7 @@ class LivenessMonitor(private val clock: Clock, private val timeoutMs: Long = 12
     private var lastFrameMs: Long? = null
     private var disconnected = true
 
-    fun onFrame() { lastFrameMs = clock.nowMs(); disconnected = false }
-    fun onTransportDisconnected() { disconnected = true }
-    fun isOnline(): Boolean = !disconnected && lastFrameMs?.let { clock.nowMs() - it < timeoutMs } == true
+    @Synchronized fun onFrame() { lastFrameMs = clock.nowMs(); disconnected = false }
+    @Synchronized fun onTransportDisconnected() { disconnected = true }
+    @Synchronized fun isOnline(): Boolean = !disconnected && lastFrameMs?.let { clock.nowMs() - it < timeoutMs } == true
 }

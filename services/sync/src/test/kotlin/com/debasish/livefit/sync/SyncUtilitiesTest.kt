@@ -37,6 +37,18 @@ class SyncUtilitiesTest {
         assertEquals(listOf(2_100L), sends)
     }
 
+    @Test fun sendFailureDoesNotStopTheBroadcaster() = runTest {
+        val sends = mutableListOf<Long>()
+        var calls = 0
+        val b = StateBroadcaster(backgroundScope, send = {
+            if (calls++ == 0) throw IllegalStateException("transient")
+            sends += testScheduler.currentTime
+        })
+        b.start(); runCurrent()
+        advanceTimeBy(10_001); runCurrent()
+        assertEquals(listOf(10_000L), sends)
+    }
+
     @Test fun pausedSessionWithHeartbeatsNeverLooksOffline() = runTest {
         val clock = Clock { testScheduler.currentTime }
         val m = LivenessMonitor(clock)
