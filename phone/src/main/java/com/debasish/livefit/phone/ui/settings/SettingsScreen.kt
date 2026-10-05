@@ -12,6 +12,7 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Straighten
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.HorizontalDivider
@@ -61,7 +62,7 @@ fun SettingsScreen(
     if (confirmClear) AlertDialog(
         onDismissRequest = { confirmClear = false },
         title = { Text("Clear history?") },
-        text = { Text("All workouts stored on this phone are deleted. Health Connect copies are not affected.") },
+        text = { Text("All workouts stored on this phone are deleted.") },
         confirmButton = { TextButton(onClick = { confirmClear = false; scope.launch { services.history.clearAll() } }) { Text("Clear") } },
         dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
     )
@@ -87,13 +88,15 @@ fun SettingsScreen(
         SectionLabel("Workout")
         Group {
             ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Run, Cycle, Auto", onClick = { services.settings.setGpsOutdoors(!gps) },
-                trailing = { Switch(gps, { services.settings.setGpsOutdoors(it) }) })
+                trailing = { Switch(gps, null) })
         }
         SectionLabel("Data")
         Group { ChipRow(Icons.Rounded.DeleteSweep, LiveFitColors.ChipCoral, "Clear history", "Removes all workouts on this phone", { confirmClear = true }) }
         SectionLabel("Advanced")
         Group {
             if (BuildConfig.DEBUG) { ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Developer tools", "Spike console", onDeveloper); Divider() }
+            ChipRow(Icons.Rounded.Shield, LiveFitColors.ChipCoral, "Permissions", null, { onNavigate("permissions") })
+            Divider()
             ChipRow(Icons.Rounded.Info, LiveFitColors.ChipRose, "About", "Rokid LiveFit 0.1", { onNavigate("about") })
         }
     }

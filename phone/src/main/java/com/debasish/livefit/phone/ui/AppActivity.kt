@@ -30,6 +30,8 @@ import com.debasish.livefit.phone.services
 import com.debasish.livefit.phone.ui.linked.LinkedGlassesScreen
 import com.debasish.livefit.phone.ui.linked.LinkedMusicScreen
 import com.debasish.livefit.phone.ui.linked.LinkedWatchScreen
+import com.debasish.livefit.phone.ui.components.HubConfirmationDialog
+import com.debasish.livefit.phone.ui.components.OutdatedBanner
 import com.debasish.livefit.phone.ui.music.MusicScreen
 import com.debasish.livefit.phone.ui.settings.AboutScreen
 import com.debasish.livefit.phone.ui.settings.UnitsScreen
@@ -38,6 +40,7 @@ import com.debasish.livefit.phone.ui.home.HomeScreen
 import com.debasish.livefit.phone.ui.home.PillNav
 import com.debasish.livefit.phone.ui.home.Tab
 import androidx.navigation.compose.currentBackStackEntryAsState
+import com.debasish.livefit.phone.ui.history.SessionDetailScreen
 import com.debasish.livefit.phone.ui.list.ListScreen
 import com.debasish.livefit.phone.ui.list.ListSources
 import com.debasish.livefit.phone.ui.settings.SettingsScreen
@@ -66,7 +69,7 @@ class AppActivity : ComponentActivity() {
                 val showNav = route != "workout"
                 val tab = when {
                     route == "home" -> Tab.Home
-                    route.startsWith("list/") && currentSource == ListSources.WORKOUTS -> Tab.Activity
+                    (route.startsWith("list/") && currentSource == ListSources.WORKOUTS) || route.startsWith("session/") -> Tab.Activity
                     route == "music" -> Tab.Music
                     route == "settings" || route == "hud" || route == "units" || route == "about" || route.startsWith("linked/") || route.startsWith("list/") -> Tab.Settings
                     else -> null
@@ -98,7 +101,7 @@ class AppActivity : ComponentActivity() {
                         }
                         composable("workout") { WorkoutScreen(services, onBack = { nav.popBackStack() }, onMusic = { nav.navigate("music") }) }
                         composable("music") { MusicScreen(services, onBack = { nav.popBackStack() }) }
-                        composable("linked/glasses") { LinkedGlassesScreen(services, onBack = { nav.popBackStack() }, onDisplay = { nav.navigate("hud") }, toast = toast) }
+                        composable("linked/glasses") { LinkedGlassesScreen(services, onBack = { nav.popBackStack() }, onDisplay = { nav.navigate("hud") }, onPermissions = { nav.navigate(listRoute(ListSources.PERMISSIONS, filter = null)) }, toast = toast) }
                         composable("linked/watch") { LinkedWatchScreen(services, onBack = { nav.popBackStack() }, toast = toast) }
                         composable("linked/music") { LinkedMusicScreen(services, onBack = { nav.popBackStack() }) }
                         composable("hud") {
@@ -135,13 +138,19 @@ class AppActivity : ComponentActivity() {
                                 filterJson = entry.arguments?.getString("filter"),
                                 onBack = { nav.popBackStack() },
                                 onMessage = toast,
+                                onOpen = { nav.navigate("session/$it") },
                             )
+                        }
+                        composable("session/{id}") { e ->
+                            SessionDetailScreen(services, e.arguments?.getString("id").orEmpty(), onBack = { nav.popBackStack() })
                         }
                     }
                     if (showNav) {
                         PillNav(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp), tab, goTab)
                     }
                     SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
+                    HubConfirmationDialog(services)
+                    OutdatedBanner(services, Modifier.align(Alignment.TopCenter))
                 }
             }
         }

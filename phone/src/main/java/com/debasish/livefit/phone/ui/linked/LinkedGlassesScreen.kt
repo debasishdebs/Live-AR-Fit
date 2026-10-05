@@ -21,7 +21,14 @@ import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -48,10 +55,23 @@ import com.debasish.livefit.phone.ui.theme.LiveFitColors
 import com.debasish.livefit.services.glasses.AuthActivity
 
 @Composable
-fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: () -> Unit, toast: (String) -> Unit) {
+fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: () -> Unit, onPermissions: () -> Unit, toast: (String) -> Unit) {
     val activity = LocalContext.current as Activity
     val st by services.glasses.status.collectAsStateWithLifecycle()
     val frame by services.lastFrame.collectAsStateWithLifecycle()
+    var confirmUnpair by remember { mutableStateOf(false) }
+    if (confirmUnpair) AlertDialog(
+        onDismissRequest = { confirmUnpair = false },
+        title = { Text("Unpair glasses?") },
+        text = { Text("Android will stop waking LiveFit when the glasses are near. You can pair again at any time.") },
+        confirmButton = {
+            TextButton(onClick = {
+                confirmUnpair = false
+                toast(if (CompanionLinker.disassociate(activity, DeviceKind.Glasses)) "Glasses unpaired" else "Nothing to unpair (or Android 13+ required)")
+            }) { Text("Unpair") }
+        },
+        dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+    )
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
         ScreenHeader("Rokid glasses", onBack)
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
@@ -70,12 +90,18 @@ fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: (
                 ChipRow(Icons.Rounded.Refresh, LiveFitColors.ChipViolet, "Reconnect", "Opens LiveFit on the glasses", { services.glasses.connect() })
             }
         }
+        SectionLabel("Unpair")
+        SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+            Column {
+                ChipRow(Icons.Rounded.Shield, LiveFitColors.ChipCoral, "Permissions", "Notification access, Hi Rokid authorization", onPermissions)
+                HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
+                ChipRow(Icons.Rounded.LinkOff, LiveFitColors.ChipCoral, "Unpair", "Remove LiveFit's companion access to the glasses", { confirmUnpair = true })
+            }
+        }
         SectionLabel("Display")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", onDisplay)
         }
-        Text("Unpair: Android Settings → Connected devices → Rokid glasses → remove LiveFit's companion access.",
-            color = LiveFitColors.InkSoft, modifier = Modifier.padding(20.dp))
     }
 }
 

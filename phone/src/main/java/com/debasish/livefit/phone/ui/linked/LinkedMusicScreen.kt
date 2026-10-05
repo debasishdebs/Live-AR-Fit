@@ -59,7 +59,7 @@ fun LinkedMusicScreen(services: ServiceGraph, onBack: () -> Unit) {
         SectionLabel("When a workout stops")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             ChipRow(Icons.Rounded.Pause, LiveFitColors.ChipRose, "Pause music", null, { services.settings.setPauseMusicOnStop(!pauseOnStop) },
-                trailing = { Switch(pauseOnStop, services.settings::setPauseMusicOnStop) })
+                trailing = { Switch(pauseOnStop, null) })
         }
         Text("V2 adds Google sign-in here for playlists.", color = LiveFitColors.InkSoft, modifier = Modifier.padding(20.dp))
     }

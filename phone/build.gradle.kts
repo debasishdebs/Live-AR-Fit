@@ -19,7 +19,7 @@ android {
         buildConfigField("boolean", "LIVE_WATCH", "true")
         buildConfigField("boolean", "LIVE_GLASSES", "true")
         buildConfigField("boolean", "LIVE_MUSIC", "true")
-        buildConfigField("boolean", "LIVE_VOICE", "false")
+        buildConfigField("boolean", "LIVE_VOICE", "true")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -30,6 +30,8 @@ android {
 }
 
 dependencies {
+    testImplementation(kotlin("test"))
+    testImplementation("junit:junit:4.13.2")
     implementation(project(":core:services"))
     implementation(project(":services:workout"))
     implementation(project(":services:sync"))
@@ -39,6 +41,7 @@ dependencies {
     implementation(project(":services:watch-link"))
     implementation(project(":services:music"))
     implementation(project(":services:voice"))
+    implementation(project(":services:voice-android"))
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

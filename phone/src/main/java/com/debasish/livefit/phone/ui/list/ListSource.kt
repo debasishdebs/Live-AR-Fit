@@ -41,6 +41,7 @@ data class ItemAction(
 sealed interface ActionResult {
     data object Done : ActionResult
     data object Silent : ActionResult
+    data class Message(val text: String) : ActionResult
     data class Scheduled(val message: String) : ActionResult
     data class Failed(val message: String) : ActionResult
 }
@@ -54,6 +55,8 @@ interface ListSource {
     val searchHint: String
     /** Labels for the status filter chips and section headers. Empty = no grouping/filtering. */
     val statusLabels: Map<ItemStatus, String> get() = emptyMap()
+    /** False keeps the source's own order (e.g. newest-first history) and hides the A–Z toggle. */
+    val sortable: Boolean get() = true
     val doneSection: String get() = ""
     val actionSection: String get() = ""
     /** Trailing icon for [ItemStatus.ActionNeeded] rows. */
@@ -67,10 +70,10 @@ object ListSources {
     const val PERMISSIONS = "permissions"
     const val WORKOUTS = "workouts"
 
-    fun create(id: String, context: Context, services: ServiceGraph): ListSource = when (id) {
-        LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale)
+    fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
+        LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale, services::sttRefresh)
         PERMISSIONS -> PermissionSource(context)
-        WORKOUTS -> WorkoutHistorySource()
+        WORKOUTS -> WorkoutHistorySource(services.history, open)
         else -> error("Unknown list source: $id")
     }
 }

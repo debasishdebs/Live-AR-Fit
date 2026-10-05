@@ -29,6 +29,9 @@ import com.debasish.livefit.services.music.MusicAction
 import com.debasish.livefit.services.music.WorkoutMusicPolicy
 import com.debasish.livefit.services.music.YtmMediaSessionService
 import com.debasish.livefit.services.voice.FakeVoiceService
+import com.debasish.livefit.services.voice.LiveVoiceService
+import com.debasish.livefit.services.voice.android.AndroidOnDeviceStt
+import com.debasish.livefit.services.voice.android.PhoneMic
 import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.debasish.livefit.services.watch.FakeWatchLink
 import com.debasish.livefit.services.workout.HubWorkoutService
@@ -78,7 +81,17 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash)
 
     // ---- Voice binding (after the router, which it feeds) ----
-    val voice: VoiceService = FakeVoiceService(scope) { router.dispatchVoice(it) } // Task 16
+    private val stt: AndroidOnDeviceStt? = if (bindings.liveVoice) AndroidOnDeviceStt(app) else null
+    private lateinit var phoneMic: PhoneMic
+    val voice: VoiceService = if (stt != null) LiveVoiceService(
+        scope, stt,
+        locale = { settings.voiceLocale.value },
+        pendingConfirmationId = { confirm.pending.value?.id },
+        onCommand = { router.dispatchVoice(it) },
+        onAnswer = { id, yes -> confirm.answer(id, yes) },
+        toast = ::flash,
+        phoneMic = { phoneMic.record() },
+    ).also { v -> phoneMic = PhoneMic(app, { v }, ::flash) } else FakeVoiceService(scope) { router.dispatchVoice(it) }
     // ---- end voice binding ----
 
     private val _lastFrame = MutableStateFlow<StateFrame?>(null)
@@ -87,18 +100,33 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 
     fun markDirty() = broadcaster.markDirty()
 
+    fun sttRefresh() { stt?.let { s -> scope.launch { s.refresh() } } }
+
     /** Phone UI commands go through the same router (dedup id is fresh). */
     fun localCommand(command: Command) =
         router.dispatch(CommandEnvelope(id = UUID.randomUUID().toString(), origin = DeviceKind.Phone, command = command))
 
     fun start() {
         broadcaster.start()
+        stt?.let { s -> scope.launch { s.refresh() } }
         // Any state change -> push (coalesced).
         scope.launch {
             merge(workout.snapshot, music.nowPlaying, music.volume, voice.state, confirm.pending, toast, watch.status, glasses.status, router.outdated)
                 .collect { markDirty() }
         }
         scope.launch { workout.notices.collect(::flash) }
+        // Low-battery warning (spec §7): one toast per device per workout at <= 15 %.
+        scope.launch {
+            val warned = mutableSetOf<DeviceKind>()
+            lastFrame.collect { f ->
+                if (f == null) return@collect
+                if (f.workout.phase == com.debasish.livefit.model.WorkoutPhase.Idle) { warned.clear(); return@collect }
+                listOf(DeviceKind.Phone to f.devices.phone, DeviceKind.Watch to f.devices.watch, DeviceKind.Glasses to f.devices.glasses).forEach { (k, d) ->
+                    val pct = d.batteryPct ?: return@forEach
+                    if (pct <= 15 && warned.add(k)) flash("${k.name} battery low · $pct%")
+                }
+            }
+        }
         // ---- Link wiring: one block per device ----
         scope.launch { watch.commands.collect(router::dispatch) }
         dataLayer?.let { link -> scope.launch { link.outdated.collect { router.markOutdated(DeviceKind.Watch) } } }

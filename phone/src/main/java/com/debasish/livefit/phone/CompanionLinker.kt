@@ -40,6 +40,20 @@ object CompanionLinker {
         })
     }
 
+    /** True when an association for [kind] exists and can be removed from the app (API 33+). */
+    fun canUnpair(context: Context, kind: DeviceKind): Boolean =
+        Build.VERSION.SDK_INT >= 33 && context.getSharedPreferences("companion", 0).getInt(kind.name, -1) >= 0
+
+    fun disassociate(context: Context, kind: DeviceKind): Boolean {
+        if (Build.VERSION.SDK_INT < 33) return false
+        val prefs = context.getSharedPreferences("companion", 0)
+        val id = prefs.getInt(kind.name, -1).takeIf { it >= 0 } ?: return false
+        context.getSystemService(CompanionDeviceManager::class.java).disassociate(id)
+        prefs.edit().remove(kind.name).apply()
+        present -= id
+        return true
+    }
+
     /** Call at app start: re-arms presence observation for saved associations. */
     fun observePresence(context: Context) {
         val prefs = context.getSharedPreferences("companion", 0)

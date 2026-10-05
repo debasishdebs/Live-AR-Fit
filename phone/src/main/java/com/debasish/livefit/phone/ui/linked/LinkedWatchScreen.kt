@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.phone.CompanionLinker
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.ChipRow
@@ -36,6 +37,16 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
         ScreenHeader("Galaxy Watch", onBack)
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, st.name, "${st.link.name}${st.batteryPct?.let { " · $it%" } ?: ""}${st.detail?.let { " · $it" } ?: ""}", {}, trailing = {})
+        }
+        val reachable = st.link == LinkState.Connected
+        val installed = st.batteryPct != null
+        SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth().padding(top = 12.dp)) {
+            Column {
+                ChipRow(Icons.Rounded.Link, LiveFitColors.ChipSky, if (reachable) "Reachable" else "Unreachable", if (reachable) "Watch is connected" else (st.detail ?: "Watch is not connected"), {}, trailing = {})
+                HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
+                ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, if (installed) "Watch app installed" else "Watch app not found",
+                    if (installed) "Rokid LiveFit on the watch is responding" else "Install Rokid LiveFit on the watch, then open it once", {}, trailing = {})
+            }
         }
         SectionLabel("Link")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {

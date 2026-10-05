@@ -3,7 +3,7 @@ package com.debasish.livefit.phone.ui.list.sources
 import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudDownload
-import com.debasish.livefit.phone.speech.SpeechPacks
+import com.debasish.livefit.services.voice.android.SpeechPacks
 import com.debasish.livefit.phone.ui.list.ActionResult
 import com.debasish.livefit.phone.ui.list.ItemAction
 import com.debasish.livefit.phone.ui.list.ItemStatus
@@ -17,6 +17,7 @@ class LanguageSource(
     private val context: Context,
     private val voiceLocale: () -> String,
     private val onUseForVoice: (String) -> Unit,
+    private val onPackDownloaded: () -> Unit,
 ) : ListSource {
     override val title = "Languages"
     override val searchHint = "Search languages"
@@ -46,12 +47,12 @@ class LanguageSource(
     }
 
     override fun actionFor(item: ListItem): ItemAction? {
-        if (item.status == ItemStatus.Done) return ItemAction { onUseForVoice(item.id); ActionResult.Done }
+        if (item.status == ItemStatus.Done) return ItemAction { onUseForVoice(item.id); ActionResult.Message("Voice set to ${item.title}") }
         if (item.status != ItemStatus.ActionNeeded) return null
         // Google shows its own size dialog; no LiveFit confirm.
         return ItemAction(confirmTitle = null, blocking = true) { onProgress ->
             when (val r = SpeechPacks.download(context, item.id, onProgress)) {
-                SpeechPacks.Result.Success -> ActionResult.Done
+                SpeechPacks.Result.Success -> { onPackDownloaded(); ActionResult.Done }
                 SpeechPacks.Result.Scheduled -> ActionResult.Scheduled("Download scheduled. Google will finish it in the background, usually on Wi-Fi.")
                 is SpeechPacks.Result.Error -> ActionResult.Failed(r.message)
             }

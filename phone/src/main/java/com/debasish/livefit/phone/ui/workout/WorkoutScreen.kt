@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -99,8 +100,13 @@ fun WorkoutScreen(services: ServiceGraph, onBack: () -> Unit, onMusic: () -> Uni
             }
         }
 
-        if (s.phase != WorkoutPhase.Summary) {
-            Controls(
+        val pillModifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 24.dp)
+        when (s.phase) {
+            WorkoutPhase.Starting -> StatusPill(pillModifier, "Starting on your watch…")
+            WorkoutPhase.Syncing -> StatusPill(pillModifier, "Syncing watch data…")
+            WorkoutPhase.Stopping -> StatusPill(pillModifier, "Saving workout…")
+            WorkoutPhase.Summary -> Unit
+            else -> Controls(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 16.dp),
                 phase = s.phase,
                 voice = voice,
@@ -119,6 +125,15 @@ fun WorkoutScreen(services: ServiceGraph, onBack: () -> Unit, onMusic: () -> Uni
                 Text("  $it", color = Color.White, style = MaterialTheme.typography.titleMedium)
             }
         }
+    }
+}
+
+@Composable
+private fun StatusPill(modifier: Modifier, text: String) {
+    Row(modifier.clip(RoundedCornerShape(24.dp)).background(LiveFitColors.ChipSky.first).padding(horizontal = 18.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = LiveFitColors.ChipSky.second)
+        Text("  $text", color = LiveFitColors.ChipSky.second, style = MaterialTheme.typography.titleMedium)
     }
 }
 

@@ -1,26 +1,35 @@
 package com.debasish.livefit.phone.ui.list.sources
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.DirectionsBike
-import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
-import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.phone.ui.components.icon
+import com.debasish.livefit.phone.ui.history.HistoryFormat
+import com.debasish.livefit.phone.ui.list.ActionResult
 import com.debasish.livefit.phone.ui.list.ItemAction
 import com.debasish.livefit.phone.ui.list.ListItem
 import com.debasish.livefit.phone.ui.list.ListSource
+import com.debasish.livefit.services.HistoryStore
+import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 
-/** Mock-up history. The live version will read finished sessions from the workout store. */
-class WorkoutHistorySource : ListSource {
+/** Activity tab: LiveFit sessions only (owner decision), newest first. */
+class WorkoutHistorySource(private val history: HistoryStore, private val open: (String) -> Unit) : ListSource {
     override val title = "Activity"
     override val searchHint = "Search workouts"
+    override val sortable = false
 
-    override suspend fun load(filter: JSONObject?): List<ListItem> = listOf(
-        ListItem("w1", "Evening walk", "Today · 34:12 · ♥ 112 avg", icon = Icons.AutoMirrored.Rounded.DirectionsWalk, trailingText = "3.1 km"),
-        ListItem("w2", "Morning run", "Yesterday · 28:40 · ♥ 151 avg", icon = Icons.AutoMirrored.Rounded.DirectionsRun, trailingText = "4.9 km"),
-        ListItem("w3", "Cycle commute", "Fri · 41:05 · ♥ 128 avg", icon = Icons.AutoMirrored.Rounded.DirectionsBike, trailingText = "14.2 km"),
-        ListItem("w4", "Lunch walk", "Thu · 22:18 · ♥ 104 avg", icon = Icons.AutoMirrored.Rounded.DirectionsWalk, trailingText = "1.9 km"),
-        ListItem("w5", "Interval run", "Tue · 31:55 · ♥ 162 avg", icon = Icons.AutoMirrored.Rounded.DirectionsRun, trailingText = "5.6 km"),
-    )
+    override suspend fun load(filter: JSONObject?): List<ListItem> {
+        val now = System.currentTimeMillis()
+        return history.sessions.first().map { s ->
+            val badge = HistoryFormat.badge(s)
+            ListItem(
+                id = s.id,
+                title = HistoryFormat.title(s) + (badge?.let { " · $it" } ?: ""),
+                subtitle = HistoryFormat.subtitle(s, now),
+                icon = (s.detectedType ?: s.type).takeIf { it != WorkoutType.Auto }?.icon ?: s.type.icon,
+                trailingText = "%.1f km".format(s.distanceKm),
+            )
+        }
+    }
 
-    override fun actionFor(item: ListItem): ItemAction? = null
+    override fun actionFor(item: ListItem) = ItemAction { open(item.id); ActionResult.Silent }
 }
