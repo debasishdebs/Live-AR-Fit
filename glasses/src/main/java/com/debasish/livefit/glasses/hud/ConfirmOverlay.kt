@@ -25,7 +25,7 @@ import com.debasish.livefit.model.Confirmation
 
 /** Outlined ✓ Yes / ✕ No; highlight = brighter + thicker outline (monochrome rules, spec §6.3). */
 @Composable
-fun ConfirmOverlay(c: Confirmation, highlightYes: Boolean, listening: Boolean, modifier: Modifier = Modifier) {
+fun ConfirmOverlay(c: Confirmation, highlightYes: Boolean, listening: Boolean, micError: String?, modifier: Modifier = Modifier) {
     Column(
         modifier.background(Color.Black).border(2.dp, Hud.Green.copy(alpha = Hud.SECONDARY), RoundedCornerShape(16.dp)).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -36,7 +36,10 @@ fun ConfirmOverlay(c: Confirmation, highlightYes: Boolean, listening: Boolean, m
             Choice(Icons.Outlined.Check, c.yesLabel, selected = highlightYes)
             Choice(Icons.Outlined.Close, c.noLabel, selected = !highlightYes)
         }
-        if (listening) {
+        if (micError != null) {
+            Spacer(Modifier.height(8.dp))
+            Label(micError, 20.sp, Hud.SECONDARY)
+        } else if (listening) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Glyph(Icons.Outlined.Mic, 22.dp, Hud.SECONDARY)

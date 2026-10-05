@@ -6,6 +6,7 @@ import com.debasish.livefit.model.Confirmation
 /** Touchpad rules while a confirmation is shown (spec §6.3): swipe moves, tap confirms, back = No. */
 class ConfirmInput {
     private var current: Confirmation? = null
+    val hasPending: Boolean get() = current != null
     var highlightYes: Boolean = true
         private set
 

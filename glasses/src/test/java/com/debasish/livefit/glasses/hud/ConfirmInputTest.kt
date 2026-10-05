@@ -27,6 +27,18 @@ class ConfirmInputTest {
         assertEquals(Command.Answer("a", yes = false), i.onTap())
     }
 
+    @Test fun answerFollowsReplacedConfirmation() {
+        val i = ConfirmInput(); i.onConfirmation(c("a")); i.onSwipe()
+        i.onConfirmation(c("b"))
+        assertEquals(Command.Answer("b", yes = true), i.onTap())
+    }
+
+    @Test fun clearedConfirmationHasNoPending() {
+        val i = ConfirmInput(); i.onConfirmation(c("a")); i.onConfirmation(null)
+        assertFalse(i.hasPending)
+        assertNull(i.onTap())
+    }
+
     @Test fun backMeansNo() {
         val i = ConfirmInput(); i.onConfirmation(c("a"))
         assertEquals(Command.Answer("a", yes = false), i.onBack())

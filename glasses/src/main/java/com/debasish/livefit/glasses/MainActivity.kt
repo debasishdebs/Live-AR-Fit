@@ -65,16 +65,20 @@ class MainActivity : ComponentActivity() {
             val history by controller.hrHistory.collectAsStateWithLifecycle()
             val listening by ptt.recording.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
+                // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
+                ptt.stop()
+                localToast = null
                 if (confirmInput.onConfirmation(frame?.confirmation)) ptt.start(maxMs = 6_000) // auto mic for a spoken answer
                 highlightYes = confirmInput.highlightYes
             }
             androidx.compose.runtime.LaunchedEffect(localToast) {
-                if (localToast != null) { kotlinx.coroutines.delay(3_000); localToast = null }
+                // While a confirmation is shown the error stays inside it; the id effect clears it.
+                if (localToast != null && frame?.confirmation == null) { kotlinx.coroutines.delay(3_000); localToast = null }
             }
             val confirmation = frame?.confirmation
             val toastText = localToast
             val overlay = when {
-                confirmation != null -> HudOverlay.Confirm(confirmation, highlightYes, listening)
+                confirmation != null -> HudOverlay.Confirm(confirmation, highlightYes, listening, micError = toastText)
                 toastText != null -> HudOverlay.LocalToast(toastText)
                 listening -> HudOverlay.LocalListening
                 else -> HudOverlay.None
@@ -84,10 +88,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        val pending = controller.frame.value?.confirmation != null
+        val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
         when (keyCode) {
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER ->
-                if (pending) confirmInput.onTap()?.let { controller.send(it) } else ptt.toggle()
+                if (pending) confirmInput.onTap()?.let { controller.send(it); ptt.stop() } else ptt.toggle()
             // One swipe can emit several key events; debounce like the UPI app does.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 val now = System.currentTimeMillis()
@@ -105,8 +109,9 @@ class MainActivity : ComponentActivity() {
     /** Double-tap (back) answers No while a confirmation is pending instead of leaving the app. */
     @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
     override fun onBackPressed() {
+        confirmInput.onConfirmation(controller.frame.value?.confirmation)
         val answer = confirmInput.onBack()
-        if (controller.frame.value?.confirmation != null && answer != null) controller.send(answer) else super.onBackPressed()
+        if (answer != null) { controller.send(answer); ptt.stop() } else super.onBackPressed()
     }
 
     /** Never leave the mic open once the app is no longer in the foreground. */

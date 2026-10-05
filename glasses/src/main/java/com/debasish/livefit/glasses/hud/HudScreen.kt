@@ -103,7 +103,7 @@ sealed interface HudOverlay {
     data object LocalListening : HudOverlay
     /** Local (glasses-side) notice, e.g. push-to-talk failure. */
     data class LocalToast(val text: String) : HudOverlay
-    data class Confirm(val confirmation: Confirmation, val highlightYes: Boolean, val listening: Boolean) : HudOverlay
+    data class Confirm(val confirmation: Confirmation, val highlightYes: Boolean, val listening: Boolean, val micError: String? = null) : HudOverlay
 }
 
 @Composable
@@ -133,7 +133,7 @@ fun HudScreen(
                 }
                 val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
                 if (overlay is HudOverlay.Confirm) {
-                    ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, band)
+                    ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, overlay.micError, band)
                 } else if (overlay is HudOverlay.LocalToast) {
                     Toast(overlay.text, band)
                 } else if (overlay == HudOverlay.LocalListening) {
