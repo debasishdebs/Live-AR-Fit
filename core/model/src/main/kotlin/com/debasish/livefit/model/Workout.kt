@@ -37,6 +37,8 @@ data class WorkoutSnapshot(
     val metrics: Metrics = Metrics(),
     val avgHeartRate: Int? = null,
     val maxHeartRate: Int? = null,
+    /** Watch-clock time of the newest sample; used to measure end-to-end latency. */
+    val latestSampleMs: Long? = null,
 ) {
     /** The type to show the user: the detected one in Auto mode, else the chosen one. */
     val displayType: WorkoutType get() = if (type == WorkoutType.Auto) detectedType ?: WorkoutType.Walk else type

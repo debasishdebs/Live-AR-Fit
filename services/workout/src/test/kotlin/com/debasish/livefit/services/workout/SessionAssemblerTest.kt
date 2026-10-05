@@ -125,4 +125,10 @@ class SessionAssemblerTest {
         assertEquals(0L, s.startMs)
         assertEquals(9_000L, s.endMs)
     }
+
+    @Test fun snapshotCarriesLatestSampleTimeForLatencyMeasurement() {
+        val a = SessionAssembler("s")
+        a.add(delta(0, listOf(SessionEvent.Started(0, WorkoutType.Walk)), samples = listOf(Sample(1_000), Sample(2_500))))
+        assertEquals(2_500L, a.snapshot().latestSampleMs)
+    }
 }

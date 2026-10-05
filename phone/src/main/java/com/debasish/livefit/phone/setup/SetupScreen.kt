@@ -17,12 +17,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Shield
-import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -34,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.phone.CompanionLinker
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.IconChip
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
 import com.debasish.livefit.services.glasses.AuthActivity
@@ -53,14 +56,17 @@ import kotlinx.coroutines.launch
 @Composable
 fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     val activity = LocalContext.current as Activity
-    val flow = remember { SetupFlow() }
-    var step by remember { mutableStateOf(flow.step) }
+    var step by rememberSaveable { mutableStateOf(SetupStep.Welcome) }
+    val flow = remember { SetupFlow(step) }
     var progress by remember { mutableStateOf<Float?>(null) }
     var downloading by remember { mutableStateOf(false) }
     var voiceNote by remember { mutableStateOf<String?>(null) }
     var pairNote by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        // Ask for battery-optimization exemption only after the permission dialogs are dismissed.
+        activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
+    }
     fun go(skip: Boolean = false) {
         if (skip) flow.skip() else flow.next()
         step = flow.step; pairNote = null
@@ -74,12 +80,12 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().background(LiveFitColors.HeaderGradient).statusBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxSize().background(LiveFitColors.HeaderGradient).statusBarsPadding().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         LinearProgressIndicator(progress = { (step.ordinal + 1) / SetupStep.entries.size.toFloat() }, modifier = Modifier.fillMaxWidth(), color = LiveFitColors.Mint)
         Spacer(Modifier.height(48.dp))
         val (icon, title, body) = when (step) {
             SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Rokid LiveFit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
-            SetupStep.Glasses -> Triple(Icons.Rounded.Visibility, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
+            SetupStep.Glasses -> Triple(GlassesIcon, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else "")
             SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Galaxy Watch", "Pair the watch, then open Rokid LiveFit on the watch once and tap Allow for heart-rate sensors." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Galaxy Wearable instead." else "")
@@ -95,7 +101,6 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         when (step) {
             SetupStep.Welcome -> Button(onClick = {
                 permissions.launch(setupPermissions(Build.VERSION.SDK_INT))
-                activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
             }) { Text("Grant access") }
             SetupStep.Glasses -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = { AuthActivity.launch(activity) }) { Text("Authorize") }

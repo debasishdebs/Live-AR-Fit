@@ -24,7 +24,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.debasish.livefit.phone.SpikeActivity
 import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.services
 import com.debasish.livefit.phone.ui.linked.LinkedGlassesScreen
@@ -124,7 +123,7 @@ class AppActivity : ComponentActivity() {
                                 services = services,
                                 onBack = { nav.popBackStack() },
                                 onLanguages = { nav.navigate(listRoute(ListSources.LANGUAGES, filter = null)) },
-                                onDeveloper = { startActivity(Intent(this@AppActivity, SpikeActivity::class.java)) },
+                                onDeveloper = { startActivity(Intent().setClassName(packageName, "com.debasish.livefit.phone.SpikeActivity")) },
                                 onNavigate = { route ->
                                     nav.navigate(if (route == "permissions") listRoute(ListSources.PERMISSIONS, filter = null) else route)
                                 },

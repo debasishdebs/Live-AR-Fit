@@ -124,6 +124,7 @@ class SessionAssembler(val sessionId: String) {
             ),
             avgHeartRate = if (hr.count == 0) null else (hr.sum / hr.count).toInt(),
             maxHeartRate = hr.max,
+            latestSampleMs = last?.tMs,
         )
     }
 

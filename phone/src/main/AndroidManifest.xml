@@ -35,11 +35,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".SpikeActivity"
-            android:exported="false"
-            android:label="Developer tools" />
-
         <service
             android:name=".LiveFitHubService"
             android:exported="false"
@@ -62,9 +57,5 @@
                 <action android:name="android.companion.CompanionDeviceService" />
             </intent-filter>
         </service>
-
-        <receiver
-            android:name=".DebugReceiver"
-            android:exported="true" />
     </application>
 </manifest>

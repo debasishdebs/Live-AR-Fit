@@ -25,7 +25,6 @@ include(":core:model", ":core:services")
 // One module per service; each ships a Fake now and gains a Live implementation later.
 include(
     ":services:workout",
-    ":services:metrics",
     ":services:glasses-link",
     ":services:watch-link",
     ":services:music",

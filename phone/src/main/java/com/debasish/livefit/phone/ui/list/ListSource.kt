@@ -71,7 +71,7 @@ object ListSources {
     const val WORKOUTS = "workouts"
 
     fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
-        LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale, services::sttRefresh)
+        LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale, services::refreshVoicePacksAsync)
         PERMISSIONS -> PermissionSource(context)
         WORKOUTS -> WorkoutHistorySource(services.history, open)
         else -> error("Unknown list source: $id")

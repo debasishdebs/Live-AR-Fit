@@ -1,7 +1,6 @@
 package com.debasish.livefit.services
 
 import com.debasish.livefit.model.DeviceStatus
-import com.debasish.livefit.model.Metrics
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.VoiceState
 import com.debasish.livefit.model.WorkoutSnapshot
@@ -13,15 +12,6 @@ import kotlinx.coroutines.flow.StateFlow
  * Service contracts. Each lives in its own :services:* module with a Fake (mock-ups)
  * and, later, a Live implementation; apps only ever see these interfaces.
  */
-
-/** A wearable data source (Galaxy Watch now; ring / band later). */
-interface MetricsSource {
-    val id: String
-    val status: StateFlow<DeviceStatus>
-    /** Starts tracking and emits readings until [stop]. */
-    fun start(type: WorkoutType): Flow<Metrics>
-    suspend fun stop()
-}
 
 /** Owns the workout state machine: Idle -> Starting -> Active <-> Paused -> Stopping -> Summary. */
 interface WorkoutService {
