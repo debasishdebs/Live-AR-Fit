@@ -27,6 +27,8 @@ import androidx.navigation.navArgument
 import com.debasish.livefit.phone.SpikeActivity
 import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.services
+import com.debasish.livefit.phone.ui.components.HubConfirmationDialog
+import com.debasish.livefit.phone.ui.components.OutdatedBanner
 import com.debasish.livefit.phone.ui.devices.DeviceKind
 import com.debasish.livefit.phone.ui.devices.DeviceScreen
 import com.debasish.livefit.phone.ui.music.MusicScreen
@@ -142,6 +144,8 @@ class AppActivity : ComponentActivity() {
                         PillNav(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp), tab, goTab)
                     }
                     SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
+                    HubConfirmationDialog(services)
+                    OutdatedBanner(services, Modifier.align(Alignment.TopCenter))
                 }
             }
         }
