@@ -124,3 +124,11 @@ data class SessionLifecycle(
     val endReason: com.debasish.livefit.model.EndReason? = null,
     val endedAtMs: Long? = null,
 )
+
+/** Phone history: finished and open sessions plus 1 Hz samples (spec §5.6). */
+interface HistoryStore : SessionStore {
+    /** Finalized sessions, newest first (Complete and Incomplete; Demo = Fake provenance). */
+    val sessions: Flow<List<com.debasish.livefit.model.SessionSummary>>
+    suspend fun samples(sessionId: String): List<com.debasish.livefit.model.Sample>
+    suspend fun clearAll()
+}
