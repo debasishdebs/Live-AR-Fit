@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.BasicText
+import com.debasish.livefit.model.Confirmation
 import com.debasish.livefit.model.HeartZones
 import com.debasish.livefit.model.HudItem
 import com.debasish.livefit.model.HudPosition
@@ -100,6 +101,9 @@ sealed interface HudOverlay {
     data object None : HudOverlay
     /** Shown the instant the user taps, before the phone's frame reports [VoiceState.Listening]. */
     data object LocalListening : HudOverlay
+    /** Local (glasses-side) notice, e.g. push-to-talk failure. */
+    data class LocalToast(val text: String) : HudOverlay
+    data class Confirm(val confirmation: Confirmation, val highlightYes: Boolean, val listening: Boolean) : HudOverlay
 }
 
 @Composable
@@ -128,7 +132,11 @@ fun HudScreen(
                     else -> Ready(frame, glassesBattery)
                 }
                 val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
-                if (overlay == HudOverlay.LocalListening) {
+                if (overlay is HudOverlay.Confirm) {
+                    ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, band)
+                } else if (overlay is HudOverlay.LocalToast) {
+                    Toast(overlay.text, band)
+                } else if (overlay == HudOverlay.LocalListening) {
                     Listening(band, VoiceState.Listening)
                 } else if (frame != null) {
                     when {
