@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,8 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.debasish.livefit.model.DeviceKind
-import com.debasish.livefit.phone.CompanionLinker
 import com.debasish.livefit.phone.LiveFitHubService
+import com.debasish.livefit.phone.PeerPairing
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.IconChip
@@ -76,11 +77,24 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     }
     // Below Android 13 the companion pairing API is unavailable (Task 14): point at the vendor apps instead.
     fun pair(kind: DeviceKind, app: String) {
-        pairNote = null
-        CompanionLinker.associate(activity, kind) { ok ->
+        pairNote = if (Build.VERSION.SDK_INT >= 33) "Tap Allow on your ${if (kind == DeviceKind.Watch) "watch" else "glasses"} when asked." else null
+        PeerPairing.pair(activity, services, kind) { ok ->
             if (ok) LiveFitHubService.ensureRunning(activity) // an association also satisfies the connectedDevice prerequisite
             pairNote = if (ok) "Paired." else if (Build.VERSION.SDK_INT < 33) "Pair from $app, then tap Next (or Skip)." else "Pairing didn't complete. Try again or Skip."
         }
+    }
+
+    // D1: Hi Rokid answers silently in ~10 ms when LiveFit is already authorized, so say what happened.
+    var authAsked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        services.glasses.authResults.collect { ok ->
+            if (authAsked) { authAsked = false; pairNote = authNote(ok) }
+        }
+    }
+    fun authorize() {
+        authAsked = true
+        pairNote = "Authorizing with Hi Rokid…"
+        if (AuthActivity.launch(activity).isFailure) { authAsked = false; pairNote = authNote(false) }
     }
 
     Column(Modifier.fillMaxSize().background(LiveFitColors.HeaderGradient).statusBarsPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -90,8 +104,9 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         val (icon, title, body) = when (step) {
             SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Rokid LiveFit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
             SetupStep.Glasses -> Triple(GlassesIcon, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
-                if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else "")
-            SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Galaxy Watch", "Pair the watch, then open Rokid LiveFit on the watch once and tap Allow for heart-rate sensors." +
+                if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else " Tap Allow on your glasses when asked.")
+            SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Galaxy Watch", (if (Build.VERSION.SDK_INT < 33) "Pair the watch" else "Pair the watch (tap Allow on your watch when asked)") +
+                ", then open Rokid LiveFit on the watch once and tap Allow for heart-rate sensors." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Galaxy Wearable instead." else "")
             SetupStep.Music -> Triple(Icons.Rounded.LibraryMusic, "Control YouTube Music", "Give LiveFit notification access so it can play, skip and like songs.")
             SetupStep.Voice -> Triple(Icons.Rounded.Mic, "Offline voice: English (India)", "Download the on-device voice pack. Voice stays off until it's installed — there's no online fallback.")
@@ -107,7 +122,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
                 permissions.launch(setupPermissions(Build.VERSION.SDK_INT))
             }) { Text("Grant access") }
             SetupStep.Glasses -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = { AuthActivity.launch(activity) }) { Text("Authorize") }
+                OutlinedButton(onClick = { authorize() }) { Text("Authorize") }
                 Button(onClick = { pair(DeviceKind.Glasses, "Hi Rokid") }) { Text("Pair") }
             }
             SetupStep.Watch -> Button(onClick = { pair(DeviceKind.Watch, "Galaxy Wearable") }) { Text("Pair watch") }
@@ -145,3 +160,6 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         }
     }
 }
+
+/** What the setup and Settings screens say after a Hi Rokid authorization attempt (D1). */
+fun authNote(ok: Boolean): String = if (ok) "Authorized." else "Authorization failed — open Hi Rokid and try again"

@@ -30,6 +30,7 @@ class PhoneCommandListener : WearableListenerService() {
                     WatchPaths.EXERCISE_REQ -> WatchRuntime.controller.handle(Wire.decode<ExerciseRequest>(text))
                     WatchPaths.ACK -> WatchRuntime.recorder.onAck(Wire.decode<DeltaAck>(text))
                     WatchPaths.STATE -> WatchClient.onFrame(text)
+                    WatchPaths.DISCOVERABLE -> DiscoverableActivity.start(this@PhoneCommandListener, text)
                 }
             } catch (e: CancellationException) {
                 throw e

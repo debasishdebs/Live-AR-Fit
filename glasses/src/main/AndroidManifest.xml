@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Pairing: ACTION_REQUEST_DISCOVERABLE so the phone's companion picker can list the glasses. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <application
         android:label="Rokid LiveFit"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">

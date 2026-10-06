@@ -18,6 +18,8 @@ object GlassesChannels {
     const val LISTEN = "lf_listen"
     const val AUDIO = "lf_audio"
     const val LISTEN_END = "lf_listen_end"
+    /** Phone → glasses: make the glasses discoverable so the companion pairing picker can list them. */
+    const val DISCOVERABLE = "lf_discoverable"
 }
 
 /** Wearable Data Layer message paths (spec §4.2). */
@@ -33,6 +35,8 @@ object WatchPaths {
     const val EXERCISE_STATE = "/lf/exercise_state"
     const val BATTERY_REQ = "/lf/battery_req"
     const val BATTERY = "/lf/battery"
+    /** Phone → watch: make the watch discoverable so the companion pairing picker can list it. */
+    const val DISCOVERABLE = "/lf/discoverable"
 }
 
 /**

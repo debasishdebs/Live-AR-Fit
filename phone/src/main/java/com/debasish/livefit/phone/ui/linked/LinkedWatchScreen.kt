@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.phone.CompanionLinker
+import com.debasish.livefit.phone.PeerPairing
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.ChipRow
 import com.debasish.livefit.phone.ui.components.ScreenHeader
@@ -52,7 +52,7 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             Column {
                 ChipRow(Icons.Rounded.Link, LiveFitColors.ChipSky, "Pair / re-pair", "Lets Android wake LiveFit when the watch is near",
-                    { CompanionLinker.associate(activity, DeviceKind.Watch) { ok -> toast(if (ok) "Watch paired" else "Pairing cancelled") } })
+                    { toast("Tap Allow on your watch when asked"); PeerPairing.pair(activity, services, DeviceKind.Watch) { ok -> toast(if (ok) "Watch paired" else "Pairing cancelled") } })
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.Favorite, LiveFitColors.ChipCoral, "Sensor permissions", "Granted on the watch: open Rokid LiveFit on the watch and tap Allow", {}, trailing = {})
             }

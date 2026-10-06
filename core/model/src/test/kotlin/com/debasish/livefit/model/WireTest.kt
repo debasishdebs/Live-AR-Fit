@@ -68,4 +68,15 @@ class WireTest {
         assertEquals("–", zoneLabel(0))
         assertEquals("Z3", zoneLabel(3))
     }
+
+    /** D2: the peer makes itself discoverable for CDM only on a current-version request. */
+    @Test fun discoverableRequestParsesOnlyCurrentVersion() {
+        assertEquals(120, DiscoverableRequest.parse(Wire.encode(DiscoverableRequest())))
+        assertTrue(Wire.encode(DiscoverableRequest()).contains("\"protocolVersion\":1"))
+        assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":0,"seconds":120}"""), "outdated sender")
+        assertEquals(null, DiscoverableRequest.parse("""{"seconds":120}"""), "unversioned")
+        assertEquals(null, DiscoverableRequest.parse("garbage"))
+        assertEquals(300, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":9999}"""), "clamped to the platform maximum")
+        assertEquals(1, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":-5}"""))
+    }
 }
