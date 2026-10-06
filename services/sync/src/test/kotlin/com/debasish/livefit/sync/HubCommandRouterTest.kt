@@ -109,4 +109,17 @@ class HubCommandRouterTest {
         runCurrent()
         assertEquals(listOf("Next song", "Volume 100%"), toasts)
     }
+
+    /** F2: the hub learns where a start came from (null = voice), so it can open the watch screen unless the watch asked. */
+    @Test fun startOriginIsReportedBeforeTheStartIsApplied() = runTest {
+        val origins = mutableListOf<DeviceKind?>()
+        val r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = {}, onStartRequested = { origins += it; calls += "origin:$it" })
+        r.dispatch(env("w", Command.StartWorkout(WorkoutType.Walk), origin = DeviceKind.Watch))
+        r.dispatch(env("g", Command.StartWorkout(WorkoutType.Run), origin = DeviceKind.Glasses))
+        r.dispatchVoice(Command.StartWorkout(WorkoutType.Cycle))
+        r.dispatch(env("n", Command.NextTrack, origin = DeviceKind.Glasses))
+        runCurrent()
+        assertEquals(listOf(DeviceKind.Watch, DeviceKind.Glasses, null), origins)
+        assertEquals(listOf("origin:Watch", "start:Walk", "origin:Glasses", "start:Run", "origin:null", "start:Cycle", "next"), calls)
+    }
 }

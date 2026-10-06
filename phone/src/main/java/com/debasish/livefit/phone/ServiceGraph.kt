@@ -81,7 +81,8 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast
-    val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash)
+    private val watchLaunch = WatchLaunchPolicy()
+    val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested)
 
     // ---- Voice binding (after the router, which it feeds) ----
     private val stt: AndroidOnDeviceStt? = if (bindings.liveVoice) AndroidOnDeviceStt(app) else null
@@ -171,6 +172,13 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
             workout.snapshot.map { it.phase == WorkoutPhase.Starting || it.phase == WorkoutPhase.Active || it.phase == WorkoutPhase.Paused }
                 .distinctUntilChanged()
                 .collect { running -> if (running) glasses.connect() }
+        }
+        // F2/F6: bring LiveFit's screen up on the watch for a started workout and for every confirmation
+        // (Samsung's media controls take the screen when music starts). Only with the live watch link.
+        if (dataLayer != null) {
+            val launcher = WatchLauncher(app)
+            scope.launch { workout.snapshot.map { it.phase }.distinctUntilChanged().collect { if (watchLaunch.onPhase(it)) scope.launch { launcher.open("workout started") } } }
+            scope.launch { confirm.pending.collect { c -> if (watchLaunch.onConfirmation(c)) scope.launch { launcher.open("confirmation ${c?.kind}") } } }
         }
         // ---- end link wiring ----
         // Connecting is owned by the authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.

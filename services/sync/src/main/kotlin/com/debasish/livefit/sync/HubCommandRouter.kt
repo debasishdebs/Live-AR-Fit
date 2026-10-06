@@ -22,6 +22,8 @@ class HubCommandRouter(
     private val scope: CoroutineScope,
     private val toast: (String) -> Unit,
     private val deduper: CommandDeduper = CommandDeduper(),
+    /** Called just before a StartWorkout is applied, with its origin (null = voice). */
+    private val onStartRequested: (DeviceKind?) -> Unit = {},
 ) {
     private val _outdated = MutableStateFlow<DeviceKind?>(null)
     val outdated: StateFlow<DeviceKind?> = _outdated
@@ -38,7 +40,7 @@ class HubCommandRouter(
             return
         }
         if (!deduper.firstTime(envelope.id)) return
-        apply(envelope.command)
+        apply(envelope.command, envelope.origin)
     }
 
     /** Voice path: destructive commands are confirmed on all devices first. */
@@ -47,10 +49,11 @@ class HubCommandRouter(
             val o = confirm.ask(ConfirmationKind.StopWorkoutByVoice, "End workout?", "You said stop. End the workout?", defaultYes = true)
             if (o != ConfirmationOutcome.Yes) { toast("Cancelled"); return }
         }
-        apply(command)
+        apply(command, origin = null)
     }
 
-    private fun apply(command: Command) {
+    private fun apply(command: Command, origin: DeviceKind?) {
+        if (command is Command.StartWorkout) onStartRequested(origin)
         when (command) {
             is Command.StartWorkout -> workout.start(command.type)
             Command.PauseWorkout -> workout.pause()

@@ -278,6 +278,7 @@ A session becomes **Complete** — Summary data final, history row finalised, el
   2. Pills: calories (big), steps, distance, speed.
   3. Music: title/artist, previous / play-pause / next, like, and **volume**: a curved arc along the screen edge showing the phone's media volume (from `StateFrame.music.volume`); drag the arc or **turn the rotating bezel** (5 % per detent, only while this page is shown) → `SetVolume(level)`, throttled to ≤ 10 commands/s.
 - **Summary** with Done. **Confirmation** overlay (Yes/No buttons). "Phone offline" badge in offline mode.
+- **Brought to the front by the phone:** music starting with a workout puts Samsung's media controls on top, so after a successful hub start (Starting → Active) requested from the glasses, phone or voice, the hub opens `MainActivity` with `RemoteActivityHelper` (`livefit://workout`, works with the watch screen off; a watch app cannot start its own activity from the background). Not for a start tapped on the watch or a session adopted from it. The hub does the same for every new confirmation (§4.6), except a takeover prompt for a start tapped on the watch.
 
 ### 6.3 Glasses HUD (green monochrome)
 - Rules: black = transparent; outlines not fills; three brightness tiers (100 / 60 / 35 %); tabular digits; thin strokes ≥ 2 px.

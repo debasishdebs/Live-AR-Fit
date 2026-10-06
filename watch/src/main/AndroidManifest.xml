@@ -33,6 +33,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Opened by the phone (RemoteActivityHelper) when a workout starts elsewhere or a confirmation is pending. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="livefit" android:host="workout" />
+            </intent-filter>
         </activity>
 
         <!-- Opened by the phone when the user taps Pair (Data Layer message or remote launch of livefit://discoverable). -->
