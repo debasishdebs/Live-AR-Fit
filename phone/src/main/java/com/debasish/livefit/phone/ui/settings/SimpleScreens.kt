@@ -11,17 +11,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Straighten
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -31,18 +25,18 @@ import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.components.SoftCard
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
 
+/** V1 shows metric values only, so Metric is information, not a choice (review #15). */
 @Composable
 fun UnitsScreen(onBack: () -> Unit) {
-    var metric by remember { mutableStateOf(true) }
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft)) {
         ScreenHeader("Units", onBack)
         SoftCard(Modifier.padding(16.dp).fillMaxWidth()) {
             Column {
-                ChipRow(Icons.Rounded.Straighten, LiveFitColors.ChipAmber, "Metric", "km · kg · km/h", { metric = true }, trailing = { if (metric) Icon(Icons.Rounded.CheckCircle, null, tint = LiveFitColors.Mint) })
-                HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
-                ChipRow(Icons.Rounded.Public, LiveFitColors.ChipSky, "Imperial", "mi · lb · mph", { metric = false }, trailing = { if (!metric) Icon(Icons.Rounded.CheckCircle, null, tint = LiveFitColors.Mint) })
+                ChipRow(Icons.Rounded.Straighten, LiveFitColors.ChipAmber, "Metric", "km · kg · km/h", {}, trailing = { Icon(Icons.Rounded.CheckCircle, null, tint = LiveFitColors.Mint) })
             }
         }
+        Text("LiveFit shows workouts in metric units.", style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft,
+            modifier = Modifier.padding(horizontal = 24.dp))
     }
 }
 
