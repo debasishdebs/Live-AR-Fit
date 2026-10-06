@@ -105,6 +105,8 @@ sealed interface HudOverlay {
     /** Local (glasses-side) notice, e.g. push-to-talk failure. */
     data class LocalToast(val text: String) : HudOverlay
     data class Confirm(val confirmation: Confirmation, val highlightYes: Boolean, val listening: Boolean, val micError: String? = null) : HudOverlay
+    /** Glasses-local "Close LiveFit?" after a double-tap during a workout ([CloseConfirm]). */
+    data class CloseApp(val highlightYes: Boolean) : HudOverlay
 }
 
 @Composable
@@ -121,6 +123,7 @@ fun HudScreen(
     /** Music screen (M1) instead of the workout HUD; overlays still draw on top. */
     page: HudPage = HudPage.Workout,
     queue: QueueWindow = QueueWindow(),
+    /** Highlighted queue row (list mode only); null = page mode, no highlight. */
     musicHighlight: Int? = null,
 ) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle
@@ -145,6 +148,8 @@ fun HudScreen(
                 val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
                 if (overlay is HudOverlay.Confirm) {
                     ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, overlay.micError, band)
+                } else if (overlay is HudOverlay.CloseApp) {
+                    ConfirmOverlay("Close LiveFit?", "The workout keeps recording.", "Close", "Stay", overlay.highlightYes, listening = false, micError = null, modifier = band)
                 } else if (overlay is HudOverlay.LocalToast) {
                     Toast(overlay.text, band)
                 } else if (overlay == HudOverlay.LocalListening) {

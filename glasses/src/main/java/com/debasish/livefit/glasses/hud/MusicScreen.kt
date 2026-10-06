@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,7 +36,7 @@ private const val MUSIC_ROWS = 7
 /**
  * Glasses music screen (M1, spec §6.3): now playing on top, then the YouTube Music queue window. Played songs are
  * dim (35 %), upcoming 60 %, the current song full brightness with a ▶ mark; the highlight is an outline (like the
- * ✓/✕ choices), never a fill.
+ * ✓/✕ choices), never a fill, and only drawn in list mode ([highlight] non-null). A dim hint line sits at the bottom.
  */
 @Composable
 fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: String) {
@@ -43,7 +44,8 @@ fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: Str
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Glyph(Icons.Outlined.MusicNote, 26.dp, Hud.TERTIARY)
             Label(" MUSIC", 22.sp, Hud.TERTIARY, FontWeight.Bold)
-            if (queue.items.isNotEmpty() && highlight != null) Label("  ${highlight + 1}/${queue.items.size}", 22.sp, Hud.TERTIARY)
+            val position = highlight ?: queue.currentIndex
+            if (queue.items.isNotEmpty() && position != null) Label("  ${position + 1}/${queue.items.size}", 22.sp, Hud.TERTIARY)
             Spacer(Modifier.weight(1f))
             if (clock.isNotEmpty()) Label(clock, 24.sp, Hud.SECONDARY, FontWeight.Bold)
         }
@@ -64,15 +66,24 @@ fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: Str
         Spacer(Modifier.height(12.dp))
         Box(Modifier.fillMaxWidth().height(2.dp).background(Hud.Green.copy(alpha = Hud.TERTIARY))) // hairline rule
         Spacer(Modifier.height(8.dp))
-        if (queue.items.isEmpty()) {
-            Label("No queue from YouTube Music", 24.sp, Hud.TERTIARY)
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                for (i in visibleRows(queue.items.size, highlight, MUSIC_ROWS)) {
-                    QueueRow(queue.items[i], played = queue.currentIndex != null && i < queue.currentIndex!!, current = i == queue.currentIndex, highlighted = i == highlight)
+        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+            if (queue.items.isEmpty()) {
+                Label("No queue from YouTube Music", 24.sp, Hud.TERTIARY)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (i in visibleRows(queue.items.size, highlight ?: queue.currentIndex, MUSIC_ROWS)) {
+                        QueueRow(queue.items[i], played = queue.currentIndex != null && i < queue.currentIndex!!, current = i == queue.currentIndex, highlighted = i == highlight)
+                    }
                 }
             }
         }
+        Spacer(Modifier.height(6.dp))
+        val hint = when {
+            highlight != null -> "swipe to move · tap to play"
+            queue.items.isEmpty() -> "tap to talk · swipe back for workout"
+            else -> "tap to choose · swipe back for workout"
+        }
+        Label(hint, 20.sp, Hud.TERTIARY)
     }
 }
 

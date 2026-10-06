@@ -25,16 +25,25 @@ import com.debasish.livefit.model.Confirmation
 
 /** Outlined ✓ Yes / ✕ No; highlight = brighter + thicker outline (monochrome rules, spec §6.3). */
 @Composable
-fun ConfirmOverlay(c: Confirmation, highlightYes: Boolean, listening: Boolean, micError: String?, modifier: Modifier = Modifier) {
+fun ConfirmOverlay(c: Confirmation, highlightYes: Boolean, listening: Boolean, micError: String?, modifier: Modifier = Modifier) =
+    ConfirmOverlay(c.title, null, c.yesLabel, c.noLabel, highlightYes, listening, micError, modifier)
+
+/** Same visuals for a glasses-local prompt (e.g. "Close LiveFit?"); [message] is an optional dim second line. */
+@Composable
+fun ConfirmOverlay(
+    title: String, message: String?, yesLabel: String, noLabel: String,
+    highlightYes: Boolean, listening: Boolean, micError: String?, modifier: Modifier = Modifier,
+) {
     Column(
         modifier.background(Color.Black).border(2.dp, Hud.Green.copy(alpha = Hud.SECONDARY), RoundedCornerShape(16.dp)).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Label(c.title, 28.sp, Hud.PRIMARY, FontWeight.Bold)
+        Label(title, 28.sp, Hud.PRIMARY, FontWeight.Bold)
+        if (message != null) Label(message, 22.sp, Hud.SECONDARY)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Choice(Icons.Outlined.Check, c.yesLabel, selected = highlightYes)
-            Choice(Icons.Outlined.Close, c.noLabel, selected = !highlightYes)
+            Choice(Icons.Outlined.Check, yesLabel, selected = highlightYes)
+            Choice(Icons.Outlined.Close, noLabel, selected = !highlightYes)
         }
         if (micError != null) {
             Spacer(Modifier.height(8.dp))

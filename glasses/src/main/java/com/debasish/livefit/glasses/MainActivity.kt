@@ -16,7 +16,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.debasish.livefit.glasses.hud.CloseConfirm
 import com.debasish.livefit.glasses.hud.ConfirmInput
+import com.debasish.livefit.glasses.hud.DoubleTapAction
+import com.debasish.livefit.glasses.hud.DoubleTapDetector
 import com.debasish.livefit.glasses.hud.HudClock
 import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
@@ -28,9 +31,10 @@ import com.debasish.livefit.glasses.voice.PushToTalk
 import com.rokid.cxr.CXRServiceBridge
 
 /**
- * Glasses HUD. Touchpad (see [HudNav]): tap = talk, back swipe = toggle full/glance, forward swipe = music screen,
- * double-tap (back) = exit. Music screen: swipe = move highlight, tap = play it, double-tap = back to the HUD.
- * A pending confirmation overrides all of these ([ConfirmInput]).
+ * Glasses HUD. Touchpad (see [HudNav]): workout page tap = talk, back swipe = toggle full/glance, forward swipe = music
+ * page; music page back swipe = workout page, tap = list mode (swipe = move highlight, tap = play it, 6 s idle = leave).
+ * Double-tap (two KEYCODE_NOTIFICATION or BACK, [DoubleTapDetector]) on any page = close the app, asking first while a
+ * workout records ([CloseConfirm]). A pending hub confirmation overrides all of these ([ConfirmInput]), then our close prompt.
  */
 class MainActivity : ComponentActivity() {
 
@@ -41,6 +45,8 @@ class MainActivity : ComponentActivity() {
     private val confirmInput = ConfirmInput()
     private var highlightYes by mutableStateOf(true)
     private var localToast by mutableStateOf<String?>(null)
+    private val doubleTap = DoubleTapDetector()
+    private var closeConfirm by mutableStateOf(CloseConfirm())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,6 +95,13 @@ class MainActivity : ComponentActivity() {
                 confirmInput.onConfirmation(frame?.confirmation)
                 if (confirmInput.takeMicRequest(frame?.confirmation)) ptt.start(maxMs = 6_000) // auto mic for a spoken answer
                 highlightYes = confirmInput.highlightYes
+                if (frame?.confirmation != null) closeConfirm = CloseConfirm() // the hub prompt replaces ours
+            }
+            androidx.compose.runtime.LaunchedEffect(closeConfirm.shownAtMs) {
+                if (closeConfirm.shown) { kotlinx.coroutines.delay(CloseConfirm.TIMEOUT_MS); closeConfirm = closeConfirm.timedOut(System.currentTimeMillis()) }
+            }
+            androidx.compose.runtime.LaunchedEffect(nav.listMode, nav.lastInputMs) {
+                if (nav.listMode) { kotlinx.coroutines.delay(HudNav.LIST_IDLE_MS); nav = nav.timedOut(System.currentTimeMillis()) }
             }
             androidx.compose.runtime.LaunchedEffect(localToast) {
                 // While a confirmation is shown the error stays inside it; the id effect clears it.
@@ -98,12 +111,13 @@ class MainActivity : ComponentActivity() {
             val toastText = localToast
             val overlay = when {
                 confirmation != null -> HudOverlay.Confirm(confirmation, highlightYes, listening, micError = toastText)
+                closeConfirm.shown -> HudOverlay.CloseApp(closeConfirm.highlightYes)
                 toastText != null -> HudOverlay.LocalToast(toastText)
                 listening -> HudOverlay.LocalListening
                 else -> HudOverlay.None
             }
             HudScreen(frame, settings, connection, nav.mode, battery, history, overlay = overlay, clock = clock,
-                page = nav.page, queue = queue, musicHighlight = nav.highlightIndex(queue))
+                page = nav.page, queue = queue, musicHighlight = nav.visibleHighlight(queue))
         }
     }
 
@@ -130,27 +144,43 @@ class MainActivity : ComponentActivity() {
         }.onFailure { Log.w(TAG, "discoverable prompt failed", it) }
     }
 
+    /** Every key is logged (debug) so touchpad codes can be checked on device; the double-tap key never reaches the system. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        Log.d(TAG, "key action=${event.action} code=${event.keyCode} scan=${event.scanCode} repeat=${event.repeatCount} t=${event.eventTime}")
+        if (event.keyCode == KeyEvent.KEYCODE_NOTIFICATION) {
+            // Consumed (down and up) so the Rokid system does not move our task to the back on its own.
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && doubleTap.onNotificationKey(System.currentTimeMillis())) onDoubleTap()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
+        val now = System.currentTimeMillis()
         when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> {
-                val play = if (pending) null else nav.onTap(controller.queue.value)
-                when {
-                    pending -> confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
-                    play != null -> controller.send(play) // music screen: play the highlighted song
-                    controller.connection.value != HudConnection.Outdated -> ptt.toggle() // the hub ignores voice from a mismatched app
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> when {
+                pending -> confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
+                closeConfirm.shown -> closeConfirm.onTap().let { (c, close) -> closeConfirm = c; if (close == true) closeApp() }
+                else -> {
+                    val tap = nav.onTap(controller.queue.value, now)
+                    nav = tap.nav
+                    tap.play?.let(controller::send) // music list: play the highlighted song
+                    if (tap.talk && controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
                 }
             }
             // One swipe can emit several key events; debounce like the UPI app does.
             // Rokid swipes arrive as horizontal keys: RIGHT/DOWN = forward, LEFT/UP = back.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                val now = System.currentTimeMillis()
                 if (now - lastSwipe > 350) {
-                    if (pending) { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
-                    else nav = nav.onSwipe(
-                        forward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN,
-                        inWorkout = inWorkout(), queue = controller.queue.value,
-                    )
+                    when {
+                        pending -> { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
+                        closeConfirm.shown -> closeConfirm = closeConfirm.onSwipe()
+                        else -> nav = nav.onSwipe(
+                            forward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN,
+                            inWorkout = inWorkout(), queue = controller.queue.value, nowMs = now,
+                        )
+                    }
                 }
                 lastSwipe = now
             }
@@ -159,17 +189,31 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
-    /** Double-tap (back) answers No while a confirmation is pending instead of leaving the app. */
+    /** BACK is a double-tap on some firmware: same rules as the key-83 pair, never page navigation. */
     @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
     override fun onBackPressed() {
+        if (doubleTap.onBack(System.currentTimeMillis())) onDoubleTap()
+    }
+
+    /** Double-tap: hub prompt → No; our close prompt → stay; recording workout → ask; otherwise close the app. */
+    private fun onDoubleTap() {
         confirmInput.onConfirmation(controller.frame.value?.confirmation)
-        val answer = confirmInput.onBack()
-        val leaveMusic = if (answer == null) nav.onBack() else null
-        when {
-            answer != null -> { controller.send(answer); ptt.stop() }
-            leaveMusic != null -> nav = leaveMusic // music screen → workout HUD, not out of the app
-            else -> super.onBackPressed()
+        val (c, action) = closeConfirm.onDoubleTap(confirmInput.hasPending, controller.frame.value?.workout?.phase, System.currentTimeMillis())
+        Log.d(TAG, "double-tap -> $action")
+        closeConfirm = c
+        when (action) {
+            DoubleTapAction.AnswerNo -> confirmInput.onBack()?.let { controller.send(it); ptt.stop() }
+            DoubleTapAction.Leave -> closeApp()
+            DoubleTapAction.AskClose, DoubleTapAction.Stay -> {}
         }
+    }
+
+    /** The workout itself lives on the phone/watch; the glasses app just goes away. */
+    private fun closeApp() {
+        ptt.stop()
+        closeConfirm = CloseConfirm()
+        nav = HudNav(mode = nav.mode)
+        moveTaskToBack(true)
     }
 
     private fun inWorkout(): Boolean = controller.frame.value?.workout?.phase.let {
