@@ -218,6 +218,8 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 - Notification: "LiveFit ready" → "Walk · 12:34 · ♥ 142" during a workout.
 - If a device tries to start a workout and the hub cannot be reached, that device shows **"Open LiveFit on your phone"**. (In practice: the watch can always wake the phone; the glasses cannot, because they reach us only through an open CXR session.)
 
+- **Watch link status:** any message from the watch (delta, state report, result, claim, battery, command) marks the watch `Connected` at once and records its node for frame pushes. The 5 s connected-nodes lookup may mark it `Disconnected` only when it lists no node **and** the watch has sent nothing for 15 s (an empty lookup right after a process restart no longer shows the watch offline while live HR is flowing).
+
 ### 5.3 Glasses link — `CxrGlassesLink`
 - Owned by the hub service. Session `CUSTOM_APP`, `AiInterceptMode.ALLOW_WITH_PAUSE`.
 - **Authorization in the background:** companion-device apps are exempt from background-activity-launch limits, so the hub launches a transparent `AuthActivity` that calls `requestAuthorization` (silent when already authorized) and finishes, then connects. Fallback: reflection flag (quirk 2.1.1). Last resort: notification "Open LiveFit to connect glasses".

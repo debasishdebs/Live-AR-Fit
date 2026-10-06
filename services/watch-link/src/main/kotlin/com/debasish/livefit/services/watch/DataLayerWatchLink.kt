@@ -15,6 +15,7 @@ import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
+import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.WatchExerciseGateway
 import com.debasish.livefit.services.WatchLinkService
 import com.google.android.gms.wearable.Wearable
@@ -33,7 +34,9 @@ import kotlinx.coroutines.tasks.await
 class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : WatchLinkService, WatchExerciseGateway {
     private val app = context.applicationContext
     private val messages = Wearable.getMessageClient(app)
-    @Volatile private var nodeId: String? = null
+    /** Touched only on [scope] (Main): node lookups and WatchListener messages both run there. */
+    private val reachability = WatchReachability(Clock { System.currentTimeMillis() })
+    private val nodeId: String? get() = reachability.nodeId
 
     private val _status = MutableStateFlow(DeviceStatus("Galaxy Watch", LinkState.Connecting))
     override val status: StateFlow<DeviceStatus> = _status
@@ -60,10 +63,11 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
             Log.w(TAG, "node lookup failed", e)
             null
         }
-        nodeId = node?.id
+        reachability.onNodeLookup(node?.id)
         _status.update {
-            if (node == null) it.copy(link = LinkState.Disconnected, detail = "Not reachable")
-            else it.copy(name = node.displayName.substringBefore(" (").ifBlank { "Galaxy Watch" }, link = LinkState.Connected, detail = null)
+            val named = node?.let { n -> it.copy(name = n.displayName.substringBefore(" (").ifBlank { "Galaxy Watch" }) } ?: it
+            if (reachability.link == LinkState.Disconnected) named.copy(link = LinkState.Disconnected, detail = "Not reachable")
+            else named.copy(link = reachability.link, detail = null)
         }
     }
 
@@ -93,9 +97,9 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
         if (_status.value.link == LinkState.Connected) { sendRaw(WatchPaths.STATE, Wire.encode(frame).toByteArray()) }
     }
 
-    /** Called from the phone's WearableListenerService for every /lf message. */
+    /** Called (on [scope]) from the phone's WearableListenerService for every /lf message: any of them means Connected (F3). */
     fun onMessage(path: String, bytes: ByteArray, sourceNodeId: String) {
-        nodeId = sourceNodeId
+        reachability.onMessage(sourceNodeId)
         _status.update { it.copy(link = LinkState.Connected, detail = null) }
         when (val m = WatchMessageCodec.decode(path, bytes)) {
             is WatchInbound.Delta -> deltas.tryEmit(m.delta)
