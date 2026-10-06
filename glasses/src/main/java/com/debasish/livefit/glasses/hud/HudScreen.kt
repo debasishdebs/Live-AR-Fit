@@ -115,22 +115,27 @@ fun HudScreen(
     glassesBattery: Int?,
     hrHistory: List<Int>,
     overlay: HudOverlay = HudOverlay.None,
+    /** Local time (F4), already formatted by [HudClock]. */
+    clock: String = "",
 ) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle
     val inWorkout = phase == WorkoutPhase.Starting || phase == WorkoutPhase.Active || phase == WorkoutPhase.Paused || phase == WorkoutPhase.Syncing
     Box(Modifier.fillMaxSize().background(Color.Black).padding(10.dp)) {
         Scaled(settings.scale.coerceIn(0.3f, 1f), settings.position.alignment) {
             Box(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
+                // Screens with a status row show the clock in it; the others get it alone in the top corner.
+                var cornerClock = true
                 when {
                     connection == HudConnection.Outdated -> Message("Update LiveFit", "on your glasses")
                     frame == null && connection == HudConnection.OpenPhoneApp -> WaitingForPhone()
                     frame == null -> Message("Connecting…", "to your phone")
-                    inWorkout && mode == HudMode.Full -> Full(frame, settings, glassesBattery, hrHistory)
+                    inWorkout && mode == HudMode.Full -> { cornerClock = false; Full(frame, settings, glassesBattery, hrHistory, clock) }
                     inWorkout -> Glance(frame)
                     phase == WorkoutPhase.Stopping -> Message("Saving workout…", formatElapsed(frame.workout.elapsedMs))
                     phase == WorkoutPhase.Summary -> SummaryCard(frame)
-                    else -> Ready(frame, glassesBattery)
+                    else -> { cornerClock = false; Ready(frame, glassesBattery, clock) }
                 }
+                if (cornerClock && clock.isNotEmpty()) Box(Modifier.align(Alignment.TopEnd)) { Label(clock, 24.sp, Hud.TERTIARY, FontWeight.Bold) }
                 val band = Modifier.align(Alignment.Center).offset(y = (-40).dp)
                 if (overlay is HudOverlay.Confirm) {
                     ConfirmOverlay(overlay.confirmation, overlay.highlightYes, overlay.listening, overlay.micError, band)
@@ -183,9 +188,10 @@ private fun WaitingForPhone() {
 
 /** No workout running: device status and how to start. */
 @Composable
-private fun Ready(frame: StateFrame, battery: Int?) {
+private fun Ready(frame: StateFrame, battery: Int?, clock: String) {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (clock.isNotEmpty()) Label(clock, 26.sp, Hud.SECONDARY, FontWeight.Bold)
             BatteryRing(Icons.Outlined.Watch, frame.devices.watch.batteryPct, frame.devices.watch.link == LinkState.Connected)
             BatteryRing(Icons.Outlined.PhoneAndroid, frame.devices.phone.batteryPct, frame.devices.phone.link == LinkState.Connected)
             BatteryRing(GlassesIcon, battery, connected = true)
@@ -222,14 +228,15 @@ private fun SummaryCard(frame: StateFrame) {
 }
 
 @Composable
-private fun Full(frame: StateFrame, settings: HudSettings, battery: Int?, hrHistory: List<Int>) {
+private fun Full(frame: StateFrame, settings: HudSettings, battery: Int?, hrHistory: List<Int>, clock: String) {
     val w = frame.workout
     val m = w.metrics
     val show = settings.items
     Column(Modifier.fillMaxSize()) {
         // Status row (tertiary)
         if (HudItem.StatusBar in show) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            if (w.phase == WorkoutPhase.Active) RecDot()
+            if (w.phase == WorkoutPhase.Active) { RecDot(); Spacer(Modifier.width(12.dp)) }
+            if (clock.isNotEmpty()) Label(clock, 24.sp, Hud.SECONDARY, FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             BatteryRing(Icons.Outlined.Watch, frame.devices.watch.batteryPct, frame.devices.watch.link == LinkState.Connected)
             Spacer(Modifier.width(12.dp))

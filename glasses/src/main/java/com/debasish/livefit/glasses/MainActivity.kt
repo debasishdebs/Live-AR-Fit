@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.debasish.livefit.glasses.hud.ConfirmInput
+import com.debasish.livefit.glasses.hud.HudClock
 import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudMode
@@ -64,6 +65,12 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 while (true) { kotlinx.coroutines.delay(30_000); battery = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) }
             }
+            // F4: glasses-local time, refreshed on each minute boundary; 12/24 h re-read so a settings change applies.
+            fun clockNow() = HudClock.format(System.currentTimeMillis(), android.text.format.DateFormat.is24HourFormat(this@MainActivity))
+            var clock by androidx.compose.runtime.remember { mutableStateOf(clockNow()) }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                while (true) { kotlinx.coroutines.delay(HudClock.msToNextMinute(System.currentTimeMillis())); clock = clockNow() }
+            }
             val frame by controller.frame.collectAsStateWithLifecycle()
             val settings by controller.settings.collectAsStateWithLifecycle()
             val connection by controller.connection.collectAsStateWithLifecycle()
@@ -88,7 +95,7 @@ class MainActivity : ComponentActivity() {
                 listening -> HudOverlay.LocalListening
                 else -> HudOverlay.None
             }
-            HudScreen(frame, settings, connection, mode, battery, history, overlay = overlay)
+            HudScreen(frame, settings, connection, mode, battery, history, overlay = overlay, clock = clock)
         }
     }
 

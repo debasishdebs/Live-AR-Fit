@@ -288,6 +288,7 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 - **Ready:** battery rings for watch / phone / glasses, "LiveFit ready", "Tap to talk · 'start workout'".
 - **Workout (full):** status row (REC, **battery rings** around watch/phone/glasses icons — arc = battery %, offline = dotted ring + slash; music note), **big:** workout type (+ "A" badge for Auto) + timer, heart rate + calories; **single HR trend chart** (last ~2 min) over dotted zone lines with "Z1" label ("–" below zone 1); **small:** steps (footprints icon), distance, speed; dim now-playing line. Every item toggleable from Settings.
 - **Glance mode** (touchpad swipe): timer + heart rate only.
+- **Clock:** current local time from the glasses' own clock ("HH:mm", or "h:mm" when the device uses 12-hour time), updated on each minute boundary. Shown in the status row on Ready and Workout (full, left after REC; hidden with the status row); screens without a status row (Glance, Summary, Saving, Connecting) show it alone in the top-right corner.
 - **Overlays** inside the HUD block: listening ring (pulsing), toast ("✓ Next song"), "❚❚ PAUSED", **Confirmation** (✓ Yes / ✕ No; highlight = brighter/thicker; swipe moves highlight, tap confirms, double-tap = No; initial highlight = what the user just requested; mic auto-opens ~6 s for a spoken answer).
 - **Summary:** type "DONE", timer, avg HR, kcal, distance.
 - Input: tap = talk (or confirm in a prompt), swipe = full/glance (or move highlight), double-tap = back/No.
