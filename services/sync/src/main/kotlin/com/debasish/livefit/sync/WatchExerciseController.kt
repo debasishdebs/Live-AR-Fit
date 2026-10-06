@@ -46,6 +46,11 @@ interface ExerciseBackend {
 sealed interface BackendUpdate {
     data class Reading(val sample: Sample) : BackendUpdate
     data class Ended(val by: EndReason) : BackendUpdate
+    /**
+     * Authoritative Active/Paused state, reported when it changes and first after start/reattach.
+     * [activeMs] is the backend's own active duration at [atMs], if known.
+     */
+    data class Phase(val paused: Boolean, val atMs: Long, val activeMs: Long? = null) : BackendUpdate
 }
 
 /** Watch executor for hub requests; scoped to one session at a time (spec §4.8). */
@@ -83,6 +88,7 @@ class WatchExerciseController(
             backend.updates.collect { u ->
                 when (u) {
                     is BackendUpdate.Reading -> onReading(u.sample)
+                    is BackendUpdate.Phase -> onBackendPhase(u)
                     is BackendUpdate.Ended -> {
                         stopping?.let { it.complete(Unit); return@collect } // our own stop: localStop writes the final delta
                         val id = activeSessionId ?: return@collect
@@ -100,6 +106,29 @@ class WatchExerciseController(
         val sample = if (stopping != null) s.copy(tMs = minOf(s.tMs, stopAtMs)) else s
         recorder.sample(sample)
         if (recorder.type == WorkoutType.Auto) detector.onSample(sample)?.let { recorder.event(SessionEvent.TypeDetected(sample.tMs, it)) }
+    }
+
+    /**
+     * "Actual state wins" (spec §4.8): Health Services paused or resumed without the event being recorded — e.g. the
+     * process died right after the call. Recorded at the time implied by the backend's active duration.
+     */
+    private fun onBackendPhase(u: BackendUpdate.Phase) {
+        if (activeSessionId == null || stopping != null) return
+        val a = recorder.assembler ?: return
+        val since = a.phaseSinceMs() ?: return
+        if (u.atMs < since) return // older than our own last pause/resume
+        val ours = a.activeMs(atMs = u.atMs)
+        when (a.phase()) {
+            WorkoutPhase.Active -> if (u.paused) {
+                val overcounted = u.activeMs?.let { ours - it }?.coerceAtLeast(0) ?: 0
+                recorder.event(SessionEvent.Paused((u.atMs - overcounted).coerceAtLeast(since)))
+            }
+            WorkoutPhase.Paused -> if (!u.paused) {
+                val missed = u.activeMs?.let { it - ours }?.coerceAtLeast(0) ?: 0
+                recorder.event(SessionEvent.Resumed((u.atMs - missed).coerceAtLeast(since)))
+            }
+            else -> Unit
+        }
     }
 
     suspend fun handle(req: ExerciseRequest) {
@@ -179,14 +208,15 @@ class WatchExerciseController(
     suspend fun localPause(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Active) return false
         if (!safely { backend.pause() }) return false
-        recorder.event(SessionEvent.Paused(clock.nowMs()))
+        // Health Services' own Paused update may have been recorded while pause() ran.
+        if (recorder.assembler?.phase() == WorkoutPhase.Active) recorder.event(SessionEvent.Paused(clock.nowMs()))
         return true
     }
 
     suspend fun localResume(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Paused) return false
         if (!safely { backend.resume() }) return false
-        recorder.event(SessionEvent.Resumed(clock.nowMs()))
+        if (recorder.assembler?.phase() == WorkoutPhase.Paused) recorder.event(SessionEvent.Resumed(clock.nowMs()))
         return true
     }
 

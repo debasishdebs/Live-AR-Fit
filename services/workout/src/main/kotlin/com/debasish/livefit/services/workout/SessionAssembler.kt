@@ -62,7 +62,8 @@ class SessionAssembler(val sessionId: String) {
         is SessionEvent.TypeDetected -> WorkoutPhase.Active
     }
 
-    fun activeMs(): Long {
+    /** Active time; a running segment counts up to [atMs], or to the latest recorded timestamp. */
+    fun activeMs(atMs: Long? = null): Long {
         var total = 0L
         var runningSince: Long? = null
         for (e in events()) {
@@ -74,8 +75,11 @@ class SessionAssembler(val sessionId: String) {
             }
         }
         val since = runningSince ?: return total
-        return total + ((latestTimestamp() ?: since) - since).coerceAtLeast(0)
+        return total + ((atMs ?: latestTimestamp() ?: since) - since).coerceAtLeast(0)
     }
+
+    /** When the current phase began: the last Started / Paused / Resumed / Stopped event. */
+    fun phaseSinceMs(): Long? = events().lastOrNull { it !is SessionEvent.TypeDetected }?.tMs
 
     private fun type(): WorkoutType =
         events().filterIsInstance<SessionEvent.Started>().firstOrNull()?.type ?: WorkoutType.Walk

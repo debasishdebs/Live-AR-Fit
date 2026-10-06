@@ -18,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.io.File
@@ -45,13 +46,24 @@ class WatchExerciseControllerTest {
         var endDelayMs = 0L
         /** When set, start() suspends on it (a slow Health Services start). */
         var startGate: CompletableDeferred<Unit>? = null
+        /** Health Services reports its new state while pause()/resume() are still in flight. */
+        var phaseDuringControl = false
+        var now: () -> Long = { 0 }
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
         override suspend fun otherAppTracking(): String? { if (throwOnOther) error("hs down"); return other }
         override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; startGate?.await(); return true }
-        override suspend fun pause(): Boolean { calls += "pause"; if (throwOnControl) error("hs"); return pauseOk }
-        override suspend fun resume(): Boolean { calls += "resume"; if (throwOnControl) error("hs"); return true }
+        override suspend fun pause(): Boolean {
+            calls += "pause"; if (throwOnControl) error("hs")
+            if (phaseDuringControl && pauseOk) { updates.emit(BackendUpdate.Phase(paused = true, atMs = now())); kotlinx.coroutines.yield() }
+            return pauseOk
+        }
+        override suspend fun resume(): Boolean {
+            calls += "resume"; if (throwOnControl) error("hs")
+            if (phaseDuringControl) { updates.emit(BackendUpdate.Phase(paused = false, atMs = now())); kotlinx.coroutines.yield() }
+            return true
+        }
         override suspend fun end(): Boolean {
             calls += "end"
             if (throwOnControl) error("hs")
@@ -350,5 +362,57 @@ class WatchExerciseControllerTest {
         assertEquals(ExerciseError.WrongSession("local0"), results.single().error)
         assertEquals(listOf("start:Run:false"), b.calls)
         assertEquals("local0", c.activeSessionId)
+    }
+
+    private fun phaseEvents() = sent.flatMap { it.events }.filter { it is SessionEvent.Paused || it is SessionEvent.Resumed }
+
+    /** Review #7: Health Services paused, then the process died before the Paused event was saved. */
+    @Test fun recoverRecordsAPauseTheBackendAppliedButWeDidNotSave() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (b1, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        b1.updates.emit(BackendUpdate.Reading(Sample(10_000, hr = 100))); runCurrent()
+        val (b2, c2) = rig(root = root); runCurrent() // new process: durable phase is Active
+        c2.recover()
+        // Health Services says: paused, with 12 s of active time (it paused at 12 s, we'd count to 30 s).
+        b2.updates.emit(BackendUpdate.Phase(paused = true, atMs = 30_000, activeMs = 12_000)); runCurrent()
+        assertEquals(listOf<SessionEvent>(SessionEvent.Paused(12_000)), phaseEvents())
+        b2.updates.emit(BackendUpdate.Reading(Sample(31_000, hr = 90))); runCurrent()
+        val stored = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = {}).assembler!!
+        assertEquals(com.debasish.livefit.model.WorkoutPhase.Paused, stored.phase())
+        assertEquals(12_000, stored.activeMs())
+    }
+
+    @Test fun recoverRecordsAResumeTheBackendAppliedButWeDidNotSave() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        advanceTimeBy(10_000)
+        first.handle(req("r2", "s", ExerciseOp.Pause)) // durable phase: Paused at 10 s
+        val (b2, c2) = rig(root = root); runCurrent()
+        c2.recover()
+        // Health Services is active again with 25 s active at 40 s: it resumed at 25 s.
+        b2.updates.emit(BackendUpdate.Phase(paused = false, atMs = 40_000, activeMs = 25_000)); runCurrent()
+        assertEquals(listOf(SessionEvent.Paused(10_000), SessionEvent.Resumed(25_000)), phaseEvents())
+        b2.updates.emit(BackendUpdate.Reading(Sample(40_000, hr = 90))); runCurrent()
+        val stored = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = {}).assembler!!
+        assertEquals(com.debasish.livefit.model.WorkoutPhase.Active, stored.phase())
+        assertEquals(25_000, stored.activeMs())
+    }
+
+    @Test fun backendPhaseMatchingOrOlderThanOurOwnIsIgnored() = runTest {
+        val backend = FakeBackend().apply { phaseDuringControl = true }
+        backend.now = { testScheduler.currentTime }
+        val (b, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        advanceTimeBy(5_000)
+        c.handle(req("r2", "s", ExerciseOp.Pause)) // Health Services' own Paused arrives while pause() is in flight
+        b.updates.emit(BackendUpdate.Phase(paused = true, atMs = 6_000)); runCurrent() // already paused
+        advanceTimeBy(5_000)
+        c.handle(req("r3", "s", ExerciseOp.Resume))
+        b.updates.emit(BackendUpdate.Phase(paused = true, atMs = 9_000)); runCurrent() // stale: before our resume
+        assertEquals(1, phaseEvents().count { it is SessionEvent.Paused })
+        assertEquals(1, phaseEvents().count { it is SessionEvent.Resumed })
+        assertTrue(results.all { it.ok })
     }
 }
