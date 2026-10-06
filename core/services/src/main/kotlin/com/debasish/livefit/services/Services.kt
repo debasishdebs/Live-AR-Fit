@@ -65,10 +65,11 @@ interface VoiceService {
     val state: StateFlow<VoiceState>
     /** Push-to-talk with the phone microphone. */
     fun listen()
-    /** External audio (glasses): returns false if busy or voice is unavailable. */
-    fun startExternal(): Boolean
-    fun feed(pcm: ByteArray)
-    fun endExternal()
+    /** External audio (glasses, phone mic thread): returns the capture id that owns voice, or null if busy or voice is unavailable. */
+    fun startExternal(): Long?
+    /** Audio and end for [capture]; ignored unless that capture still owns voice, so one source can't feed or end another's. */
+    fun feed(capture: Long, pcm: ByteArray)
+    fun endExternal(capture: Long)
 }
 
 /** Injected time source so state machines are testable with virtual time. */

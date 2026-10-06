@@ -21,7 +21,7 @@ class PhoneMic(private val context: Context, private val voice: () -> VoiceServi
             toast("Microphone permission needed"); return
         }
         val v = voice()
-        if (!v.startExternal()) return
+        val capture = v.startExternal() ?: return
         thread(name = "phone-mic") {
             var rec: AudioRecord? = null
             try {
@@ -35,14 +35,14 @@ class PhoneMic(private val context: Context, private val voice: () -> VoiceServi
                     val n = rec.read(chunk, 0, chunk.size)
                     if (n <= 0) break
                     val bytes = chunk.copyOf(n)
-                    v.feed(bytes)
+                    v.feed(capture, bytes)
                     if (vad.feed(bytes) != VadDecision.Continue) break
                 }
             } catch (e: Exception) {
                 toast("Microphone unavailable")
             } finally {
                 rec?.let { runCatching { it.stop() }; runCatching { it.release() } }
-                v.endExternal()
+                v.endExternal(capture)
             }
         }
     }

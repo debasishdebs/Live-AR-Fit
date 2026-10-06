@@ -26,6 +26,7 @@ class LiveVoiceService(
     private val _state = MutableStateFlow(VoiceState.Idle)
     override val state: StateFlow<VoiceState> = _state
     private var session: SttSession? = null
+    private var capture = 0L // id of the capture that owns [session]; ids are never reused
     // Bound when listening starts (review #5): the answer belongs to the prompt the user heard, not whatever is pending later.
     private var pack: LanguagePack? = null
     private var confirmationAtStart: String? = null
@@ -34,16 +35,17 @@ class LiveVoiceService(
 
     override fun listen() { phoneMic?.invoke() }
 
-    override fun startExternal(): Boolean = synchronized(lock) {
-        if (_state.value != VoiceState.Idle) return@synchronized false
+    override fun startExternal(): Long? = synchronized(lock) {
+        if (_state.value != VoiceState.Idle) return@synchronized null
         val loc = locale()
         val pack = LanguageRegistry.forLocale(loc)
         if (pack == null || !stt.isAvailable(loc)) {
             toast("Voice needs the ${pack?.displayName ?: loc} pack")
-            return@synchronized false
+            return@synchronized null
         }
         val s = stt.start(loc)
         session = s
+        val id = ++capture
         this.pack = pack
         confirmationAtStart = pendingConfirmationId()
         _state.value = VoiceState.Listening
@@ -51,17 +53,19 @@ class LiveVoiceService(
         listenGuard?.cancel()
         listenGuard = scope.launch {
             delay(LISTEN_GUARD_MS)
-            if (session === s && _state.value == VoiceState.Listening) endExternal()
+            endExternal(id)
         }
-        true
+        id
     }
 
-    override fun feed(pcm: ByteArray) { synchronized(lock) { if (_state.value == VoiceState.Listening) session?.feed(pcm) } }
+    override fun feed(capture: Long, pcm: ByteArray) {
+        synchronized(lock) { if (capture == this.capture && _state.value == VoiceState.Listening) session?.feed(pcm) }
+    }
 
-    override fun endExternal() {
+    override fun endExternal(capture: Long) {
         val (s, pack, confirmationId) = synchronized(lock) {
             val s = session ?: return
-            if (_state.value != VoiceState.Listening) return
+            if (capture != this.capture || _state.value != VoiceState.Listening) return
             listenGuard?.cancel()
             listenGuard = null
             _state.value = VoiceState.Processing
