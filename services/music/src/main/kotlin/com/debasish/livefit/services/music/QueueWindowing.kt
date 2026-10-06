@@ -18,8 +18,12 @@ object QueueWindowing {
 
     fun clampSize(size: Int): Int = size.coerceIn(MIN_SIZE, MAX_SIZE)
 
-    fun window(queue: List<QueueItem>, activeQueueId: Long?, size: Int): QueueWindow {
-        if (queue.isEmpty()) return QueueWindow()
+    /** Queue id of the [window] fallback entry for the now-playing song (MediaSession.QueueItem.UNKNOWN_ID). */
+    const val NOW_PLAYING_ID = -1L
+
+    /** [nowPlaying]: listed alone as the current item when the session reports no queue (B3); ignored if untitled. */
+    fun window(queue: List<QueueItem>, activeQueueId: Long?, size: Int, nowPlaying: QueueItem? = null): QueueWindow {
+        if (queue.isEmpty()) return nowPlaying?.takeIf { it.title.isNotBlank() }?.let { QueueWindow(listOf(trimmed(it)), currentIndex = 0) } ?: QueueWindow()
         val n = clampSize(size)
         val current = activeQueueId?.let { id -> queue.indexOfFirst { it.queueId == id } }?.takeIf { it >= 0 }
             // No (or an unknown) active item: show the start of the queue, nothing highlighted as current.

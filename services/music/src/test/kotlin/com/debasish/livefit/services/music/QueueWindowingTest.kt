@@ -14,6 +14,18 @@ class QueueWindowingTest {
         assertEquals(QueueWindow(), QueueWindowing.window(emptyList(), activeQueueId = null, size = 10))
     }
 
+    /** B3: YouTube Music sometimes reports no queue while a song plays; the screen still lists that song as current. */
+    @Test fun emptyQueueWithASongPlayingShowsTheNowPlayingSong() {
+        val np = QueueItem(QueueWindowing.NOW_PLAYING_ID, "Eye of the Tiger", "Survivor")
+        assertEquals(QueueWindow(listOf(np), currentIndex = 0), QueueWindowing.window(emptyList(), activeQueueId = null, size = 10, nowPlaying = np))
+        assertEquals(QueueWindow(), QueueWindowing.window(emptyList(), activeQueueId = null, size = 10, nowPlaying = np.copy(title = "")))
+    }
+
+    @Test fun aRealQueueIgnoresTheNowPlayingFallback() {
+        val np = QueueItem(QueueWindowing.NOW_PLAYING_ID, "Other")
+        assertEquals(QueueWindowing.window(queue, 100, 10), QueueWindowing.window(queue, 100, 10, nowPlaying = np))
+    }
+
     @Test fun currentAtStartIsFollowedByUpcomingOnly() {
         val w = QueueWindowing.window(queue, activeQueueId = 100, size = 10)
         assertEquals((0L until 10L).toList(), ids(w))
