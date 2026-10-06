@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Watch
+import com.debasish.livefit.phone.ui.linked.WATCH_MEDIA_CONTROLS_TIP
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -149,6 +150,9 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         }
         (if (step == SetupStep.Voice) voiceNote else pairNote)?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+        }
+        if (step == SetupStep.Watch) {
+            Text(WATCH_MEDIA_CONTROLS_TIP, style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp))
         }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
