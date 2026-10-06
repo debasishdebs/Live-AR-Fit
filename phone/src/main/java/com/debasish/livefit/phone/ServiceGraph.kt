@@ -39,9 +39,9 @@ import com.debasish.livefit.services.watch.FakeWatchLink
 import com.debasish.livefit.services.workout.HubWorkoutService
 import com.debasish.livefit.services.workout.SimulatedWatchGateway
 import com.debasish.livefit.sync.HubCommandRouter
+import com.debasish.livefit.sync.LinkSender
 import com.debasish.livefit.sync.StateBroadcaster
 import android.util.Log
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -202,17 +202,18 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         sentAtMs = clock.nowMs(),
     )
 
-    private suspend fun sendFrames() {
+    // One sender per link (F6): a slow or failing link must neither block nor delay the other; each gets the latest frame.
+    private val glassesSender = LinkSender<StateFrame>(scope, "glasses", onError = ::pushFailed) { glasses.push(it) }
+    private val watchSender = LinkSender<StateFrame>(scope, "watch", onError = ::pushFailed) { watch.push(it) }
+
+    private fun sendFrames() {
         val frame = buildFrame()
         _lastFrame.value = frame
-        pushTo("glasses") { glasses.push(frame) }
-        pushTo("watch") { watch.push(frame) }
+        glassesSender.offer(frame)
+        watchSender.offer(frame)
     }
 
-    /** One failing link must not block the other; cancellation still propagates. */
-    private suspend fun pushTo(name: String, push: suspend () -> Unit) {
-        try { push() } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w("LiveFitHub", "$name push failed", e) }
-    }
+    private fun pushFailed(name: String, e: Throwable) { Log.w("LiveFitHub", "$name push failed", e) }
 
     private fun phoneBattery(): Int? =
         app.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)

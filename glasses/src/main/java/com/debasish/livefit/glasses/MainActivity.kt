@@ -80,7 +80,8 @@ class MainActivity : ComponentActivity() {
                 // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
                 ptt.stop()
                 localToast = null
-                if (confirmInput.onConfirmation(frame?.confirmation)) ptt.start(maxMs = 6_000) // auto mic for a spoken answer
+                confirmInput.onConfirmation(frame?.confirmation)
+                if (confirmInput.takeMicRequest(frame?.confirmation)) ptt.start(maxMs = 6_000) // auto mic for a spoken answer
                 highlightYes = confirmInput.highlightYes
             }
             androidx.compose.runtime.LaunchedEffect(localToast) {

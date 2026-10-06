@@ -172,6 +172,10 @@ The phone owns the session; the watch only holds a **temporary durable buffer** 
 - First `Answer(id, yes)` from any device wins; phone clears it; the next frame dismisses it everywhere.
 - No answer by `expiresAtMs` (15 s) → **No**; all devices toast "Cancelled".
 - V1 kinds: `TakeOverWorkout` (another app tracking), `StopWorkoutByVoice`.
+- Every kind uses the same overlay on each device (phone dialog, watch overlay, glasses ✓/✕ band). To make sure the watch and glasses actually show it:
+  - frames go to each link through its **own conflated sender** (latest frame wins, 5 s timeout per push), so a slow or hung watch Data Layer push can't hold back the glasses' frame carrying the prompt (and vice versa);
+  - the hub opens the watch's LiveFit screen for each new confirmation (§6.2) — otherwise it sits behind Samsung's media controls during a workout with music;
+  - the glasses open the answer mic once per confirmation id, independent of touchpad events that sync the prompt first.
 
 ### 4.7 Version policy — coordinated upgrades
 All three APKs are built from the same commit and share one `protocolVersion`. Any mismatch (not only major) is treated as incompatible: the hub ignores commands from that device and tells it to update; the hub shows which device is outdated. `tools/install-all.sh` installs all three together. Unknown-field tolerance stays only as defensive parsing, not as a compatibility promise.

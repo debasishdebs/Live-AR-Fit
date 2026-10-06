@@ -18,6 +18,18 @@ class ConfirmInput {
         return isNew
     }
 
+    private var micFor: String? = null
+
+    /**
+     * True once per confirmation id: open the mic for a spoken answer. Kept apart from [onConfirmation]'s "new" result,
+     * which a touchpad event syncing the prompt first would consume (the auto mic then never opened).
+     */
+    fun takeMicRequest(c: Confirmation?): Boolean {
+        if (c == null || c.id == micFor) return false
+        micFor = c.id
+        return true
+    }
+
     fun onSwipe() { if (current != null) highlightYes = !highlightYes }
     fun onTap(): Command.Answer? = current?.let { Command.Answer(it.id, highlightYes) }
     fun onBack(): Command.Answer? = current?.let { Command.Answer(it.id, yes = false) }

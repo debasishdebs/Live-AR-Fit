@@ -48,4 +48,14 @@ class ConfirmInputTest {
         val i = ConfirmInput(); i.onConfirmation(null)
         assertNull(i.onTap()); assertNull(i.onBack())
     }
+
+    /** F6: a touchpad event that syncs the prompt first must not swallow the prompt's auto mic. */
+    @Test fun keyEventSyncingFirstStillLeavesTheAutoMicForTheNewPrompt() {
+        val i = ConfirmInput()
+        i.onConfirmation(c("a")) // onKeyUp syncs to the latest frame before the composition effect runs
+        assertTrue(i.takeMicRequest(c("a")))
+        assertFalse(i.takeMicRequest(c("a")), "once per prompt")
+        assertFalse(i.takeMicRequest(null))
+        assertTrue(i.takeMicRequest(c("b")))
+    }
 }
