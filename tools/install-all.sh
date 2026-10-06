@@ -11,7 +11,8 @@ PHONE=${PHONE:-$(serial_for SM_S93)}
 WATCH=${WATCH:-$(serial_for SM_R9)}
 GLASSES=${GLASSES:-$(serial_for RG_glasses)}
 
-for pair in "phone:$PHONE" "watch:$WATCH" "glasses:$GLASSES"; do
+# Phone last: its hub reconnects to the glasses on update, so the glasses app must already be replaced.
+for pair in "glasses:$GLASSES" "watch:$WATCH" "phone:$PHONE"; do
   name=${pair%%:*}; serial=${pair#*:}
   if [ -z "$serial" ]; then echo "SKIP $name: not connected"; continue; fi
   extra=""; [ "$name" = "phone" ] && extra="--user 0"
