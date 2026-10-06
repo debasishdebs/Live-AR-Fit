@@ -20,3 +20,6 @@ object WorkoutMusicPolicy {
         else -> MusicAction.None
     }
 }
+
+/** Query for play() when no YouTube Music session exists: the saved search, or null (just open) when blank. */
+fun resumeQuery(saved: String?): String? = saved?.trim()?.takeIf { it.isNotEmpty() }

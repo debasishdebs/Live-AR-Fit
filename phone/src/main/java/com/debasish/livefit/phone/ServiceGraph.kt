@@ -70,7 +70,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val watchGateway: WatchExerciseGateway = dataLayer ?: SimulatedWatchGateway(scope, clock)
     val watch: WatchLinkService = dataLayer ?: FakeWatchLink()
     val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app, scope) else FakeGlassesLink() // Task 14
-    private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope) else null // Task 15
+    private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope) { settings.musicSearch.value } else null // Task 15
     val music: MusicService = ytm ?: FakeMusicService(scope)
     val musicConnected: StateFlow<Boolean> = ytm?.connected ?: MutableStateFlow(true)
     // ---- end bindings ----

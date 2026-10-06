@@ -26,4 +26,10 @@ class WorkoutMusicPolicyTest {
         }
     }
     @Test fun syncingAdoptionDoesNotStartMusic() = assertEquals(MusicAction.None, act(WorkoutPhase.Syncing, WorkoutPhase.Active))
+
+    @Test fun resumeQueryUsesSavedSearchOrNullWhenBlank() {
+        assertEquals("workout mix", resumeQuery("  workout mix "))
+        assertEquals(null, resumeQuery(""))
+        assertEquals(null, resumeQuery(null))
+    }
 }

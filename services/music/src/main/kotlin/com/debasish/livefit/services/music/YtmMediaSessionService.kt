@@ -20,7 +20,12 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /** Controls the official YouTube Music app through its media session (spec §2.3, §5.5). */
-class YtmMediaSessionService(context: Context, scope: CoroutineScope) : MusicService {
+class YtmMediaSessionService(
+    context: Context,
+    scope: CoroutineScope,
+    /** The saved workout-music search (the setting the start-of-workout PlaySearch policy uses). */
+    private val savedQuery: () -> String? = { null },
+) : MusicService {
     private val app = context.applicationContext
     private val audio = app.getSystemService(AudioManager::class.java)
     private val sessions = app.getSystemService(MediaSessionManager::class.java)
@@ -73,7 +78,7 @@ class YtmMediaSessionService(context: Context, scope: CoroutineScope) : MusicSer
     }
 
     override fun playPause() { if (controller?.playbackState?.state == PlaybackState.STATE_PLAYING) pause() else play() }
-    override fun play() { controller?.transportControls?.play() ?: playSearch(null) }
+    override fun play() { controller?.transportControls?.play() ?: playSearch(resumeQuery(savedQuery())) }
     override fun pause() { controller?.transportControls?.pause() }
     override fun next() { controller?.transportControls?.skipToNext() }
     override fun previous() { controller?.transportControls?.skipToPrevious() }
