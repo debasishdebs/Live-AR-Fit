@@ -124,7 +124,7 @@ fun ListScreen(sourceId: String, filterJson: String?, onBack: () -> Unit, onMess
 
     Box(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft)) {
         Column(Modifier.fillMaxSize()) {
-            ScreenHeader(source.title, onBack) {
+            ScreenHeader(source.titleFor(filter), onBack) {
                 if (grouped) BadgedBox(badge = { if (statusFilter != null) Badge(containerColor = LiveFitColors.Mint) }) {
                     IconButton(onClick = { showFilters = true }) { Icon(Icons.Rounded.FilterList, contentDescription = "Filter") }
                 }

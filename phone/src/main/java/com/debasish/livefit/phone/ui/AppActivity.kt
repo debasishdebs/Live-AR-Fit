@@ -68,7 +68,7 @@ class AppActivity : ComponentActivity() {
                 val showNav = route != "workout" && route != "setup"
                 val tab = when {
                     route == "home" -> Tab.Home
-                    (route.startsWith("list/") && currentSource == ListSources.WORKOUTS) || route.startsWith("session/") -> Tab.Activity
+                    (route.startsWith("list/") && (currentSource == ListSources.WORKOUTS || currentSource == ListSources.WORKOUT_DAYS)) || route.startsWith("session/") -> Tab.Activity
                     route == "music" -> Tab.Music
                     route == "settings" || route == "hud" || route == "units" || route == "about" || route.startsWith("linked/") || route.startsWith("list/") -> Tab.Settings
                     else -> null
@@ -76,7 +76,7 @@ class AppActivity : ComponentActivity() {
                 val goTab: (Tab) -> Unit = { t ->
                     val dest = when (t) {
                         Tab.Home -> "home"
-                        Tab.Activity -> listRoute(ListSources.WORKOUTS, filter = null)
+                        Tab.Activity -> listRoute(ListSources.WORKOUT_DAYS, filter = null)
                         Tab.Music -> "music"
                         Tab.Settings -> "settings"
                     }
@@ -97,7 +97,7 @@ class AppActivity : ComponentActivity() {
                                 onSettings = { nav.navigate("settings") },
                                 onWorkout = { nav.navigate("workout") },
                                 onMusic = { nav.navigate("music") },
-                                onActivity = { nav.navigate(listRoute(ListSources.WORKOUTS, filter = null)) },
+                                onActivity = { nav.navigate(listRoute(ListSources.WORKOUT_DAYS, filter = null)) },
                                 onDevice = { nav.navigate("linked/$it") },
                             )
                         }
@@ -140,7 +140,7 @@ class AppActivity : ComponentActivity() {
                                 filterJson = entry.arguments?.getString("filter"),
                                 onBack = { nav.popBackStack() },
                                 onMessage = toast,
-                                onOpen = { nav.navigate("session/$it") },
+                                onOpen = { nav.navigate(it) },
                             )
                         }
                         composable("session/{id}") { e ->

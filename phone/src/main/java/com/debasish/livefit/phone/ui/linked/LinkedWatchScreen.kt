@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
@@ -28,6 +29,14 @@ import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.components.SectionLabel
 import com.debasish.livefit.phone.ui.components.SoftCard
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
+
+/**
+ * Optional Galaxy Watch tip (setup Watch step and Linked services → Watch): One UI Watch can auto-open
+ * Media controls when music starts, which covers LiveFit's workout screen. Never blocks setup.
+ */
+const val WATCH_MEDIA_CONTROLS_TIP =
+    "Optional: on the watch, turn off auto-open for Media controls (for example Settings → Apps → Media controls; " +
+        "the exact menu varies by One UI Watch version) so LiveFit's workout screen stays in front."
 
 @Composable
 fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String) -> Unit) {
@@ -56,6 +65,10 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.Favorite, LiveFitColors.ChipCoral, "Sensor permissions", "Granted on the watch: open Rokid LiveFit on the watch and tap Allow", {}, trailing = {})
             }
+        }
+        SectionLabel("Tip")
+        SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+            ChipRow(Icons.Rounded.MusicNote, LiveFitColors.ChipMint, "Keep the workout screen in front", WATCH_MEDIA_CONTROLS_TIP, {}, trailing = {})
         }
     }
 }

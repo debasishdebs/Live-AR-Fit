@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
+import com.debasish.livefit.phone.ui.list.sources.WorkoutDaysSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutHistorySource
 import org.json.JSONObject
 
@@ -52,6 +53,8 @@ sealed interface ActionResult {
  */
 interface ListSource {
     val title: String
+    /** Header title for a pre-filtered list (e.g. the day name); defaults to [title]. */
+    fun titleFor(filter: JSONObject?): String = title
     val searchHint: String
     /** Labels for the status filter chips and section headers. Empty = no grouping/filtering. */
     val statusLabels: Map<ItemStatus, String> get() = emptyMap()
@@ -69,11 +72,15 @@ object ListSources {
     const val LANGUAGES = "languages"
     const val PERMISSIONS = "permissions"
     const val WORKOUTS = "workouts"
+    /** Activity tab level 1 (one row per day); rows open [WORKOUTS] filtered by date. */
+    const val WORKOUT_DAYS = "workout-days"
 
+    /** [open] navigates to a route (e.g. a session detail or a filtered list). */
     fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
         LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale, services::refreshVoicePacksAsync)
         PERMISSIONS -> PermissionSource(context)
         WORKOUTS -> WorkoutHistorySource(services.history, open)
+        WORKOUT_DAYS -> WorkoutDaysSource(services.history, open)
         else -> error("Unknown list source: $id")
     }
 }
