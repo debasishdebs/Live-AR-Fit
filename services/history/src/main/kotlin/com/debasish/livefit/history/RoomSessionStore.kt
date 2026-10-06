@@ -38,7 +38,7 @@ class RoomSessionStore(db: HistoryDatabase, private val now: () -> Long = System
     override suspend fun lifecycle(sessionId: String): SessionLifecycle? {
         val e = dao.session(sessionId) ?: return null
         if (e.status == HistoryDao.DISCARDED) return SessionLifecycle(StoredSessionState.Discarded)
-        val state = if (e.summaryJson != null) StoredSessionState.Finalized else StoredSessionState.Open
+        val state = if (e.summaryJson != null || e.status == HistoryDao.CLEARED) StoredSessionState.Finalized else StoredSessionState.Open
         return SessionLifecycle(state, e.endReason?.let { EndReason.valueOf(it) }, e.endedAtMs)
     }
 
@@ -48,5 +48,5 @@ class RoomSessionStore(db: HistoryDatabase, private val now: () -> Long = System
     override val sessions: Flow<List<SessionSummary>> = dao.summaries().map { list -> list.map { Wire.decode<SessionSummary>(it) } }
     override suspend fun samples(sessionId: String): List<Sample> =
         dao.samples(sessionId).map { Sample(it.tMs, it.hr, it.steps, it.distanceKm, it.kcal, it.speedKmh) }
-    override suspend fun clearAll() = dao.clearAll()
+    override suspend fun clearFinished() = dao.clearFinished()
 }

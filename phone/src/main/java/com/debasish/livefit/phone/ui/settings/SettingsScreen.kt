@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.phone.BuildConfig
+import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import kotlinx.coroutines.launch
@@ -57,13 +58,16 @@ fun SettingsScreen(
     val glassesStatus = glasses.link.name + (glasses.batteryPct?.let { " · $it%" } ?: "")
     val watchStatus = watch.link.name + (watch.batteryPct?.let { " · $it%" } ?: "")
     val musicStatus = if (services.musicConnected.collectAsStateWithLifecycle().value) "Connected" else "Needs notification access"
+    val phase = services.workout.snapshot.collectAsStateWithLifecycle().value.phase
+    // Clearing only touches finished workouts, but stay out of the way while one is running or saving.
+    val canClear = phase == WorkoutPhase.Idle || phase == WorkoutPhase.Summary
     var confirmClear by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    if (confirmClear) AlertDialog(
+    if (confirmClear && canClear) AlertDialog(
         onDismissRequest = { confirmClear = false },
         title = { Text("Clear history?") },
-        text = { Text("All workouts stored on this phone are deleted.") },
-        confirmButton = { TextButton(onClick = { confirmClear = false; scope.launch { services.history.clearAll() } }) { Text("Clear") } },
+        text = { Text("All finished workouts stored on this phone are deleted.") },
+        confirmButton = { TextButton(onClick = { confirmClear = false; if (canClear) scope.launch { services.history.clearFinished() } }) { Text("Clear") } },
         dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
     )
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
@@ -91,7 +95,10 @@ fun SettingsScreen(
                 trailing = { Switch(gps, null) })
         }
         SectionLabel("Data")
-        Group { ChipRow(Icons.Rounded.DeleteSweep, LiveFitColors.ChipCoral, "Clear history", "Removes all workouts on this phone", { confirmClear = true }) }
+        Group {
+            ChipRow(Icons.Rounded.DeleteSweep, LiveFitColors.ChipCoral, "Clear history",
+                if (canClear) "Removes all workouts on this phone" else "Available when no workout is running", { confirmClear = true }, enabled = canClear)
+        }
         SectionLabel("Advanced")
         Group {
             if (BuildConfig.DEBUG) { ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Developer tools", "Spike console", onDeveloper); Divider() }

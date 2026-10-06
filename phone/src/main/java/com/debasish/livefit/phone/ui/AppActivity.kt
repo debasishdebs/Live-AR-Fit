@@ -51,7 +51,6 @@ class AppActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        LiveFitHubService.start(this)
         // App opened: connect now if no session is in flight (authorization runs through AuthActivity).
         if (savedInstanceState == null) (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.connect()
         setContent {
@@ -157,6 +156,12 @@ class AppActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** App opened or back from a permission screen: start the hub if it isn't running yet (spec §5.2). */
+    override fun onResume() {
+        super.onResume()
+        LiveFitHubService.ensureRunning(this)
     }
 
     companion object {

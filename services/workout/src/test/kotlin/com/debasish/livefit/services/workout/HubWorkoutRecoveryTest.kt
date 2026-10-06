@@ -18,6 +18,7 @@ import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.SessionLifecycle
 import com.debasish.livefit.services.SessionStore
+import com.debasish.livefit.services.StoredSessionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -161,6 +162,76 @@ class HubWorkoutRecoveryTest {
         r.gateway.stateReports.emit(ExerciseStateReport(sessionId = id, state = ExerciseState.Ended, endedBy = EndReason.System)); runCurrent()
         r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
         assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+    }
+
+    /** Review #6: the watch lost its buffer while the phone still shows Active — finalize what we have. */
+    @Test fun watchWithoutBufferMakesActiveSessionIncomplete() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
+        assertEquals(WorkoutPhase.Summary, r.hub.snapshot.value.phase)
+        assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+        assertEquals(EndReason.System, r.store.summaries[id]!!.endReason)
+        assertTrue("Workout saved as incomplete" in r.notices)
+        assertTrue(r.store.lifecycle(id)!!.endedAtMs != null)
+        r.hub.dismissSummary(); r.hub.start(WorkoutType.Run); runCurrent()
+        assertEquals(WorkoutPhase.Starting, r.hub.snapshot.value.phase, "a new workout can start")
+    }
+
+    @Test fun watchWithoutBufferMakesPausedSessionIncomplete() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, listOf(SessionEvent.Paused(2_000)), samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        assertEquals(WorkoutPhase.Paused, r.hub.snapshot.value.phase)
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
+        assertEquals(WorkoutPhase.Summary, r.hub.snapshot.value.phase)
+        assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+    }
+
+    @Test fun watchWithoutBufferDiscardsActiveSessionWithoutSamples() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
+        assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
+        assertNull(r.store.summaries[id])
+        assertEquals(StoredSessionState.Discarded, r.store.lifecycle(id)!!.state)
+    }
+
+    @Test fun stopAnsweredWithNoActiveSessionEndsActiveSessionAsIncomplete() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.hub.stop(); runCurrent()
+        assertEquals(ExerciseOp.Stop, r.gateway.sent.last().op)
+        r.gateway.reply(ok = false, error = ExerciseError.WrongSession(null), state = ExerciseState.Idle); runCurrent()
+        assertEquals(WorkoutPhase.Summary, r.hub.snapshot.value.phase)
+        assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+        assertTrue("Workout saved as incomplete" in r.notices)
+    }
+
+    @Test fun stopAnsweredWithNoActiveSessionEndsPausedSession() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, listOf(SessionEvent.Paused(2_000)), samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.hub.stop(); runCurrent()
+        r.gateway.reply(ok = false, error = ExerciseError.WrongSession(null), state = ExerciseState.Idle); runCurrent()
+        assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+    }
+
+    /** An Idle report sent before the watch handled our Start must not end the session being started. */
+    @Test fun idleReportDuringStartIsIgnored() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val id = r.gateway.sent.single().sessionId
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
+        assertEquals(WorkoutPhase.Starting, r.hub.snapshot.value.phase)
+        r.gateway.deltas.emit(d(id, 0, listOf(SessionEvent.Started(0, WorkoutType.Walk)), samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)); runCurrent()
+        assertEquals(WorkoutPhase.Active, r.hub.snapshot.value.phase, "start result still pending")
+        r.gateway.reply(); runCurrent()
+        assertEquals(WorkoutPhase.Active, r.hub.snapshot.value.phase)
+        assertNull(r.store.summaries[id])
     }
 
     /** Review Focus #5. */

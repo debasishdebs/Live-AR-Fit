@@ -18,15 +18,15 @@ interface HistoryDao {
     @Query("SELECT * FROM session WHERE id = :id") suspend fun session(id: String): SessionEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertSession(s: SessionEntity)
     @Query("UPDATE session SET endedAtMs = COALESCE(endedAtMs, :at), endReason = COALESCE(endReason, :reason) WHERE id = :id") suspend fun markEnded(id: String, reason: String?, at: Long)
-    @Query("UPDATE session SET summaryJson = :json, status = :status, startMs = :startMs WHERE id = :id AND status != 'Discarded'") suspend fun finalize(id: String, json: String, status: String, startMs: Long)
-    @Query("SELECT summaryJson FROM session WHERE summaryJson IS NOT NULL ORDER BY startMs DESC") fun summaries(): Flow<List<String>>
+    @Query("UPDATE session SET summaryJson = :json, status = :status, startMs = :startMs WHERE id = :id AND status NOT IN ('Discarded', 'Cleared')") suspend fun finalize(id: String, json: String, status: String, startMs: Long)
+    @Query("SELECT summaryJson FROM session WHERE summaryJson IS NOT NULL AND status != 'Cleared' ORDER BY startMs DESC") fun summaries(): Flow<List<String>>
     @Query("SELECT * FROM sample WHERE sessionId = :id ORDER BY tMs") suspend fun samples(id: String): List<SampleEntity>
     @Query("DELETE FROM delta WHERE sessionId = :id") suspend fun deleteDeltas(id: String)
     @Query("DELETE FROM sample WHERE sessionId = :id") suspend fun deleteSamples(id: String)
     @Query("DELETE FROM session WHERE id = :id") suspend fun deleteSession(id: String)
-    @Query("DELETE FROM delta") suspend fun clearDeltas()
-    @Query("DELETE FROM sample") suspend fun clearSamples()
-    @Query("DELETE FROM session") suspend fun clearSessions()
+    @Query("DELETE FROM delta WHERE sessionId IN (SELECT id FROM session WHERE summaryJson IS NOT NULL)") suspend fun clearFinishedDeltas()
+    @Query("DELETE FROM sample WHERE sessionId IN (SELECT id FROM session WHERE summaryJson IS NOT NULL)") suspend fun clearFinishedSamples()
+    @Query("UPDATE session SET summaryJson = '', status = 'Cleared' WHERE summaryJson IS NOT NULL") suspend fun hideFinishedSessions()
 
     @Transaction
     suspend fun storeDelta(session: SessionEntity, delta: DeltaEntity, samples: List<SampleEntity>): List<Long> {
@@ -56,8 +56,16 @@ interface HistoryDao {
         finalize(id, json, status, startMs)
     }
 
-    companion object { const val DISCARDED = "Discarded" }
+    companion object {
+        const val DISCARDED = "Discarded"
+        /** Tombstone of a finalized session removed by "Clear history": hidden, data deleted, still Finalized for the hub. */
+        const val CLEARED = "Cleared"
+    }
 
+    /**
+     * "Clear history": deletes finalized sessions' data. Open sessions (running, syncing, stopping) keep everything,
+     * and every session row stays as a tombstone so stale watch traffic for it is still rejected after a restart.
+     */
     @Transaction
-    suspend fun clearAll() { clearDeltas(); clearSamples(); clearSessions() }
+    suspend fun clearFinished() { clearFinishedDeltas(); clearFinishedSamples(); hideFinishedSessions() }
 }

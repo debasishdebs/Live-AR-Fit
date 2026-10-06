@@ -112,7 +112,11 @@ class HubWorkoutService(
             scope.launch { abandon(id); sendStop(id) }
             return
         }
-        scopedOp(ExerciseOp.Stop, setOf(WorkoutPhase.Active, WorkoutPhase.Paused), "stop")
+        scopedOp(ExerciseOp.Stop, setOf(WorkoutPhase.Active, WorkoutPhase.Paused), "stop") { r ->
+            // The watch runs no session at all: ours is gone there, so end it here (spec §4.9 recovery impossible).
+            val e = r.error
+            if (e is ExerciseError.WrongSession && e.activeSessionId == null) { mutex.withLock { lostOnWatchLocked(r.sessionId) }; true } else false
+        }
     }
 
     override fun dismissSummary() {
@@ -163,7 +167,8 @@ class HubWorkoutService(
         }
     }
 
-    private fun scopedOp(op: ExerciseOp, allowed: Set<WorkoutPhase>, verb: String) {
+    /** [onError] returns true when it handled a failed result itself. */
+    private fun scopedOp(op: ExerciseOp, allowed: Set<WorkoutPhase>, verb: String, onError: suspend (ExerciseResult) -> Boolean = { false }) {
         val phase = _snapshot.value.phase
         if (phase == WorkoutPhase.Syncing) { notice(SYNCING_NOTICE); return }
         if (phase !in allowed) return
@@ -172,7 +177,7 @@ class HubWorkoutService(
             val r = request(id, op)
             when {
                 r == null -> notice("Watch didn't respond")
-                !r.ok -> notice("Couldn't $verb workout")
+                !r.ok && !onError(r) -> notice("Couldn't $verb workout")
             }
         }
     }
@@ -269,10 +274,12 @@ class HubWorkoutService(
 
     private suspend fun onStateReportLocked(r: ExerciseStateReport) {
         val a = current
-        if (r.state == ExerciseState.Idle && r.sessionId != currentId && a != null && !finishedCurrent && isEnded(a) && !a.isComplete) {
-            finalize(a, SessionStatus.Incomplete) // watch holds no buffer for our session: data is gone
-            notice("Workout saved as incomplete")
-            return
+        if (r.state == ExerciseState.Idle && r.sessionId != currentId && a != null && !finishedCurrent && !a.isComplete) {
+            // Watch holds no buffer for our session: data is gone. Ended sessions finalize as before; a running one
+            // only once the watch has started it (deltas stored and no Start result pending), so an Idle report sent
+            // before the watch handled our Start can't end it.
+            if (isEnded(a)) { finalize(a, SessionStatus.Incomplete); notice("Workout saved as incomplete"); return }
+            if (a.deltaCount > 0 && startJob?.isActive != true) { lostOnWatchLocked(a.sessionId); return }
         }
         if (r.sessionId != currentId || finishedCurrent) return
         if (r.state == ExerciseState.Ended) {
@@ -282,6 +289,23 @@ class HubWorkoutService(
             store.markEnded(r.sessionId, r.endedBy, endedAtMs!!) // survives a phone restart
             r.endedBy?.let { if (it != EndReason.User) notice("Workout ended by ${describe(it)}") }
             publish()
+        }
+    }
+
+    /**
+     * The watch has no session and no buffer while ours still runs here: end it (System) and keep what is stored —
+     * Incomplete with samples, otherwise discarded like [adopt] does.
+     */
+    private suspend fun lostOnWatchLocked(id: String) {
+        val a = current ?: return
+        if (currentId != id || finishedCurrent) return
+        if (endReason == null) endReason = EndReason.System
+        if (endedAtMs == null) endedAtMs = clock.nowMs()
+        store.markEnded(id, endReason, endedAtMs!!)
+        when {
+            a.isComplete -> finalize(a, SessionStatus.Complete)
+            a.hasSamples -> { finalize(a, SessionStatus.Incomplete); notice("Workout saved as incomplete") }
+            else -> { store.discard(id); resetIdle(); notice("Workout ended on the watch") }
         }
     }
 
