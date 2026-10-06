@@ -25,7 +25,7 @@ object WatchRuntime {
         SupervisorJob() + Dispatchers.Main.immediate +
             kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "uncaught in WatchRuntime.scope", e) },
     )
-    private lateinit var app: Context
+    lateinit var app: Context; private set
     lateinit var recorder: WatchSessionRecorder; private set
     lateinit var controller: WatchExerciseController; private set
     private var initialized = false

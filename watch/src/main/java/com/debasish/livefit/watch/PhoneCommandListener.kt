@@ -1,6 +1,7 @@
 package com.debasish.livefit.watch
 
 import com.debasish.livefit.model.DeltaAck
+import com.debasish.livefit.model.ExerciseOp
 import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.WatchPaths
@@ -27,7 +28,11 @@ class PhoneCommandListener : WearableListenerService() {
         WatchRuntime.scope.launch {
             try {
                 when (event.path) {
-                    WatchPaths.EXERCISE_REQ -> WatchRuntime.controller.handle(Wire.decode<ExerciseRequest>(text))
+                    WatchPaths.EXERCISE_REQ -> {
+                        val req = Wire.decode<ExerciseRequest>(text)
+                        WatchRuntime.controller.handle(req)
+                        if (req.op is ExerciseOp.Start) WatchFront.onHubStart(this@PhoneCommandListener) // A3: don't wait for the phone's delayed launch
+                    }
                     WatchPaths.ACK -> WatchRuntime.recorder.onAck(Wire.decode<DeltaAck>(text))
                     WatchPaths.STATE -> WatchClient.onFrame(text)
                     WatchPaths.DISCOVERABLE -> DiscoverableActivity.start(this@PhoneCommandListener, text)

@@ -78,6 +78,7 @@ object WatchClient {
         if (!wasOnline) WatchRuntime.scope.launch { onReconnected() }
         wasOnline = true
         refresh()
+        WatchFront.onConfirmation(WatchRuntime.app, frame.confirmation?.id)
     }
 
     fun onOutdated() { _ui.value = _ui.value.copy(outdated = true) }
