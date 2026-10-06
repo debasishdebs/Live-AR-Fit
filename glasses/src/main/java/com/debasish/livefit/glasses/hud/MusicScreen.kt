@@ -80,10 +80,10 @@ fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: Str
         Spacer(Modifier.height(6.dp))
         val hint = when {
             highlight != null -> "swipe to move · tap to play"
-            queue.items.isEmpty() -> "tap to talk · swipe back for workout"
-            else -> "tap to choose · swipe back for workout"
+            queue.items.isEmpty() -> "tap: talk · swipe back: workout"
+            else -> "tap: choose · swipe back: workout"
         }
-        Label(hint, 20.sp, Hud.TERTIARY)
+        Label(hint, 18.sp, Hud.TERTIARY, maxLines = 2) // the HUD block is narrow at 40 % size
     }
 }
 
