@@ -12,6 +12,7 @@ import com.debasish.livefit.model.DeviceState
 import com.debasish.livefit.model.Devices
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
@@ -71,7 +72,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val watchGateway: WatchExerciseGateway = dataLayer ?: SimulatedWatchGateway(scope, clock)
     val watch: WatchLinkService = dataLayer ?: FakeWatchLink()
     val glasses: GlassesLinkService = if (bindings.liveGlasses) CxrGlassesLink(app, scope) else FakeGlassesLink() // Task 14
-    private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope) { settings.musicSearch.value } else null // Task 15
+    private val ytm: YtmMediaSessionService? = if (bindings.liveMusic) YtmMediaSessionService(app, scope, savedQuery = { settings.musicSearch.value }, queueSize = { settings.glassesQueueSize.value }) else null // Task 15
     val music: MusicService = ytm ?: FakeMusicService(scope)
     val musicConnected: StateFlow<Boolean> = ytm?.connected ?: MutableStateFlow(true)
     // ---- end bindings ----
@@ -154,6 +155,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
             combine(settings.hud, glasses.status) { hud, st -> hud to st.link }
                 .distinctUntilChanged()
                 .collect { (hud, link) -> if (link == LinkState.Connected) glasses.pushSettings(HudSettingsFrame(settings = hud)) }
+        }
+        // Glasses music screen: the queue window only when it changes, and again whenever the glasses (re)connect.
+        scope.launch {
+            combine(music.queue, glasses.status) { q, st -> q to st.link }
+                .distinctUntilChanged()
+                .collect { (q, link) -> if (link == LinkState.Connected) glasses.pushQueue(QueueFrame(window = q)) }
         }
         // Workout music policy (settings -> Music).
         scope.launch {

@@ -16,13 +16,13 @@ class WireTest {
             toast = "Next song", sentAtMs = 5,
         )
         roundTrip(frame)
-        assertTrue(Wire.encode(frame).contains("\"protocolVersion\":1"), "version must be encoded even though it is a default")
+        assertTrue(Wire.encode(frame).contains("\"protocolVersion\":$PROTOCOL_VERSION"), "version must be encoded even though it is a default")
     }
 
     @Test fun commandEnvelopesRoundTrip() {
         val commands = listOf(
             Command.StartWorkout(WorkoutType.Cycle), Command.SetVolume(0.75f), Command.Answer("c1", yes = true),
-            Command.PauseWorkout, Command.Volume(up = false),
+            Command.PauseWorkout, Command.Volume(up = false), Command.PlayQueueItem(9_007_199_254_740_993L),
         )
         for (c in commands) roundTrip(CommandEnvelope(id = "id-$c", origin = DeviceKind.Watch, command = c))
     }
@@ -54,11 +54,28 @@ class WireTest {
         roundTrip(ExerciseStateReport(sessionId = "s", state = ExerciseState.Ended, endedBy = EndReason.OtherApp))
     }
 
+    @Test fun queueFrameRoundTripsWithVersion() {
+        val frame = QueueFrame(window = QueueWindow(listOf(QueueItem(3, "Song", "Artist"), QueueItem(4, "Next")), currentIndex = 0))
+        roundTrip(frame)
+        roundTrip(QueueFrame(window = QueueWindow()))
+        assertEquals(PROTOCOL_VERSION, Wire.versionOf(Wire.encode(frame)))
+        assertEquals(QueueItem(3, "Song", "Artist"), frame.window.current)
+        assertEquals(null, QueueWindow(listOf(QueueItem(1, "a")), currentIndex = null).current)
+    }
+
+    @Test fun playQueueItemUsesTheCmdDiscriminator() {
+        val json = Wire.encode(CommandEnvelope(id = "i", origin = DeviceKind.Glasses, command = Command.PlayQueueItem(42)))
+        assertTrue(json.contains("\"cmd\":\"com.debasish.livefit.model.Command.PlayQueueItem\"") && json.contains("\"queueId\":42"), json)
+    }
+
+    /** §4.7: v2 added lf_queue and PlayQueueItem; a v1 peer is outdated. */
+    @Test fun protocolVersionIsTwo() = assertEquals(2, PROTOCOL_VERSION)
+
     @Test fun hudSettingsFrameRoundTrips() =
         roundTrip(HudSettingsFrame(settings = HudSettings(scale = 0.5f, position = HudPosition.TopRight, items = setOf(HudItem.HeartRate))))
 
     @Test fun versionOfReadsAnyMessage() {
-        assertEquals(1, Wire.versionOf(Wire.encode(DeltaAck(sessionId = "s", seq = 1))))
+        assertEquals(PROTOCOL_VERSION, Wire.versionOf(Wire.encode(DeltaAck(sessionId = "s", seq = 1))))
         assertEquals(null, Wire.versionOf("not json"))
         assertEquals(null, Wire.versionOf("{\"seq\":1}"))
     }
@@ -72,11 +89,12 @@ class WireTest {
     /** D2: the peer makes itself discoverable for CDM only on a current-version request. */
     @Test fun discoverableRequestParsesOnlyCurrentVersion() {
         assertEquals(120, DiscoverableRequest.parse(Wire.encode(DiscoverableRequest())))
-        assertTrue(Wire.encode(DiscoverableRequest()).contains("\"protocolVersion\":1"))
+        assertTrue(Wire.encode(DiscoverableRequest()).contains("\"protocolVersion\":$PROTOCOL_VERSION"))
         assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":0,"seconds":120}"""), "outdated sender")
+        assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":120}"""), "a v1 phone is outdated since v2")
         assertEquals(null, DiscoverableRequest.parse("""{"seconds":120}"""), "unversioned")
         assertEquals(null, DiscoverableRequest.parse("garbage"))
-        assertEquals(300, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":9999}"""), "clamped to the platform maximum")
-        assertEquals(1, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":-5}"""))
+        assertEquals(300, DiscoverableRequest.parse("""{"protocolVersion":$PROTOCOL_VERSION,"seconds":9999}"""), "clamped to the platform maximum")
+        assertEquals(1, DiscoverableRequest.parse("""{"protocolVersion":$PROTOCOL_VERSION,"seconds":-5}"""))
     }
 }

@@ -68,6 +68,7 @@ class HubCommandRouter(
             Command.LikeTrack -> music.toggleLike()
             is Command.Volume -> music.setVolume((music.volume.value + if (command.up) 0.1f else -0.1f).coerceIn(0f, 1f))
             is Command.SetVolume -> music.setVolume(command.level.coerceIn(0f, 1f))
+            is Command.PlayQueueItem -> music.playQueueItem(command.queueId)
             is Command.Answer -> scope.launch { confirm.answer(command.confirmationId, command.yes) }
         }
         describe(command)?.let(toast)
@@ -86,6 +87,7 @@ class HubCommandRouter(
             Command.LikeTrack -> "Liked"
             is Command.Volume -> if (command.up) "Volume up" else "Volume down"
             is Command.SetVolume -> "Volume ${(command.level * 100).toInt().coerceIn(0, 100)}%"
+            is Command.PlayQueueItem -> "Playing selected song"
             is Command.Answer -> null
         }
     }

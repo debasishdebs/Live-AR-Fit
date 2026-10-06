@@ -8,6 +8,7 @@ import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.GlassesEvent
@@ -54,6 +55,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     private var retryJob: Job? = null
     private var connectJob: Job? = null
     private var lastSettings: HudSettingsFrame? = null
+    private var lastQueue: QueueFrame? = null
     private val inbound = GlassesInbound() // thread-safe: fed from CXR callback threads
 
     private val _status = MutableStateFlow(DeviceStatus("Rokid Glasses", LinkState.Disconnected))
@@ -121,7 +123,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         if (actions.isNotEmpty()) { retryJob?.cancel(); retryJob = null; connectJob?.cancel(); connectJob = null }
         for (a in actions) when (a) {
             LinkAction.Connect -> openSession()
-            LinkAction.SendSettings -> scope.launch { lastSettings?.let { pushSettings(it) } }
+            LinkAction.SendSettings -> scope.launch { lastSettings?.let { pushSettings(it) }; lastQueue?.let { pushQueue(it) } }
             is LinkAction.ScheduleRetry -> retryJob = scope.launch { delay(a.delayMs); act(policy.onEvent(LinkEvent.RetryTimer)) }
             LinkAction.MarkConnected -> _status.update { it.copy(link = LinkState.Connected, detail = null) }
             LinkAction.MarkConnecting -> _status.update { it.copy(link = LinkState.Connecting, detail = null) }
@@ -215,6 +217,11 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     override suspend fun pushSettings(frame: HudSettingsFrame) {
         lastSettings = frame
         send(GlassesChannels.SETTINGS, Wire.encode(frame))
+    }
+
+    override suspend fun pushQueue(frame: QueueFrame) {
+        lastQueue = frame
+        send(GlassesChannels.QUEUE, Wire.encode(frame))
     }
 
     private fun send(channel: String, json: String): Boolean {

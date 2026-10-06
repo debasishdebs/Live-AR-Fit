@@ -6,6 +6,7 @@ import com.debasish.livefit.model.Confirmation
 import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.NowPlaying
+import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.ConfirmationOutcome
@@ -44,6 +45,8 @@ class HubCommandRouterTest {
         override fun previous() { calls += "previous" }
         override fun toggleLike() { calls += "like" }
         override fun setVolume(level: Float) { calls += "vol:${"%.1f".format(level)}" }
+        override val queue = MutableStateFlow(com.debasish.livefit.model.QueueWindow())
+        override fun playQueueItem(queueId: Long) { calls += "queue:$queueId" }
     }
     private val confirm = object : ConfirmationService {
         override val pending = MutableStateFlow<Confirmation?>(null)
@@ -52,7 +55,7 @@ class HubCommandRouterTest {
     }
     private val toasts = mutableListOf<String>()
     private fun TestScope.router() = HubCommandRouter(workout, music, confirm, backgroundScope, toast = { toasts += it })
-    private fun env(id: String, c: Command, origin: DeviceKind = DeviceKind.Watch, version: Int = 1) =
+    private fun env(id: String, c: Command, origin: DeviceKind = DeviceKind.Watch, version: Int = PROTOCOL_VERSION) =
         CommandEnvelope(protocolVersion = version, id = id, origin = origin, command = c)
 
     @Test fun routesEveryCommand() = runTest {
@@ -60,11 +63,19 @@ class HubCommandRouterTest {
         listOf(
             Command.StartWorkout(WorkoutType.Run), Command.PauseWorkout, Command.ResumeWorkout, Command.StopWorkout, Command.DismissSummary,
             Command.PlayPause, Command.PlayMusic, Command.PauseMusic, Command.NextTrack, Command.PreviousTrack, Command.LikeTrack,
-            Command.Volume(up = true), Command.SetVolume(0.2f), Command.Answer("c1", yes = false),
+            Command.Volume(up = true), Command.SetVolume(0.2f), Command.PlayQueueItem(42), Command.Answer("c1", yes = false),
         ).forEachIndexed { i, c -> r.dispatch(env("id$i", c)) }
         runCurrent()
         assertEquals(listOf("start:Run", "pauseWorkout", "resumeWorkout", "stopWorkout", "dismiss", "playPause", "play", "pauseMusic",
-            "next", "previous", "like", "vol:0.6", "vol:0.2", "answer:c1:false"), calls)
+            "next", "previous", "like", "vol:0.6", "vol:0.2", "queue:42", "answer:c1:false"), calls)
+    }
+
+    /** M1: the glasses music screen's tap plays the highlighted queue entry, with a short toast. */
+    @Test fun playQueueItemFromTheGlassesSkipsToThatEntry() = runTest {
+        val r = router()
+        r.dispatch(env("q", Command.PlayQueueItem(7), origin = DeviceKind.Glasses)); runCurrent()
+        assertEquals(listOf("queue:7"), calls)
+        assertEquals(listOf("Playing selected song"), toasts)
     }
 
     @Test fun duplicateIdsAreAppliedOnce() = runTest {

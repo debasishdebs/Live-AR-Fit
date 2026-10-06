@@ -20,18 +20,23 @@ import com.debasish.livefit.glasses.hud.ConfirmInput
 import com.debasish.livefit.glasses.hud.HudClock
 import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
-import com.debasish.livefit.glasses.hud.HudMode
+import com.debasish.livefit.glasses.hud.HudNav
+import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.glasses.hud.HudOverlay
 import com.debasish.livefit.glasses.hud.HudScreen
 import com.debasish.livefit.glasses.voice.PushToTalk
 import com.rokid.cxr.CXRServiceBridge
 
-/** Glasses HUD. Touchpad: tap = talk, swipe = toggle full/glance, double-tap (back) = exit. */
+/**
+ * Glasses HUD. Touchpad (see [HudNav]): tap = talk, back swipe = toggle full/glance, forward swipe = music screen,
+ * double-tap (back) = exit. Music screen: swipe = move highlight, tap = play it, double-tap = back to the HUD.
+ * A pending confirmation overrides all of these ([ConfirmInput]).
+ */
 class MainActivity : ComponentActivity() {
 
     private lateinit var controller: HudController
     private lateinit var ptt: PushToTalk
-    private var mode by mutableStateOf(HudMode.Full)
+    private var nav by mutableStateOf(HudNav())
     private var lastSwipe = 0L
     private val confirmInput = ConfirmInput()
     private var highlightYes by mutableStateOf(true)
@@ -76,6 +81,7 @@ class MainActivity : ComponentActivity() {
             val connection by controller.connection.collectAsStateWithLifecycle()
             val history by controller.hrHistory.collectAsStateWithLifecycle()
             val listening by ptt.recording.collectAsStateWithLifecycle()
+            val queue by controller.queue.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
                 // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
                 ptt.stop()
@@ -96,7 +102,8 @@ class MainActivity : ComponentActivity() {
                 listening -> HudOverlay.LocalListening
                 else -> HudOverlay.None
             }
-            HudScreen(frame, settings, connection, mode, battery, history, overlay = overlay, clock = clock)
+            HudScreen(frame, settings, connection, nav.mode, battery, history, overlay = overlay, clock = clock,
+                page = nav.page, queue = queue, musicHighlight = nav.highlightIndex(queue))
         }
     }
 
@@ -126,15 +133,24 @@ class MainActivity : ComponentActivity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
         when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER ->
-                if (pending) confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
-                else if (controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> {
+                val play = if (pending) null else nav.onTap(controller.queue.value)
+                when {
+                    pending -> confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
+                    play != null -> controller.send(play) // music screen: play the highlighted song
+                    controller.connection.value != HudConnection.Outdated -> ptt.toggle() // the hub ignores voice from a mismatched app
+                }
+            }
             // One swipe can emit several key events; debounce like the UPI app does.
+            // Rokid swipes arrive as horizontal keys: RIGHT/DOWN = forward, LEFT/UP = back.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 val now = System.currentTimeMillis()
                 if (now - lastSwipe > 350) {
                     if (pending) { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
-                    else mode = if (mode == HudMode.Full) HudMode.Glance else HudMode.Full
+                    else nav = nav.onSwipe(
+                        forward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN,
+                        inWorkout = inWorkout(), queue = controller.queue.value,
+                    )
                 }
                 lastSwipe = now
             }
@@ -148,7 +164,16 @@ class MainActivity : ComponentActivity() {
     override fun onBackPressed() {
         confirmInput.onConfirmation(controller.frame.value?.confirmation)
         val answer = confirmInput.onBack()
-        if (answer != null) { controller.send(answer); ptt.stop() } else super.onBackPressed()
+        val leaveMusic = if (answer == null) nav.onBack() else null
+        when {
+            answer != null -> { controller.send(answer); ptt.stop() }
+            leaveMusic != null -> nav = leaveMusic // music screen → workout HUD, not out of the app
+            else -> super.onBackPressed()
+        }
+    }
+
+    private fun inWorkout(): Boolean = controller.frame.value?.workout?.phase.let {
+        it == WorkoutPhase.Starting || it == WorkoutPhase.Active || it == WorkoutPhase.Paused || it == WorkoutPhase.Syncing
     }
 
     /** Never leave the mic open once the app is no longer in the foreground. */

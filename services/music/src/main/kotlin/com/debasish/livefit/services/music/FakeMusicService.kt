@@ -1,6 +1,8 @@
 package com.debasish.livefit.services.music
 
 import com.debasish.livefit.model.NowPlaying
+import com.debasish.livefit.model.QueueItem
+import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.services.MusicService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -23,6 +25,8 @@ class FakeMusicService(scope: CoroutineScope) : MusicService {
     override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying
     private val _volume = MutableStateFlow(0.6f)
     override val volume: StateFlow<Float> = _volume
+    private val _queue = MutableStateFlow(queueAt(0))
+    override val queue: StateFlow<QueueWindow> = _queue
 
     init {
         scope.launch {
@@ -43,8 +47,18 @@ class FakeMusicService(scope: CoroutineScope) : MusicService {
     override fun toggleLike() = _nowPlaying.update { it?.copy(liked = !it.liked) }
     override fun setVolume(level: Float) { _volume.value = level.coerceIn(0f, 1f) }
 
+    override fun playQueueItem(queueId: Long) {
+        val i = queueId.toInt()
+        if (i in playlist.indices) { index = i; _nowPlaying.value = playlist[index]; _queue.value = queueAt(index) }
+    }
+
     private fun jump(delta: Int) {
         index = (index + delta + playlist.size) % playlist.size
         _nowPlaying.value = playlist[index]
+        _queue.value = queueAt(index)
     }
+
+    private fun queueAt(current: Int) = QueueWindowing.window(
+        playlist.mapIndexed { i, np -> QueueItem(i.toLong(), np.title, np.artist) }, activeQueueId = current.toLong(), size = QueueWindowing.DEFAULT_SIZE,
+    )
 }

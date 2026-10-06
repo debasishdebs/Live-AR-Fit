@@ -8,11 +8,14 @@ import android.content.Intent
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Bundle
 import android.provider.MediaStore
 import com.debasish.livefit.model.NowPlaying
+import com.debasish.livefit.model.QueueItem
+import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.services.MusicService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -27,6 +30,8 @@ class YtmMediaSessionService(
     private val scope: CoroutineScope,
     /** The saved workout-music search (the setting the start-of-workout PlaySearch policy uses). */
     private val savedQuery: () -> String? = { null },
+    /** Settings → YouTube Music → glasses queue size (N, see [QueueWindowing]); re-read on every publish (≤ 1 s). */
+    private val queueSize: () -> Int = { QueueWindowing.DEFAULT_SIZE },
 ) : MusicService {
     private val app = context.applicationContext
     private val audio = app.getSystemService(AudioManager::class.java)
@@ -37,6 +42,8 @@ class YtmMediaSessionService(
     override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying
     private val _volume = MutableStateFlow(currentVolume())
     override val volume: StateFlow<Float> = _volume
+    private val _queue = MutableStateFlow(QueueWindow())
+    override val queue: StateFlow<QueueWindow> = _queue
     private val _connected = MutableStateFlow(false)
     /** Notification access granted and a YouTube Music session exists. */
     val connected: StateFlow<Boolean> = _connected
@@ -45,6 +52,7 @@ class YtmMediaSessionService(
     private val callback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = publish()
         override fun onPlaybackStateChanged(state: PlaybackState?) = publish()
+        override fun onQueueChanged(queue: MutableList<MediaSession.QueueItem>?) = publish()
         override fun onSessionDestroyed() { controller = null; publish() }
     }
 
@@ -65,9 +73,15 @@ class YtmMediaSessionService(
     private fun publish() {
         val c = controller
         _connected.value = c != null
-        if (c == null) { _nowPlaying.value = null; return }
+        if (c == null) { _nowPlaying.value = null; _queue.value = QueueWindow(); return }
         val md = c.metadata
         val st = c.playbackState
+        // YouTube Music reports "Up next" (played + upcoming); activeQueueItemId marks the current entry. StateFlow drops equal windows.
+        val items = runCatching { c.queue }.getOrNull().orEmpty().map {
+            QueueItem(it.queueId, it.description.title?.toString() ?: "", it.description.subtitle?.toString() ?: "")
+        }
+        val active = st?.activeQueueItemId?.takeIf { it != MediaSession.QueueItem.UNKNOWN_ID.toLong() }
+        _queue.value = QueueWindowing.window(items, active, queueSize())
         _nowPlaying.value = NowPlaying(
             title = md?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "",
             artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "",
@@ -84,6 +98,7 @@ class YtmMediaSessionService(
     override fun pause() { controller?.transportControls?.pause() }
     override fun next() { controller?.transportControls?.skipToNext() }
     override fun previous() { controller?.transportControls?.skipToPrevious() }
+    override fun playQueueItem(queueId: Long) { controller?.transportControls?.skipToQueueItem(queueId) }
 
     override fun toggleLike() {
         val c = controller ?: return
