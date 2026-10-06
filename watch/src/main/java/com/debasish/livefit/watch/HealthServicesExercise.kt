@@ -27,6 +27,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.guava.await
 import java.time.Instant
+import android.util.Log
 
 /** Health Services implementation of [ExerciseBackend] (spec §5.1). */
 class HealthServicesExercise(context: Context) : ExerciseBackend {
@@ -37,6 +38,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
 
     // Cumulative totals arrive in separate updates from HR; keep the latest of each.
     private var steps = 0; private var km = 0.0; private var kcal = 0.0; private var speed: Double? = null
+    private var sumSteps = false; private var sumDistance = false
     /** Last Active/Paused state reported; null = report the next one (after start/reattach). */
     private var lastPaused: Boolean? = null
     /** Updates of an exercise that started before our latest start() are a previous one's stragglers. */
@@ -64,7 +66,14 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         val exerciseType = hsType(type)
         val supported = client.getCapabilitiesAsync().await().getExerciseTypeCapabilities(exerciseType).supportedDataTypes
         val wanted = setOf(DataType.HEART_RATE_BPM, DataType.STEPS_TOTAL, DataType.DISTANCE_TOTAL, DataType.CALORIES_TOTAL, DataType.SPEED)
-        val types = wanted.filter { it in supported }.toSet()
+        // Some watches only offer the per-interval STEPS/DISTANCE types for an exercise: fall back to summing them.
+        val fallback = listOfNotNull(
+            DataType.STEPS.takeIf { DataType.STEPS_TOTAL !in supported },
+            DataType.DISTANCE.takeIf { DataType.DISTANCE_TOTAL !in supported },
+        )
+        val types = (wanted.filter { it in supported } + fallback.filter { it in supported }).toSet()
+        sumSteps = DataType.STEPS in types; sumDistance = DataType.DISTANCE in types
+        Log.d(TAG, "exercise $exerciseType supported=${supported.map { it.name }} requested=${types.map { it.name }}")
         client.setUpdateCallback(callback)
         runCatching { client.prepareExerciseAsync(WarmUpConfig(exerciseType, setOf(DataType.HEART_RATE_BPM))).await() }
         client.startExerciseAsync(
@@ -94,6 +103,8 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             val m = update.latestMetrics
             val now = System.currentTimeMillis()
             m.getData(DataType.STEPS_TOTAL)?.total?.let { steps = it.toInt() }
+            if (sumSteps) steps += m.getData(DataType.STEPS).sumOf { it.value }.toInt()
+            if (sumDistance) km += m.getData(DataType.DISTANCE).sumOf { it.value } / 1000.0
             m.getData(DataType.DISTANCE_TOTAL)?.total?.let { km = it / 1000.0 }
             m.getData(DataType.CALORIES_TOTAL)?.total?.let { kcal = it }
             m.getData(DataType.SPEED).lastOrNull()?.value?.let { speed = it * 3.6 }
@@ -131,4 +142,6 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         override fun onRegistrationFailed(throwable: Throwable) {}
         override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {}
     }
+
+    private companion object { const val TAG = "LiveFitExercise" }
 }
