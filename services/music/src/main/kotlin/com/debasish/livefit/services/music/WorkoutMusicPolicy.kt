@@ -23,3 +23,18 @@ object WorkoutMusicPolicy {
 
 /** Query for play() when no YouTube Music session exists: the saved search, or null (just open) when blank. */
 fun resumeQuery(saved: String?): String? = saved?.trim()?.takeIf { it.isNotEmpty() }
+
+/** How a search is played (D5): through YouTube Music's media session without UI, else via its activity. */
+enum class SearchRoute {
+    Session, Activity,
+    /** The activity takes the foreground: bring LiveFit back afterwards because it was in front. */
+    ActivityThenReturn;
+
+    companion object {
+        fun of(hasSession: Boolean, appInForeground: Boolean): SearchRoute = when {
+            hasSession -> Session
+            appInForeground -> ActivityThenReturn
+            else -> Activity
+        }
+    }
+}

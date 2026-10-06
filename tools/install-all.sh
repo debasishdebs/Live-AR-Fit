@@ -16,5 +16,6 @@ for pair in "phone:$PHONE" "watch:$WATCH" "glasses:$GLASSES"; do
   if [ -z "$serial" ]; then echo "SKIP $name: not connected"; continue; fi
   extra=""; [ "$name" = "phone" ] && extra="--user 0"
   adb -s "$serial" install -r $extra "$name/build/outputs/apk/debug/$name-debug.apk" >/dev/null && echo "OK   $name ($serial)"
-  if [ "$name" = "glasses" ]; then adb -s "$serial" shell pm grant com.debasish.livefit.glasses android.permission.RECORD_AUDIO; fi
+  if [ "$name" = "glasses" ]; then adb -s "$serial" shell pm grant com.debasish.livefit.glasses android.permission.RECORD_AUDIO
+    adb -s "$serial" shell pm grant com.debasish.livefit.glasses android.permission.BLUETOOTH_ADVERTISE || true; fi
 done

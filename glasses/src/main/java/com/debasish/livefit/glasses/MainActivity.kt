@@ -1,12 +1,16 @@
 package com.debasish.livefit.glasses
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -44,7 +48,7 @@ class MainActivity : ComponentActivity() {
             override fun onRokidAccountChanged(p0: String?) {}
             override fun onAudioNoise(p0: Float) {}
         })
-        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0)).also { it.start() }
+        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } }).also { it.start() }
         ptt = PushToTalk(
             controller::sendRaw,
             hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -86,6 +90,29 @@ class MainActivity : ComponentActivity() {
             }
             HudScreen(frame, settings, connection, mode, battery, history, overlay = overlay)
         }
+    }
+
+    // ---- Pairing (D2): the system prompt takes us out of the foreground; the phone reconnects the session afterwards. ----
+    private var discoverableSeconds = 120
+    private var lastDiscoverableMs = 0L
+    private val advertisePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) promptDiscoverable() }
+    private val discoverable = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { Log.i(TAG, "discoverable result ${it.resultCode}") }
+
+    private fun requestDiscoverable(seconds: Int) {
+        val now = System.currentTimeMillis()
+        if (now - lastDiscoverableMs < 10_000) return // a resent request must not stack prompts
+        lastDiscoverableMs = now
+        discoverableSeconds = seconds
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            advertisePermission.launch(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+        } else promptDiscoverable()
+    }
+
+    private fun promptDiscoverable() {
+        runCatching {
+            ptt.stop()
+            discoverable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, discoverableSeconds))
+        }.onFailure { Log.w(TAG, "discoverable prompt failed", it) }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {

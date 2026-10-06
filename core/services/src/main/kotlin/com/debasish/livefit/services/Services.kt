@@ -29,6 +29,10 @@ interface GlassesLinkService {
     val events: Flow<GlassesEvent>
     /** Opens the link and launches the HUD app on the glasses. No-op for fakes. */
     fun connect() {}
+    /** Results of Hi Rokid authorization attempts (true = authorized), so the UI can confirm a silent success. */
+    val authResults: Flow<Boolean> get() = kotlinx.coroutines.flow.emptyFlow()
+    /** Asks the glasses app to make the glasses discoverable for companion pairing; false when it could not be sent. */
+    suspend fun requestDiscoverable(): Boolean = false
     suspend fun push(frame: com.debasish.livefit.model.StateFrame)
     suspend fun pushSettings(frame: com.debasish.livefit.model.HudSettingsFrame)
 }
@@ -45,6 +49,8 @@ interface WatchLinkService {
     val status: StateFlow<DeviceStatus>
     /** Commands tapped on the watch. */
     val commands: Flow<com.debasish.livefit.model.CommandEnvelope>
+    /** Asks the watch app to make the watch discoverable for companion pairing; false when it could not be sent. */
+    suspend fun requestDiscoverable(): Boolean = false
     suspend fun push(frame: com.debasish.livefit.model.StateFrame)
 }
 
@@ -142,6 +148,8 @@ interface SttSession {
     /** 16 kHz mono PCM16 little-endian. */
     fun feed(pcm: ByteArray)
     fun end()
+    /** Abandons recognition (a newer capture superseded this one): releases the recognizer; [awaitFinal] then returns promptly. */
+    fun cancel() {}
     /** Final (or last partial) text; null on error/timeout. */
     suspend fun awaitFinal(timeoutMs: Long): String?
 }

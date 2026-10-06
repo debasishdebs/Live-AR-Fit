@@ -127,10 +127,11 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 | `ExerciseStateReport` | watch → phone | Unsolicited, whenever the real exercise state changes: `sessionId`, `state`, `endedBy?` (`User` · `OtherApp` · `System` · `Error`). |
 | `ListenRequest` / `AudioChunk` / `ListenEnd` | glasses → phone | Push-to-talk: start, 100 ms PCM16 chunks (binary payload in CXR `bytes`), end (VAD or cap). |
 | `BatteryReport` | watch → phone | Percentage, on request and every 60 s. |
+| `DiscoverableRequest` | phone → watch, glasses | `seconds` (120). Sent when the user taps Pair: the peer app shows the system `ACTION_REQUEST_DISCOVERABLE` prompt so the companion picker can list the already-bonded device; ignored unless `protocolVersion` matches. The watch also accepts it as a remote launch of `livefit://discoverable?req=<json>`. |
 
 ### 4.2 Transports and channel names
-- **Glasses (CXR custom cmd names):** `lf_state`, `lf_settings` (phone → glasses); `lf_cmd`, `lf_listen`, `lf_audio`, `lf_listen_end` (glasses → phone). Payload: `Caps` with one JSON string; audio uses the `bytes` argument.
-- **Watch (Data Layer message paths):** `/lf/state`, `/lf/settings`, `/lf/cmd`, `/lf/delta`, `/lf/ack`, `/lf/claim`, `/lf/exercise_req`, `/lf/exercise_res`, `/lf/exercise_state`, `/lf/battery_req`, `/lf/battery`.
+- **Glasses (CXR custom cmd names):** `lf_state`, `lf_settings`, `lf_discoverable` (phone → glasses); `lf_cmd`, `lf_listen`, `lf_audio`, `lf_listen_end` (glasses → phone). Payload: `Caps` with one JSON string; audio uses the `bytes` argument.
+- **Watch (Data Layer message paths):** `/lf/state`, `/lf/settings`, `/lf/cmd`, `/lf/delta`, `/lf/ack`, `/lf/claim`, `/lf/exercise_req`, `/lf/exercise_res`, `/lf/exercise_state`, `/lf/battery_req`, `/lf/battery`, `/lf/discoverable`.
 - **Migration:** the mock-up uses `lf_hud` / `lf_cmd` / `lf_listen` (glasses) and `/rf/*` (watch) with a combined `HudFrame`. V1 renames to the names above, splits `HudFrame` into `StateFrame` + `HudSettingsFrame`, and bumps `protocolVersion` to 1. The spike-only `rf_ping` / `rf_metrics` channels, `SpikeActivity` and `DebugReceiver` move behind a debug build type.
 
 ### 4.3 Push-on-change and latency

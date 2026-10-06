@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.util.Log
 import com.debasish.livefit.model.DeviceStatus
+import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
@@ -59,6 +60,8 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     override val status: StateFlow<DeviceStatus> = _status
     private val _events = MutableSharedFlow<GlassesEvent>(extraBufferCapacity = 256) // audio arrives as ~10 chunks/s
     override val events: SharedFlow<GlassesEvent> = _events
+    private val _authResults = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
+    override val authResults: SharedFlow<Boolean> = _authResults
 
     init { instance = this }
 
@@ -86,6 +89,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     /** Result of an in-process authorization (also fed by [AuthActivity.onActivityResult]). */
     internal fun onAuthResult(ok: Boolean) {
+        _authResults.tryEmit(ok) // reported even when already authorized: Hi Rokid answers silently then (D1)
         if (!auth.result(ok)) return // late or duplicate report for an attempt already resolved
         authJob?.cancel(); authJob = null
         if (ok) {
@@ -198,23 +202,28 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         inbound.onMessage(cmd, text).forEach { _events.tryEmit(it) }
     }
 
-    override suspend fun push(frame: StateFrame) = send(GlassesChannels.STATE, Wire.encode(frame))
+    override suspend fun push(frame: StateFrame) { send(GlassesChannels.STATE, Wire.encode(frame)) }
+
+    /** Pairing (D2): the glasses app shows the system discoverable prompt; that prompt takes it out of the foreground, which closes the session. */
+    override suspend fun requestDiscoverable(): Boolean = send(GlassesChannels.DISCOVERABLE, Wire.encode(DiscoverableRequest()))
 
     override suspend fun pushSettings(frame: HudSettingsFrame) {
         lastSettings = frame
         send(GlassesChannels.SETTINGS, Wire.encode(frame))
     }
 
-    private fun send(channel: String, json: String) {
-        if (_status.value.link != LinkState.Connected) return
-        val s = session ?: return
-        try {
+    private fun send(channel: String, json: String): Boolean {
+        if (_status.value.link != LinkState.Connected) return false
+        val s = session ?: return false
+        return try {
             val r = s.sendCustomCmd(channel, Caps().apply { write(json) }, ByteArray(0))
             if (!r.isSuccess) Log.w(TAG, "send $channel failed ${r.code}")
+            r.isSuccess
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "send $channel threw", e)
+            false
         }
     }
 

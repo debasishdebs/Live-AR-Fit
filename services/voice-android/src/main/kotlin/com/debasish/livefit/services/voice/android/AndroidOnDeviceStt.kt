@@ -91,6 +91,7 @@ class AndroidOnDeviceStt(context: Context) : SpeechToText {
         return object : SttSession {
             override fun feed(pcm: ByteArray) { runCatching { writer.execute { runCatching { out.write(pcm) } } } }
             override fun end() { runCatching { writer.execute { runCatching { out.close() } } } } // EOF tells the recognizer to finish
+            override fun cancel() { final.complete(null); cleanup() } // destroy runs on main before a newer session's create
             override suspend fun awaitFinal(timeoutMs: Long): String? {
                 val text = withTimeoutOrNull(timeoutMs) { final.await() } ?: lastPartial.get()
                 cleanup() // timeout / error paths: release recognizer and descriptors

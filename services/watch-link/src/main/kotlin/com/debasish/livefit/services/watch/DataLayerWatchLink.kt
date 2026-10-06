@@ -5,6 +5,7 @@ import android.util.Log
 import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.DeltaAck
 import com.debasish.livefit.model.DeviceStatus
+import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.ExerciseResult
 import com.debasish.livefit.model.ExerciseStateReport
@@ -66,23 +67,30 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
         }
     }
 
-    private suspend fun requestBattery() = sendRaw(WatchPaths.BATTERY_REQ, ByteArray(0))
+    private suspend fun requestBattery() { sendRaw(WatchPaths.BATTERY_REQ, ByteArray(0)) }
 
-    private suspend fun sendRaw(path: String, bytes: ByteArray) {
-        val id = nodeId ?: return
-        try {
+    private suspend fun sendRaw(path: String, bytes: ByteArray): Boolean {
+        val id = nodeId ?: return false
+        return try {
             messages.sendMessage(id, path, bytes).await()
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "send $path failed", e)
+            false
         }
     }
 
-    override suspend fun send(request: ExerciseRequest) = sendRaw(WatchPaths.EXERCISE_REQ, Wire.encode(request).toByteArray())
-    override suspend fun ack(ack: DeltaAck) = sendRaw(WatchPaths.ACK, Wire.encode(ack).toByteArray())
+    override suspend fun send(request: ExerciseRequest) { sendRaw(WatchPaths.EXERCISE_REQ, Wire.encode(request).toByteArray()) }
+    override suspend fun ack(ack: DeltaAck) { sendRaw(WatchPaths.ACK, Wire.encode(ack).toByteArray()) }
+    /** Pairing (D2): the watch app shows the system discoverable prompt. */
+    override suspend fun requestDiscoverable(): Boolean {
+        if (nodeId == null) refreshNode()
+        return sendRaw(WatchPaths.DISCOVERABLE, Wire.encode(DiscoverableRequest()).toByteArray())
+    }
     override suspend fun push(frame: StateFrame) {
-        if (_status.value.link == LinkState.Connected) sendRaw(WatchPaths.STATE, Wire.encode(frame).toByteArray())
+        if (_status.value.link == LinkState.Connected) { sendRaw(WatchPaths.STATE, Wire.encode(frame).toByteArray()) }
     }
 
     /** Called from the phone's WearableListenerService for every /lf message. */

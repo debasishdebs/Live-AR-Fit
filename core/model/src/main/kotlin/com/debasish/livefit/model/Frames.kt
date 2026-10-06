@@ -50,3 +50,18 @@ data class CommandEnvelope(
     val origin: DeviceKind,
     val command: Command,
 )
+
+/**
+ * Phone → watch / glasses when the user taps Pair: the companion picker only lists discoverable devices,
+ * so the peer asks its user to make it discoverable for [seconds] (ACTION_REQUEST_DISCOVERABLE).
+ */
+@Serializable
+data class DiscoverableRequest(val protocolVersion: Int = PROTOCOL_VERSION, val seconds: Int = 120) {
+    companion object {
+        /** Seconds to stay discoverable (clamped to the platform's 1..300), or null unless [text] is a current-version request. */
+        fun parse(text: String): Int? {
+            if (Wire.versionOf(text) != PROTOCOL_VERSION) return null
+            return runCatching { Wire.decode<DiscoverableRequest>(text).seconds.coerceIn(1, 300) }.getOrNull()
+        }
+    }
+}

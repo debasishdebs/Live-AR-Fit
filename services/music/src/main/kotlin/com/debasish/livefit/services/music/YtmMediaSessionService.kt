@@ -1,5 +1,6 @@
 package com.debasish.livefit.services.music
 
+import android.app.ActivityManager
 import android.app.SearchManager
 import android.content.ComponentName
 import android.content.Context
@@ -9,6 +10,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Bundle
 import android.provider.MediaStore
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.services.MusicService
@@ -22,7 +24,7 @@ import kotlin.math.roundToInt
 /** Controls the official YouTube Music app through its media session (spec §2.3, §5.5). */
 class YtmMediaSessionService(
     context: Context,
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     /** The saved workout-music search (the setting the start-of-workout PlaySearch policy uses). */
     private val savedQuery: () -> String? = { null },
 ) : MusicService {
@@ -96,11 +98,35 @@ class YtmMediaSessionService(
         publish()
     }
 
-    /** Starts YouTube Music on a search (no session yet) — `null` = just open and resume. */
+    /**
+     * Plays a search — `null` = just open and resume. Uses the media session (no UI) when YouTube Music has one;
+     * only without a session does it start the YouTube Music activity, and then it returns LiveFit to the front
+     * only if LiveFit was in front when asked (D5).
+     */
     fun playSearch(query: String?) {
+        val c = controller
+        when (SearchRoute.of(hasSession = c != null, appInForeground())) {
+            SearchRoute.Session -> { c?.transportControls?.playFromSearch(query ?: "", Bundle()); return }
+            SearchRoute.Activity -> startSearchActivity(query)
+            SearchRoute.ActivityThenReturn -> if (startSearchActivity(query)) scope.launch { delay(RETURN_DELAY_MS); bringAppToFront() }
+        }
+    }
+
+    private fun startSearchActivity(query: String?): Boolean {
         val intent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).setPackage(YTM)
             .putExtra(SearchManager.QUERY, query ?: "").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { app.startActivity(intent) }
+        return runCatching { app.startActivity(intent) }.isSuccess
+    }
+
+    /** A visible LiveFit activity (not merely the hub's foreground service). */
+    private fun appInForeground(): Boolean = runCatching {
+        ActivityManager.RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance ==
+            ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }.getOrDefault(false)
+
+    private fun bringAppToFront() {
+        val moved = runCatching { app.getSystemService(ActivityManager::class.java).appTasks.firstOrNull()?.moveToFront() != null }.getOrDefault(false)
+        if (!moved) app.packageManager.getLaunchIntentForPackage(app.packageName)?.let { runCatching { app.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
     }
 
     private fun currentVolume(): Float {
@@ -111,5 +137,7 @@ class YtmMediaSessionService(
     companion object {
         const val YTM = "com.google.android.apps.youtube.music"
         const val LIKE = "thumbs_up_action"
+        /** Time for YouTube Music's activity to take the search before LiveFit returns to the front. */
+        const val RETURN_DELAY_MS = 1_500L
     }
 }

@@ -32,4 +32,14 @@ class WorkoutMusicPolicyTest {
         assertEquals(null, resumeQuery(""))
         assertEquals(null, resumeQuery(null))
     }
+
+    /** D5: a search plays through the session (no UI) whenever YouTube Music has one that supports it. */
+    @Test fun searchUsesTheSessionWhenAvailable() {
+        assertEquals(SearchRoute.Session, SearchRoute.of(hasSession = true, appInForeground = true))
+        assertEquals(SearchRoute.Session, SearchRoute.of(hasSession = true, appInForeground = false))
+    }
+    @Test fun searchFallsBackToTheActivityAndReturnsOnlyIfLiveFitWasInFront() {
+        assertEquals(SearchRoute.ActivityThenReturn, SearchRoute.of(hasSession = false, appInForeground = true))
+        assertEquals(SearchRoute.Activity, SearchRoute.of(hasSession = false, appInForeground = false))
+    }
 }

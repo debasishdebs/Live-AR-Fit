@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +46,8 @@ import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.CompanionLinker
+import com.debasish.livefit.phone.PeerPairing
+import com.debasish.livefit.phone.setup.authNote
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.ChipRow
 import com.debasish.livefit.phone.ui.components.GlassesIcon
@@ -60,6 +63,8 @@ fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: (
     val st by services.glasses.status.collectAsStateWithLifecycle()
     val frame by services.lastFrame.collectAsStateWithLifecycle()
     var confirmUnpair by remember { mutableStateOf(false) }
+    var authAsked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { services.glasses.authResults.collect { ok -> if (authAsked) { authAsked = false; toast(authNote(ok)) } } }
     if (confirmUnpair) AlertDialog(
         onDismissRequest = { confirmUnpair = false },
         title = { Text("Unpair glasses?") },
@@ -83,9 +88,9 @@ fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: (
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             Column {
                 ChipRow(Icons.Rounded.Link, LiveFitColors.ChipSky, "Pair / re-pair", "Lets Android wake LiveFit when the glasses are near",
-                    { CompanionLinker.associate(activity, DeviceKind.Glasses) { ok -> toast(if (ok) "Glasses paired" else "Pairing cancelled") } })
+                    { toast("Tap Allow on your glasses when asked"); PeerPairing.pair(activity, services, DeviceKind.Glasses) { ok -> toast(if (ok) "Glasses paired" else "Pairing cancelled") } })
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
-                ChipRow(Icons.Rounded.Key, LiveFitColors.ChipAmber, "Re-authorize in Hi Rokid", "Microphone, device and media access", { AuthActivity.launch(activity) })
+                ChipRow(Icons.Rounded.Key, LiveFitColors.ChipAmber, "Re-authorize in Hi Rokid", "Microphone, device and media access", { authAsked = true; if (AuthActivity.launch(activity).isFailure) { authAsked = false; toast(authNote(false)) } })
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.Refresh, LiveFitColors.ChipViolet, "Reconnect", "Opens LiveFit on the glasses", { services.glasses.connect() })
             }

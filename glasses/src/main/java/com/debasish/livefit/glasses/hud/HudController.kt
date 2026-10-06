@@ -5,6 +5,7 @@ import android.util.Log
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.HudSettingsFrame
@@ -33,7 +34,13 @@ fun connectionFor(hasEverReceived: Boolean, online: Boolean, outdated: Boolean, 
 }
 
 /** Glasses side of the CXR link: renders hub frames; sends commands and push-to-talk audio. */
-class HudController(private val scope: CoroutineScope, private val bridge: CXRServiceBridge, private val prefs: SharedPreferences) {
+class HudController(
+    private val scope: CoroutineScope,
+    private val bridge: CXRServiceBridge,
+    private val prefs: SharedPreferences,
+    /** Pairing (D2): the phone asks to be shown the glasses in its companion picker; called on a bridge thread with seconds. */
+    private val onDiscoverable: (Int) -> Unit = {},
+) {
     private val clock = Clock { System.currentTimeMillis() }
     private val liveness = LivenessMonitor(clock)
     private val startedAt = clock.nowMs()
@@ -55,6 +62,9 @@ class HudController(private val scope: CoroutineScope, private val bridge: CXRSe
     fun start() {
         bridge.subscribe(GlassesChannels.STATE, CXRServiceBridge.MsgCallback { _, caps, _ -> onState(caps) })
         bridge.subscribe(GlassesChannels.SETTINGS, CXRServiceBridge.MsgCallback { _, caps, _ -> onSettings(caps) })
+        bridge.subscribe(GlassesChannels.DISCOVERABLE, CXRServiceBridge.MsgCallback { _, caps, _ ->
+            text(caps)?.let(DiscoverableRequest::parse)?.let(onDiscoverable) // an outdated phone's request is ignored
+        })
         scope.launch { while (true) { refreshConnection(); delay(1_000) } }
     }
 
