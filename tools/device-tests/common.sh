@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Shared helpers: device serials and clock offsets (ms) relative to this Mac.
 set -euo pipefail
-PHONE=${PHONE:-$(adb devices -l | awk '/model:SM_S93/{print $1; exit}')}
-WATCH=${WATCH:-$(adb devices -l | awk '/model:SM_R9/{print $1; exit}')}
-GLASSES=${GLASSES:-$(adb devices -l | awk '/model:RG_glasses/{print $1; exit}')}
+# Wireless-adb serials can contain spaces ("adb-XYZ (2)._adb-tls-connect._tcp"): take everything before " device ".
+serial_for() { adb devices -l | sed -nE "/model:$1/{s/[[:space:]]+device[[:space:]].*//p;q;}"; }
+PHONE=${PHONE:-$(serial_for SM_S93)}
+WATCH=${WATCH:-$(serial_for SM_R9)}
+GLASSES=${GLASSES:-$(serial_for RG_glasses)}
 
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 # Fails (exit 2) unless every named variable (PHONE, WATCH, GLASSES) holds a connected device serial.
