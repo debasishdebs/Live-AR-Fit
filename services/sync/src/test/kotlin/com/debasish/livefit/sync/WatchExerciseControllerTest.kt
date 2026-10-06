@@ -415,4 +415,18 @@ class WatchExerciseControllerTest {
         assertEquals(1, phaseEvents().count { it is SessionEvent.Resumed })
         assertTrue(results.all { it.ok })
     }
+
+    /** Review #12: granting the permission clears the PermissionMissing error the watch UI shows. */
+    @Test fun permissionRecheckClearsAResolvedError() = runTest {
+        val backend = FakeBackend().apply { missing = listOf("android.permission.BODY_SENSORS", "android.permission.ACTIVITY_RECOGNITION") }
+        val (_, c) = rig(backend); runCurrent()
+        assertIs<ExerciseError.PermissionMissing>(c.localStart(WorkoutType.Walk))
+        backend.missing = listOf("android.permission.ACTIVITY_RECOGNITION")
+        c.recheckPermissions()
+        assertEquals(ExerciseError.PermissionMissing(listOf("android.permission.ACTIVITY_RECOGNITION")), c.lastError.value)
+        backend.missing = emptyList()
+        c.recheckPermissions()
+        assertNull(c.lastError.value)
+        assertNull(c.localStart(WorkoutType.Walk))
+    }
 }

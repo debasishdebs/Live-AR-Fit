@@ -131,6 +131,13 @@ class WatchExerciseController(
         }
     }
 
+    /** After a permission prompt (result or app resume): clears or narrows a PermissionMissing error. */
+    fun recheckPermissions() {
+        if (_lastError.value !is ExerciseError.PermissionMissing) return
+        val missing = backend.missingPermissions()
+        _lastError.value = if (missing.isEmpty()) null else ExerciseError.PermissionMissing(missing)
+    }
+
     suspend fun handle(req: ExerciseRequest) {
         recent[req.requestId]?.let { runCatching { sendResult(it) }; return }
         val result = execute(req)
