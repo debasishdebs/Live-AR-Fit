@@ -82,4 +82,20 @@ class GlassesSessionPolicyTest {
         assertEquals(listOf(LinkAction.MarkAuthNeeded), p.onEvent(LinkEvent.AuthFailed))
         assertTrue(p.onEvent(LinkEvent.RetryTimer).isEmpty())
     }
+
+    /** Hub (re)start (F1): one attempt; a failure while the glasses were never reported present does not retry. */
+    @Test fun autoConnectTriesOnceWithoutARetryLoop() {
+        val p = GlassesSessionPolicy()
+        assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.autoConnect())
+        assertEquals(listOf(LinkAction.MarkDisconnected), p.onEvent(LinkEvent.ConnectFailed), "no ScheduleRetry")
+        assertTrue(p.onEvent(LinkEvent.RetryTimer).isEmpty())
+    }
+
+    @Test fun autoConnectLeavesAnAttemptInFlightOrAnOpenSessionAlone() {
+        val p = GlassesSessionPolicy()
+        p.manualConnect()
+        assertTrue(p.autoConnect().isEmpty(), "a connect is already in flight")
+        p.onEvent(LinkEvent.Started)
+        assertTrue(p.autoConnect().isEmpty(), "open session")
+    }
 }

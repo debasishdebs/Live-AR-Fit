@@ -21,4 +21,13 @@ class HubStartTest {
         assertFalse(LiveFitHubService.shouldStart(running = true, canStart = true), "idempotent")
         assertFalse(LiveFitHubService.shouldStart(running = false, canStart = false), "would only fail and stop again")
     }
+
+    /** F1: after an update or reboot the hub reconnects the glasses once when they are linked and nearby. */
+    @Test fun hubStartConnectsLinkedNearbyGlassesOnce() {
+        assertTrue(LiveFitHubService.shouldConnectGlasses(linkIdle = true, associated = true, present = true, btConnected = false))
+        assertTrue(LiveFitHubService.shouldConnectGlasses(linkIdle = true, associated = true, present = false, btConnected = true))
+        assertFalse(LiveFitHubService.shouldConnectGlasses(linkIdle = true, associated = true, present = false, btConnected = false), "not nearby")
+        assertFalse(LiveFitHubService.shouldConnectGlasses(linkIdle = true, associated = false, present = true, btConnected = true), "not linked")
+        assertFalse(LiveFitHubService.shouldConnectGlasses(linkIdle = false, associated = true, present = true, btConnected = true), "already connecting (app opened)")
+    }
 }

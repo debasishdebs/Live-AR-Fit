@@ -15,6 +15,7 @@ import android.os.IBinder
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ui.AppActivity
@@ -36,6 +37,7 @@ class LiveFitHubService : Service() {
             .onFailure { stopSelf(); return } // missing BLUETOOTH_CONNECT: setup wizard grants it, then ensureRunning() retries
         running = true
         val graph = services
+        connectGlassesIfNearby(graph)
         watcher = graph.scope.launch {
             graph.workout.snapshot.collect { s ->
                 val text = when (s.phase) {
@@ -47,6 +49,20 @@ class LiveFitHubService : Service() {
                 }
                 nm.notify(ID, notification(text))
             }
+        }
+    }
+
+    /**
+     * F1: after an APK update or reboot nothing else reconnects the glasses (they sit on "Open Rokid LiveFit on your phone").
+     * One attempt when they are linked and nearby; opening the app (already connecting) or a running session is left alone.
+     */
+    private fun connectGlassesIfNearby(graph: ServiceGraph) {
+        val glassesId = CompanionLinker.associationId(this, DeviceKind.Glasses)
+        val status = graph.glasses.status.value
+        val linkIdle = status.link == LinkState.Disconnected && status.detail == null
+        val present = glassesId != null && CompanionLinker.isPresent(glassesId)
+        if (shouldConnectGlasses(linkIdle, glassesId != null, present, btConnected = glassesId != null && !present && CompanionLinker.isBtConnected(this, DeviceKind.Glasses))) {
+            graph.glasses.connectOnce()
         }
     }
 
@@ -87,5 +103,9 @@ class LiveFitHubService : Service() {
         internal fun canStart(sdk: Int, bluetoothGranted: Boolean, hasAssociation: Boolean) = sdk < 34 || bluetoothGranted || hasAssociation
 
         internal fun shouldStart(running: Boolean, canStart: Boolean) = !running && canStart
+
+        /** Connect the glasses once on hub start when linked and nearby (companion presence or a connected bonded BT device). */
+        internal fun shouldConnectGlasses(linkIdle: Boolean, associated: Boolean, present: Boolean, btConnected: Boolean) =
+            linkIdle && associated && (present || btConnected)
     }
 }

@@ -79,6 +79,33 @@ object CompanionLinker {
     @Synchronized
     fun anyPresent(): Boolean = presence.isNotEmpty()
 
+    @Synchronized
+    fun isPresent(associationId: Int): Boolean = presence.containsKey(associationId)
+
+    fun associationId(context: Context, kind: DeviceKind): Int? =
+        context.getSharedPreferences("companion", 0).getInt(kind.name, -1).takeIf { it >= 0 }
+
+    /**
+     * True when the bonded Bluetooth device for [kind] is connected right now (presence is in memory only, so it is
+     * unknown after a process restart). Matches the association's MAC, else the pairing name pattern.
+     * Uses the hidden BluetoothDevice.isConnected() (greylisted); any failure or missing BLUETOOTH_CONNECT means false.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    fun isBtConnected(context: Context, kind: DeviceKind): Boolean = try {
+        val mac = if (Build.VERSION.SDK_INT >= 33) associationId(context, kind)?.let { id ->
+            context.getSystemService(CompanionDeviceManager::class.java).myAssociations.firstOrNull { it.id == id }?.deviceMacAddress?.toString()
+        } else null
+        val adapter = context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
+        val bonded = adapter?.bondedDevices.orEmpty().filter { d ->
+            if (mac != null) d.address.equals(mac, ignoreCase = true) else namePatterns.getValue(kind).matcher(d.name ?: "").matches()
+        }
+        val isConnected = android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected")
+        bonded.any { isConnected.invoke(it) as? Boolean == true }
+    } catch (e: Exception) {
+        Log.w(TAG, "bonded ${kind.name} connection check failed", e)
+        false
+    }
+
     fun kindFor(context: Context, associationId: Int): DeviceKind? =
         DeviceKind.entries.firstOrNull { context.getSharedPreferences("companion", 0).getInt(it.name, -1) == associationId }
 

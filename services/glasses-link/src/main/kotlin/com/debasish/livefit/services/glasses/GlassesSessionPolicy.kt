@@ -64,4 +64,11 @@ class GlassesSessionPolicy(private val backoff: Backoff = Backoff()) {
         return if (state == S.Open || state == S.Paused) emptyList()
         else { state = S.Connecting; listOf(LinkAction.MarkConnecting, LinkAction.Connect) }
     }
+
+    /**
+     * Hub (re)start after an update or reboot (F1): a single attempt from Idle. Unlike [manualConnect] it does not
+     * mark the glasses present, so a failure ends Idle instead of entering the backoff retry loop.
+     */
+    fun autoConnect(): List<LinkAction> =
+        if (state == S.Idle) { state = S.Connecting; listOf(LinkAction.MarkConnecting, LinkAction.Connect) } else emptyList()
 }

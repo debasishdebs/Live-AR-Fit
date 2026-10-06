@@ -29,6 +29,8 @@ interface GlassesLinkService {
     val events: Flow<GlassesEvent>
     /** Opens the link and launches the HUD app on the glasses. No-op for fakes. */
     fun connect() {}
+    /** One connect attempt when the hub (re)starts (F1); no retry loop unless the glasses are reported present. */
+    fun connectOnce() { connect() }
     /** Results of Hi Rokid authorization attempts (true = authorized), so the UI can confirm a silent success. */
     val authResults: Flow<Boolean> get() = kotlinx.coroutines.flow.emptyFlow()
     /** Asks the glasses app to make the glasses discoverable for companion pairing; false when it could not be sent. */

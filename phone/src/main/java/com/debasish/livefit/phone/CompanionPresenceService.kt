@@ -33,7 +33,7 @@ class CompanionPresenceService : CompanionDeviceService() {
         val graph = (application as LiveFitApp).services // builds and starts the hub graph
         // Gone only when every transport (BLE + BT) has dropped it.
         val present = CompanionLinker.setPresent(associationId, source, reported)
-        if (present) LiveFitHubService.start(this)
+        if (present) LiveFitHubService.ensureRunning(this)
         if (CompanionLinker.kindFor(this, associationId) == DeviceKind.Glasses) CxrGlassesLink.instance?.onDevicePresence(present)
         // Spec §5.2: stop the hub when no linked device is present and no workout is active.
         val idle = graph.workout.snapshot.value.phase.let { it == WorkoutPhase.Idle || it == WorkoutPhase.Summary }

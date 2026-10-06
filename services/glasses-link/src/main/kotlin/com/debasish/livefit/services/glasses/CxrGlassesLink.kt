@@ -112,6 +112,11 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         act(policy.manualConnect())
     }
 
+    override fun connectOnce() = post {
+        auth.clearStale(System.currentTimeMillis())
+        act(policy.autoConnect())
+    }
+
     private fun act(actions: List<LinkAction>) {
         if (actions.isNotEmpty()) { retryJob?.cancel(); retryJob = null; connectJob?.cancel(); connectJob = null }
         for (a in actions) when (a) {
