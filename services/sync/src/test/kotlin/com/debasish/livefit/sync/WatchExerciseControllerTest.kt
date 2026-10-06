@@ -320,4 +320,35 @@ class WatchExerciseControllerTest {
         gate.complete(Unit); runCurrent()
         assertEquals(stored.map { it.seq }, sent.map { it.seq }, "everything sent once the link recovers, in seq order")
     }
+
+    /** Review #3: a hub Start and an offline Start racing must reach Health Services only once. */
+    @Test fun concurrentStartsReachHealthServicesOnce() = runTest {
+        val backend = FakeBackend().apply { startGate = CompletableDeferred() }
+        val (b, c) = rig(backend); runCurrent()
+        val hub = async { c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk))) }
+        val local = async { c.localStart(WorkoutType.Walk) }
+        runCurrent()
+        b.updates.emit(BackendUpdate.Ended(EndReason.OtherApp)); runCurrent() // stray end while starting: no recorder to close
+        backend.startGate!!.complete(Unit)
+        hub.await()
+        assertEquals(ExerciseError.WrongSession("s"), local.await())
+        assertEquals(1, b.calls.count { it.startsWith("start") })
+        assertTrue(results.single().ok)
+        assertEquals("s", c.activeSessionId)
+        assertTrue(sent.none { it.final })
+    }
+
+    @Test fun concurrentLocalThenHubStartReachesHealthServicesOnce() = runTest {
+        val backend = FakeBackend().apply { startGate = CompletableDeferred() }
+        val (b, c) = rig(backend); runCurrent()
+        val local = async { c.localStart(WorkoutType.Run) }
+        runCurrent()
+        val hub = async { c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk))) }
+        runCurrent()
+        backend.startGate!!.complete(Unit)
+        assertNull(local.await()); hub.await()
+        assertEquals(ExerciseError.WrongSession("local0"), results.single().error)
+        assertEquals(listOf("start:Run:false"), b.calls)
+        assertEquals("local0", c.activeSessionId)
+    }
 }

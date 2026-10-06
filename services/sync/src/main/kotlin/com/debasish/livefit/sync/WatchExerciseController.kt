@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
@@ -68,6 +70,11 @@ class WatchExerciseController(
     private var stopAtMs = 0L
     /** The in-flight stop; a concurrent stop awaits it and returns the same outcome. */
     private var stopOutcome: CompletableDeferred<Boolean>? = null
+    /**
+     * Hub and offline starts run one at a time: Health Services ends our own exercise when a second one starts,
+     * so a start that waited here sees the first one's session and is refused without reaching the backend.
+     */
+    private val startLock = Mutex()
 
     val activeSessionId: String? get() = recorder.sessionId?.takeIf { !recorder.isFinalized }
 
@@ -110,16 +117,19 @@ class WatchExerciseController(
             ExerciseResult(requestId = req.requestId, sessionId = req.sessionId, ok = ok, error = error, state = state, activeSessionId = activeSessionId)
 
         return when (val op = req.op) {
-            is ExerciseOp.Start -> when {
-                active == req.sessionId -> result(true, state = ExerciseState.Active)
-                active != null -> result(false, ExerciseError.WrongSession(active), ExerciseState.Active)
-                // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
-                recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
-                else -> {
-                    gpsPrefs.set(op.type, op.gps)
-                    when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
-                        null -> result(true, state = ExerciseState.Active)
-                        else -> result(false, e, ExerciseState.Idle)
+            is ExerciseOp.Start -> startLock.withLock {
+                val current = activeSessionId // re-read: another start may have finished while we waited
+                when {
+                    current == req.sessionId -> result(true, state = ExerciseState.Active)
+                    current != null -> result(false, ExerciseError.WrongSession(current), ExerciseState.Active)
+                    // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
+                    recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
+                    else -> {
+                        gpsPrefs.set(op.type, op.gps)
+                        when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
+                            null -> result(true, state = ExerciseState.Active)
+                            else -> result(false, e, ExerciseState.Idle)
+                        }
                     }
                 }
             }
@@ -152,11 +162,11 @@ class WatchExerciseController(
      * Watch-only start while the phone is unreachable (spec §4.4 "Started on the watch with no phone"): local UUID,
      * same permission and takeover checks; the caller asks the takeover question on the watch.
      */
-    suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? {
-        activeSessionId?.let { return ExerciseError.WrongSession(it) }
+    suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? = startLock.withLock {
+        activeSessionId?.let { return@withLock ExerciseError.WrongSession(it) }
         val e = startExercise(newId, type, force, gpsPrefs.get(type))
         _lastError.value = e
-        return e
+        e
     }
 
     /** Offline controls from the watch UI use the same paths and are recorded as events only on success. */
