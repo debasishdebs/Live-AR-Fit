@@ -15,7 +15,8 @@ import java.util.TreeMap
 /**
  * Derives a session's state purely from its deltas (events + cumulative samples). Used by the
  * phone hub (authoritative) and by the watch over its own buffer while offline. All times are
- * watch-clock timestamps from the deltas; no wall clock is read here.
+ * watch-clock timestamps from the deltas; no wall clock is read here (a caller may pass an estimated watch-clock
+ * "now" to [snapshot] so a running timer ticks between deltas).
  */
 data class HrStats(val sum: Long = 0, val count: Int = 0, val max: Int? = null)
 
@@ -51,7 +52,8 @@ class SessionAssembler(val sessionId: String) {
     private fun events() = deltas.values.flatMap { it.events }.sortedBy { it.tMs }
     private fun samples() = deltas.values.flatMap { it.samples }.sortedBy { it.tMs }
 
-    private fun latestTimestamp(): Long? =
+    /** Newest event or sample time (watch clock). */
+    fun latestTimestamp(): Long? =
         (events().map { it.tMs } + samples().map { it.tMs }).maxOrNull()
 
     fun phase(): WorkoutPhase = when (events().lastOrNull { it !is SessionEvent.TypeDetected }) {
@@ -112,7 +114,11 @@ class SessionAssembler(val sessionId: String) {
         Totals(maxOf(t.steps, s.stepsTotal), maxOf(t.km, s.distanceKmTotal), maxOf(t.kcal, s.kcalTotal))
     }
 
-    fun snapshot(): WorkoutSnapshot {
+    /**
+     * [atMs]: the watch-clock time to run an active segment to (the caller's estimate of the watch's "now"); never
+     * earlier than the newest recorded timestamp. Null: up to the newest recorded timestamp only.
+     */
+    fun snapshot(atMs: Long? = null): WorkoutSnapshot {
         val last = samples().lastOrNull()
         val hr = hrStats()
         val t = totals()
@@ -121,7 +127,7 @@ class SessionAssembler(val sessionId: String) {
             phase = phase(),
             type = type(),
             detectedType = detectedType(),
-            elapsedMs = activeMs(),
+            elapsedMs = activeMs(atMs?.let { at -> latestTimestamp()?.let { maxOf(at, it) } ?: at }),
             metrics = Metrics(
                 heartRate = samples().lastOrNull { it.hr != null }?.hr,
                 calories = t.kcal.toInt(),

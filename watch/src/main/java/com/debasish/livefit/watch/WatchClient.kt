@@ -128,7 +128,7 @@ object WatchClient {
         _ui.value = if (!online && local != null) {
             // The local session stays Stopping until the final ack; offline, show it as Summary, then Ready once dismissed.
             val dismissed = WatchRuntime.recorder.sessionId == dismissedLocal && dismissedLocal != null
-            val snap = local.snapshot()
+            val snap = local.snapshot(atMs = now) // own clock: the offline timer ticks between readings (B1)
             WatchUiState(
                 snapshot = when {
                     dismissed -> WorkoutSnapshot()

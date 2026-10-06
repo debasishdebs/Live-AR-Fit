@@ -54,6 +54,8 @@ class HubWorkoutService(
     private val resultTimeoutMs: Long = 10_000,
     private val incompleteAfterMs: Long = 24 * 60 * 60 * 1000L,
     private val incompleteCheckMs: Long = 60_000,
+    /** B1: the running timer is republished this often from the hub's clock, whether or not watch data arrives. */
+    private val tickMs: Long = 1_000,
     /** Phone setting "Use GPS outdoors" per workout type (spec §5.1). */
     private val gpsFor: (WorkoutType) -> Boolean = { false },
 ) : WorkoutService {
@@ -76,6 +78,12 @@ class HubWorkoutService(
     private var endReason: EndReason? = null
     private var endedAtMs: Long? = null
     private var finishedCurrent = false
+    /**
+     * Hub clock minus watch clock, estimated as the smallest (hub receive time - newest timestamp) over the session's
+     * deltas: the freshest delta bounds it best, and a late screen-off batch can never move the estimate. Lets the
+     * timer tick between deltas while all session times stay on the watch clock.
+     */
+    private var watchClockOffset: Long? = null
     private val mutex = Mutex()
     private var startJob: Job? = null
     private val lastDiscardedStop = HashMap<String, Long>()
@@ -88,6 +96,7 @@ class HubWorkoutService(
         scope.launch { gateway.stateReports.collect { onStateReport(it) } }
         scope.launch { restore() }
         scope.launch { while (true) { delay(incompleteCheckMs); checkIncomplete() } }
+        scope.launch { while (true) { delay(tickMs); tick() } }
     }
 
     // ---- Commands -----------------------------------------------------------------------
@@ -155,6 +164,7 @@ class HubWorkoutService(
         endReason = null
         endedAtMs = null
         finishedCurrent = false
+        watchClockOffset = null
         _hrHistory.value = emptyList()
     }
 
@@ -270,6 +280,10 @@ class HubWorkoutService(
         val a = (if (d.sessionId != currentId || finishedCurrent) adopt(d.sessionId) else current) ?: return null
         val storedSeq = store.storeDelta(d) // durable first, then publish, then ack (outside the lock)
         a.add(d)
+        (d.events.map { it.tMs } + d.samples.map { it.tMs }).maxOrNull()?.let { newest ->
+            val offset = clock.nowMs() - newest
+            watchClockOffset = watchClockOffset?.let { minOf(it, offset) } ?: offset
+        }
         publish()
         return { gateway.ack(ack(storedSeq)) }
     }
@@ -389,7 +403,9 @@ class HubWorkoutService(
             store.markEnded(a.sessionId, endReason, endedAtMs!!)
         }
         if (a.isComplete && syncUntilSeq == null) { finalize(a, SessionStatus.Complete); return }
-        var snap = a.snapshot()
+        // A live session's timer runs to the estimated watch "now"; syncing or ended ones only to their recorded times.
+        val watchNow = watchClockOffset?.takeIf { !ended && syncUntilSeq == null }?.let { clock.nowMs() - it }
+        var snap = a.snapshot(atMs = watchNow)
         if (a.deltaCount == 0) snap = snap.copy(type = claim?.type ?: _snapshot.value.type, phase = WorkoutPhase.Starting)
         snap = when {
             syncUntilSeq != null -> snap.copy(phase = WorkoutPhase.Syncing)
@@ -408,6 +424,9 @@ class HubWorkoutService(
         _hrHistory.value = a.hrHistory()
         _finished.emit(summary)
     }
+
+    /** B1: an active timer advances every [tickMs] even while the watch batches its data (screen off / ambient). */
+    private suspend fun tick() = mutex.withLock { if (_snapshot.value.phase == WorkoutPhase.Active && !finishedCurrent) publish() }
 
     private suspend fun checkIncomplete() = mutex.withLock { checkIncompleteLocked() }
 

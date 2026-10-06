@@ -129,4 +129,25 @@ class HubWorkoutStartTest {
         assertEquals(ExerciseOp.Stop, r.gateway.sent.last().op)
         assertEquals(id, r.gateway.sent.last().sessionId)
     }
+    /** B1: with no watch data arriving (screen-off batching), the timer still ticks from the hub's own clock. */
+    @Test fun elapsedTicksFromTheHubClockWhileNoWatchDataArrives() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val id = r.gateway.sent.single().sessionId
+        // Watch clock is 1 000 000 ms ahead of the hub's; Started at watch 1_000_000 arrives at hub time 0.
+        r.gateway.reply(); r.gateway.deltas.emit(started(id).copy(events = listOf(SessionEvent.Started(1_000_000, WorkoutType.Walk)))); runCurrent()
+        assertEquals(0, r.hub.snapshot.value.elapsedMs)
+        advanceTimeBy(5_000); runCurrent()
+        assertEquals(5_000, r.hub.snapshot.value.elapsedMs)
+        // A late screen-off batch (points from long ago) must not move the timer backwards.
+        r.gateway.deltas.emit(SessionDelta(sessionId = id, seq = 1, samples = listOf(com.debasish.livefit.model.Sample(1_001_000, hr = 90)), provenance = Provenance.Fake)); runCurrent()
+        assertEquals(5_000, r.hub.snapshot.value.elapsedMs)
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(7_000, r.hub.snapshot.value.elapsedMs)
+        // Paused at watch 1_008_000: the timer freezes at the event's time.
+        r.gateway.deltas.emit(SessionDelta(sessionId = id, seq = 2, events = listOf(SessionEvent.Paused(1_008_000)), provenance = Provenance.Fake)); runCurrent()
+        advanceTimeBy(10_000); runCurrent()
+        assertEquals(8_000, r.hub.snapshot.value.elapsedMs)
+        assertEquals(WorkoutPhase.Paused, r.hub.snapshot.value.phase)
+    }
 }
