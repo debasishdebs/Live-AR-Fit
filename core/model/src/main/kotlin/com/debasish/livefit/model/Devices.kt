@@ -60,5 +60,7 @@ sealed interface Command {
     @Serializable data class Volume(val up: Boolean) : Command
     /** Watch arc / bezel and phone slider: absolute 0..1. */
     @Serializable data class SetVolume(val level: Float) : Command
+    /** Glasses music screen: play this entry of the YouTube Music queue (`skipToQueueItem`). */
+    @Serializable data class PlayQueueItem(val queueId: Long) : Command
     @Serializable data class Answer(val confirmationId: String, val yes: Boolean) : Command
 }

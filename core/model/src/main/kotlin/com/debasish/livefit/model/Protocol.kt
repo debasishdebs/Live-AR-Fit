@@ -8,7 +8,10 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-const val PROTOCOL_VERSION = 1
+/**
+ * 2: glasses music screen — `lf_queue` (QueueFrame) and `Command.PlayQueueItem` (a v1 phone can't decode the new command).
+ */
+const val PROTOCOL_VERSION = 2
 
 /** CXR custom-command names (spec §4.2). */
 object GlassesChannels {
@@ -18,6 +21,8 @@ object GlassesChannels {
     const val LISTEN = "lf_listen"
     const val AUDIO = "lf_audio"
     const val LISTEN_END = "lf_listen_end"
+    /** Phone → glasses: the YouTube Music queue window for the music screen ([QueueFrame]), on change and on (re)connect. */
+    const val QUEUE = "lf_queue"
     /** Phone → glasses: make the glasses discoverable so the companion pairing picker can list them. */
     const val DISCOVERABLE = "lf_discoverable"
 }

@@ -80,6 +80,47 @@ class LiveVoiceServiceTest {
         assertTrue(commands.isEmpty())
     }
 
+    /** V1: the prompt was answered on another device while its auto-opened mic was still recognising nothing. */
+    @Test fun noTranscriptForAConfirmationAnsweredElsewhereEndsSilently() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent()
+        pending = null // answered on the phone / watch
+        stt.result.complete(null); runCurrent()
+        assertTrue(toasts.isEmpty(), "no \"Didn't catch that\" for a prompt that is gone: $toasts")
+        assertTrue(answers.isEmpty())
+        assertEquals(VoiceState.Idle, v.state.value)
+    }
+
+    /** V1: the prompt expired while recognising; an unclear answer must not ask "Say yes or no" for it. */
+    @Test fun unclearAnswerForAnExpiredConfirmationEndsSilently() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent()
+        pending = null
+        stt.result.complete("hmm maybe"); runCurrent()
+        assertTrue(toasts.isEmpty(), "$toasts")
+        assertTrue(answers.isEmpty())
+        assertTrue(commands.isEmpty())
+    }
+
+    /** V1: the listen guard closing a capture for a prompt that has since gone (nothing heard) stays silent too. */
+    @Test fun guardTimeoutForAConfirmationThatIsGoneEndsSilently() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        assertNotNull(v.startExternal())
+        pending = null
+        advanceTimeBy(8_001); runCurrent() // guard ends the capture
+        advanceTimeBy(5_001); runCurrent() // recognizer times out with nothing
+        assertTrue(toasts.isEmpty(), "$toasts")
+        assertEquals(VoiceState.Idle, v.state.value)
+    }
+
+    /** Still pending: the user hears why nothing happened. */
+    @Test fun noTranscriptForAStillPendingConfirmationStillToasts() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent()
+        stt.result.complete(null); runCurrent()
+        assertEquals(listOf("Didn't catch that"), toasts)
+    }
+
     /** Review #5: a confirmation that appears mid-capture is not answered by speech meant as a command. */
     @Test fun confirmationAppearingMidCaptureIsNotAnswered() = runTest {
         val stt = FakeStt(); val v = voice(stt)

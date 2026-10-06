@@ -10,6 +10,8 @@ import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.PROTOCOL_VERSION
+import com.debasish.livefit.model.QueueFrame
+import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
@@ -54,6 +56,9 @@ class HudController(
     val settings: StateFlow<HudSettings> = _settings
     private val _connection = MutableStateFlow(HudConnection.Connecting)
     val connection: StateFlow<HudConnection> = _connection
+    private val _queue = MutableStateFlow(QueueWindow())
+    /** YouTube Music queue window for the music screen (lf_queue). */
+    val queue: StateFlow<QueueWindow> = _queue
     private val _hrHistory = MutableStateFlow<List<Int>>(emptyList())
     val hrHistory: StateFlow<List<Int>> = _hrHistory
     @Volatile private var lastSampleSecond = -1L
@@ -62,6 +67,7 @@ class HudController(
     fun start() {
         bridge.subscribe(GlassesChannels.STATE, CXRServiceBridge.MsgCallback { _, caps, _ -> onState(caps) })
         bridge.subscribe(GlassesChannels.SETTINGS, CXRServiceBridge.MsgCallback { _, caps, _ -> onSettings(caps) })
+        bridge.subscribe(GlassesChannels.QUEUE, CXRServiceBridge.MsgCallback { _, caps, _ -> onQueue(caps) })
         bridge.subscribe(GlassesChannels.DISCOVERABLE, CXRServiceBridge.MsgCallback { _, caps, _ ->
             text(caps)?.let(DiscoverableRequest::parse)?.let(onDiscoverable) // an outdated phone's request is ignored
         })
@@ -94,6 +100,12 @@ class HudController(
         val s = runCatching { Wire.decode<HudSettingsFrame>(t).settings }.getOrNull() ?: return
         _settings.value = s
         prefs.edit().putString(KEY_SETTINGS, Wire.encode(s)).apply() // keep layout across restarts
+    }
+
+    private fun onQueue(caps: Caps?) {
+        val t = text(caps) ?: return
+        if (Wire.versionOf(t) != PROTOCOL_VERSION) return // lf_state already reports the mismatch
+        _queue.value = runCatching { Wire.decode<QueueFrame>(t).window }.getOrElse { Log.w(TAG, "bad queue", it); return }
     }
 
     private fun loadSettings(): HudSettings =

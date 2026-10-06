@@ -111,14 +111,15 @@ Existing mock-up code in these modules is the starting point: `DefaultWorkoutSer
 
 ## 4. Wire protocol
 
-All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (integer, starts at 1; policy in §4.7). Unknown fields are ignored defensively. Sealed hierarchies use discriminator key **`"cmd"`** (the default `"type"` collides with `StartWorkout.type` — bug found in spikes).
+All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (integer, starts at 1, currently **2**; policy in §4.7). Unknown fields are ignored defensively. Sealed hierarchies use discriminator key **`"cmd"`** (the default `"type"` collides with `StartWorkout.type` — bug found in spikes).
 
 ### 4.1 Messages
 | Message | Direction | Content |
 |---|---|---|
 | `StateFrame` | phone → watch, glasses | `workout: WorkoutSnapshot`, `music: NowPlaying?` (incl. `volume` 0..1), `devices` (link state + battery for phone/watch/glasses), `voice: VoiceState`, `confirmation: Confirmation?`, `toast: String?`, `sentAtMs`. |
+| `QueueFrame` | phone → glasses | `window: QueueWindow` = `items: [QueueItem{queueId, title, artist}]` + `currentIndex?` (index of the current song in `items`; null when the session reports no or an unknown active item). The glasses music screen's list (§5.5, §6.3). Sent **only when the window changes** and on every (re)connect; title/artist capped at 60 chars so a 50-item frame stays a few KB. |
 | `HudSettingsFrame` | phone → glasses | `HudSettings` (scale 0.3–1.0, `HudPosition` 3×3, `items: Set<HudItem>`). Sent on change and on every (re)connect. |
-| `Command` | any → phone | `id: String` (UUID, dedup) + one of: `StartWorkout(type)`, `PauseWorkout`, `ResumeWorkout`, `StopWorkout`, `DismissSummary`, `PlayPause`, `PlayMusic`, `PauseMusic`, `NextTrack`, `PreviousTrack`, `LikeTrack`, `Volume(up)` (voice, ±10 %), `SetVolume(level 0..1)` (watch arc/bezel, phone slider), `Answer(confirmationId, yes)`. |
+| `Command` | any → phone | `id: String` (UUID, dedup) + one of: `StartWorkout(type)`, `PauseWorkout`, `ResumeWorkout`, `StopWorkout`, `DismissSummary`, `PlayPause`, `PlayMusic`, `PauseMusic`, `NextTrack`, `PreviousTrack`, `LikeTrack`, `Volume(up)` (voice, ±10 %), `SetVolume(level 0..1)` (watch arc/bezel, phone slider), `PlayQueueItem(queueId)` (glasses music screen → `skipToQueueItem`), `Answer(confirmationId, yes)`. |
 | `SessionDelta` | watch → phone | `sessionId`, `seq` (monotonic per session), `events: [SessionEvent]`, `samples: [{tMs, hr?, stepsTotal, distanceKmTotal, kcalTotal, speedKmh?}]`, `provenance`, `final: Boolean`. `SessionEvent` = `Started(tMs, type)` · `Paused(tMs)` · `Resumed(tMs)` · `TypeDetected(tMs, type)` · `Stopped(tMs, reason)`. |
 | `DeltaAck` | phone → watch | `sessionId`, `seq` — highest contiguous seq **durably stored** on the phone (§4.4). |
 | `SessionClaim` | watch → phone | Sent on reconnect when the watch holds an offline session: `sessionId`, `type`, `startMs`, `phase`, `activeMs`, `lastSeq`. |
@@ -130,7 +131,7 @@ All messages are JSON (kotlinx.serialization) carrying `protocolVersion` (intege
 | `DiscoverableRequest` | phone → watch, glasses | `seconds` (120). Sent when the user taps Pair: the peer app shows the system `ACTION_REQUEST_DISCOVERABLE` prompt so the companion picker can list the already-bonded device; ignored unless `protocolVersion` matches. The watch also accepts it as a remote launch of `livefit://discoverable?req=<json>`. |
 
 ### 4.2 Transports and channel names
-- **Glasses (CXR custom cmd names):** `lf_state`, `lf_settings`, `lf_discoverable` (phone → glasses); `lf_cmd`, `lf_listen`, `lf_audio`, `lf_listen_end` (glasses → phone). Payload: `Caps` with one JSON string; audio uses the `bytes` argument.
+- **Glasses (CXR custom cmd names):** `lf_state`, `lf_settings`, `lf_queue`, `lf_discoverable` (phone → glasses); `lf_cmd`, `lf_listen`, `lf_audio`, `lf_listen_end` (glasses → phone). Payload: `Caps` with one JSON string; audio uses the `bytes` argument.
 - **Watch (Data Layer message paths):** `/lf/state`, `/lf/settings`, `/lf/cmd`, `/lf/delta`, `/lf/ack`, `/lf/claim`, `/lf/exercise_req`, `/lf/exercise_res`, `/lf/exercise_state`, `/lf/battery_req`, `/lf/battery`, `/lf/discoverable`.
 - **Migration:** the mock-up uses `lf_hud` / `lf_cmd` / `lf_listen` (glasses) and `/rf/*` (watch) with a combined `HudFrame`. V1 renames to the names above, splits `HudFrame` into `StateFrame` + `HudSettingsFrame`, and bumps `protocolVersion` to 1. The spike-only `rf_ping` / `rf_metrics` channels, `SpikeActivity` and `DebugReceiver` move behind a debug build type.
 
@@ -179,6 +180,7 @@ The phone owns the session; the watch only holds a **temporary durable buffer** 
 
 ### 4.7 Version policy — coordinated upgrades
 All three APKs are built from the same commit and share one `protocolVersion`. Any mismatch (not only major) is treated as incompatible: the hub ignores commands from that device and tells it to update; the hub shows which device is outdated. `tools/install-all.sh` installs all three together. Unknown-field tolerance stays only as defensive parsing, not as a compatibility promise.
+- **Version history:** **1** — V1 wire format. **2** — glasses music screen: new `lf_queue` channel (`QueueFrame`) and new command `PlayQueueItem` (a v1 phone cannot decode it, so the change is incompatible). The glasses ignore an `lf_queue` frame of another version (the `lf_state` frame already reports the mismatch); the watch has no new messages but shares the number.
 
 ### 4.8 Hub → watch exercise control
 The phone decides; the watch executes on Health Services and reports what actually happened.
@@ -239,6 +241,7 @@ A session becomes **Complete** — Summary data final, history row finalised, el
    - **Composite utterances:** the text is first split into clauses on "and", "then", "and then" and commas (per language pack; clauses of filler words such as "hey", "please" are dropped), each clause goes through `CommandParser[locale]`, and the commands run **in spoken order** ("pause music and stop workout" → `PauseMusic`, `StopWorkout`). A clause that needs a confirmation (voice stop) waits for its answer before the next clause runs. If some clauses match nothing, the others still run and the toast names what wasn't understood (`Didn't catch "order a pizza"`); if none match → "Didn't catch that".
    - Recognised text and its parse are logged at debug level (`LiveFitVoice`); audio is never logged.
 5. Result toast on all devices ("✓ Next song" / "Didn't catch that").
+   - **A capture bound to a confirmation that is no longer pending ends silently.** The capture remembers the prompt pending when it started; if that prompt was answered on another device, expired or was replaced by the time recognition finishes, the result is dropped without any toast — whether something, something unclear ("Say yes or no") or nothing ("Didn't catch that") was heard, and also when the listen guard closed the capture.
 - **Phone mic button** uses the same pipeline with the phone microphone.
 - **No online recognition.** `SpeechToText` Android implementation = platform on-device recognizer only. If the selected language pack is not installed, voice is disabled with "Voice needs the English (India) pack" → Languages. (Downloaded in the setup wizard, §6.1.)
 - `SpeechToText` interface: `start(locale): Session`; `Session.feed(pcm)`, `Session.end()`; flows of partial and final text; errors. Future iOS implementation: Apple on-device recognition. Bundled engines (Whisper/Vosk) are a V3 option.
@@ -249,6 +252,8 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 - `play/pause/next/previous` via `TransportControls`; `like` via custom action `thumbs_up_action`; `volume` via `AudioManager.STREAM_MUSIC` — `Volume(up)` = ±10 %, `SetVolume(level)` = absolute; current level published in `NowPlaying.volume`.
 - `NowPlaying` from metadata + playback state (title, artist, position, duration, isPlaying, liked if exposed).
 - If no YTM session exists: `PlayMusic` launches YTM with `MEDIA_PLAY_FROM_SEARCH` using the saved query.
+- **Queue window (glasses music screen):** the service reads `MediaController.getQueue()` (on device YouTube Music reports queue title "Up next", 25 items, played and upcoming) and `PlaybackState.activeQueueItemId`, re-evaluated on `onQueueChanged` / metadata / playback callbacks and the 1 s attach poll, and publishes a `QueueWindow` flow (`MusicService.queue`). Window of **N** items (Settings → YouTube Music, 5–50, default **25**): all history before the current item that fits (at most N − 1), the current item, then up to N − M − 1 upcoming items (fewer when the queue is shorter). No or unknown active id → the first N items with no current marker; empty queue → empty window. Pure function `QueueWindowing.window` (JVM-tested). The hub pushes the window as `QueueFrame` on `lf_queue` when it changes and on (re)connect.
+- `PlayQueueItem(queueId)` goes through the hub router like other music commands → `transportControls.skipToQueueItem(queueId)`; toast "Playing selected song".
 - **Workout start behaviour** (Settings → Music): *Don't touch* / *Resume last played* (**default**) / *Play saved search* (e.g. "workout mix"). On stop: pause music (default on). Pause workout does not pause music by default.
 
 ### 5.6 History — `:services:history`
@@ -272,7 +277,7 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 - **Settings:** General (Languages, Units); **Linked services** (Rokid glasses, Galaxy Watch, YouTube Music; V2 adds Health Connect); Glasses display; Workout (GPS outdoors); Voice (language); Data (clear history); Advanced (Developer tools); About.
   - *Rokid glasses:* status, battery, pair/unpair/re-pair (companion association), re-authorize Hi Rokid, reconnect, glasses permissions, link to Glasses display, HUD preview.
   - *Galaxy Watch:* reachable or not, battery, watch app installed, sensor permissions, re-link, and an optional tip: turn off auto-open for the watch's Media controls (for example Settings → Apps → Media controls; the exact menu varies by One UI Watch version) so LiveFit's workout screen stays in front.
-  - *YouTube Music:* notification access status, workout-start behaviour, saved search.
+  - *YouTube Music:* notification access status, workout-start behaviour, saved search, **glasses music screen: songs listed (N, slider 5–50, default 25; persisted with the other settings, applies within ~1 s)**.
   - *Glasses display:* preview, size 30–100 % (default 40 %), position 3×3 (default bottom-centre), per-item toggles; **edits are a draft until Apply (header) or Back (auto-apply)**, then toast "Sent to glasses" / "Saved · applies when glasses connect".
 - **Generic list screen** ("function screen") with source id + optional JSON filter: search, status filter, A–Z sort, grouped sections, confirm-then-run actions with optional blocking progress overlay. Sources: languages, permissions, workout-days, workouts (+ V2 playlists); a row action may navigate to any route (e.g. a filtered list).
 - **Languages:** on-device speech packs; downloaded vs available; tap → download with progress overlay. Only Google's own confirmation dialog is shown (no second LiveFit dialog); the row shows pack size when known.
@@ -297,8 +302,12 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 - **Glance mode** (touchpad swipe): timer + heart rate only.
 - **Clock:** current local time from the glasses' own clock ("HH:mm", or "h:mm" when the device uses 12-hour time), updated on each minute boundary. Shown in the status row on Ready and Workout (full, left after REC; hidden with the status row); screens without a status row (Glance, Summary, Saving, Connecting) show it alone in the top-right corner.
 - **Overlays** inside the HUD block: listening ring (pulsing), toast ("✓ Next song"), "❚❚ PAUSED", **Confirmation** (✓ Yes / ✕ No; highlight = brighter/thicker; swipe moves highlight, tap confirms, double-tap = No; initial highlight = what the user just requested; mic auto-opens ~6 s for a spoken answer).
+- **Music screen** (second screen, reached by a forward swipe from the workout HUD or the Ready screen): top = "MUSIC" + position "3/25" + clock, then the current song (▶/❚❚ play-state glyph, title bold 100 %, artist 60 %, "playing"/"paused"). Below a hairline: the queue window (§5.5), 7 rows visible, scrolled to keep the highlight in view; played songs 35 %, upcoming 60 %, current song 100 % bold with a ▶ mark; the highlighted row has a bright outline (no fill). "No queue from YouTube Music" / "Nothing playing" when empty. Overlays (confirmation, toasts, listening) draw on top as on the HUD.
 - **Summary:** type "DONE", timer, avg HR, kcal, distance.
-- Input: tap = talk (or confirm in a prompt), swipe = full/glance (or move highlight), double-tap = back/No.
+- **Input.** Rokid swipes arrive as DPAD keys; **forward = RIGHT/DOWN, back = LEFT/UP**; swipes are debounced 350 ms.
+  - A pending confirmation overrides everything: swipe moves the ✓/✕ highlight, tap confirms, double-tap = No.
+  - Workout HUD: tap = talk; **back swipe = toggle full/glance** (unchanged); in glance any swipe returns to full; **forward swipe = music screen** (from full, or from any non-workout screen such as Ready); double-tap = leave the app.
+  - Music screen: swipe forward/back moves the highlight down/up the list (stops at the ends; opens on the current song; stays on its song when the window shifts, else falls back to the current song); **tap = play the highlighted song** (`PlayQueueItem`), or talk when the list is empty; **double-tap = back to the workout HUD** (full/glance as it was).
 
 ---
 

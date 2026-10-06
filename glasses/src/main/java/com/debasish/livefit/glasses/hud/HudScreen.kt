@@ -62,6 +62,7 @@ import com.debasish.livefit.model.HudItem
 import com.debasish.livefit.model.HudPosition
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.zoneLabel
 import com.debasish.livefit.model.VoiceState
@@ -117,6 +118,10 @@ fun HudScreen(
     overlay: HudOverlay = HudOverlay.None,
     /** Local time (F4), already formatted by [HudClock]. */
     clock: String = "",
+    /** Music screen (M1) instead of the workout HUD; overlays still draw on top. */
+    page: HudPage = HudPage.Workout,
+    queue: QueueWindow = QueueWindow(),
+    musicHighlight: Int? = null,
 ) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle
     val inWorkout = phase == WorkoutPhase.Starting || phase == WorkoutPhase.Active || phase == WorkoutPhase.Paused || phase == WorkoutPhase.Syncing
@@ -129,6 +134,7 @@ fun HudScreen(
                     connection == HudConnection.Outdated -> Message("Update LiveFit", "on your glasses")
                     frame == null && connection == HudConnection.OpenPhoneApp -> WaitingForPhone()
                     frame == null -> Message("Connecting…", "to your phone")
+                    page == HudPage.Music -> { cornerClock = false; MusicScreen(frame.music, queue, musicHighlight, clock) }
                     inWorkout && mode == HudMode.Full -> { cornerClock = false; Full(frame, settings, glassesBattery, hrHistory, clock) }
                     inWorkout -> Glance(frame)
                     phase == WorkoutPhase.Stopping -> Message("Saving workout…", formatElapsed(frame.workout.elapsedMs))
@@ -456,10 +462,15 @@ fun Glyph(icon: ImageVector, size: Dp, level: Float) {
 }
 
 @Composable
-fun Label(text: String, size: TextUnit, level: Float, weight: FontWeight = FontWeight.Medium, maxLines: Int = 1) {
+fun Label(
+    text: String, size: TextUnit, level: Float, weight: FontWeight = FontWeight.Medium, maxLines: Int = 1,
+    modifier: Modifier = Modifier, overflow: androidx.compose.ui.text.style.TextOverflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+) {
     BasicText(
         text,
+        modifier = modifier,
         maxLines = maxLines,
+        overflow = overflow,
         style = TextStyle(color = Hud.Green.copy(alpha = level), fontSize = size, fontWeight = weight, fontFamily = FontFamily.SansSerif, fontFeatureSettings = "tnum"),
     )
 }

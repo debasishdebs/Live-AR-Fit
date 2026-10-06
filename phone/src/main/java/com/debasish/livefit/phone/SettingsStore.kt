@@ -4,6 +4,7 @@ import android.content.Context
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.music.MusicOnStart
+import com.debasish.livefit.services.music.QueueWindowing
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -41,6 +42,14 @@ class SettingsStore(context: Context) {
     private val _pauseMusicOnStop = pref("pauseMusicOnStop", true) { it.toBooleanStrictOrNull() }
     val pauseMusicOnStop: StateFlow<Boolean> = _pauseMusicOnStop
     fun setPauseMusicOnStop(v: Boolean) { _pauseMusicOnStop.value = v; prefs.edit().putString("pauseMusicOnStop", v.toString()).apply() }
+
+    /** Songs listed on the glasses music screen (N, 5–50, default 25; spec §5.5). */
+    private val _glassesQueueSize = pref("glassesQueueSize", QueueWindowing.DEFAULT_SIZE) { it.toIntOrNull()?.let(QueueWindowing::clampSize) }
+    val glassesQueueSize: StateFlow<Int> = _glassesQueueSize
+    fun setGlassesQueueSize(v: Int) {
+        val n = QueueWindowing.clampSize(v)
+        _glassesQueueSize.value = n; prefs.edit().putString("glassesQueueSize", n.toString()).apply()
+    }
 
     private val _gpsOutdoors = pref("gpsOutdoors", true) { it.toBooleanStrictOrNull() }
     val gpsOutdoors: StateFlow<Boolean> = _gpsOutdoors

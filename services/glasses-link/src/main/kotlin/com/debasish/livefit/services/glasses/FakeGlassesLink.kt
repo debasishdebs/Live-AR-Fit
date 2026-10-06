@@ -23,4 +23,5 @@ class FakeGlassesLink : GlassesLinkService {
 
     override suspend fun push(frame: StateFrame) { _lastFrame.value = frame }
     override suspend fun pushSettings(frame: HudSettingsFrame) = Unit
+    override suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) = Unit
 }

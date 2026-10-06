@@ -37,6 +37,8 @@ interface GlassesLinkService {
     suspend fun requestDiscoverable(): Boolean = false
     suspend fun push(frame: com.debasish.livefit.model.StateFrame)
     suspend fun pushSettings(frame: com.debasish.livefit.model.HudSettingsFrame)
+    /** Music-screen queue window (lf_queue); sent on change and on every (re)connect. */
+    suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
 }
 
 sealed interface GlassesEvent {
@@ -67,6 +69,10 @@ interface MusicService {
     fun previous()
     fun toggleLike()
     fun setVolume(level: Float)
+    /** The part of the player's queue the glasses music screen lists (spec §5.5); empty when there is no queue. */
+    val queue: StateFlow<com.debasish.livefit.model.QueueWindow>
+    /** Jumps to a queue entry by its [com.debasish.livefit.model.QueueItem.queueId]. */
+    fun playQueueItem(queueId: Long)
 }
 
 interface VoiceService {
