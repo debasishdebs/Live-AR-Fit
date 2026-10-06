@@ -95,6 +95,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         onAnswer = { id, yes -> confirm.answer(id, yes) },
         toast = ::flash,
         phoneMic = { phoneMic.record() },
+        log = { Log.d("LiveFitVoice", it) },
     ).also { v -> phoneMic = PhoneMic(app, { v }, ::flash) } else FakeVoiceService(scope) { router.dispatchVoice(it) }
     // ---- end voice binding ----
 

@@ -8,6 +8,8 @@ data class LanguagePack(
     val displayName: String,
     val parseCommand: (String) -> Command?,
     val parseYesNo: (String) -> Boolean?,
+    /** Splits a composite utterance into single-command clauses (F5); filler-only clauses are dropped. */
+    val splitClauses: (String) -> List<String> = EnglishClauses::split,
 )
 
 object LanguageRegistry {

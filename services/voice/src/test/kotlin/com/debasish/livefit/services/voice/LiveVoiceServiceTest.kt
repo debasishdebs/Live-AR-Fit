@@ -258,4 +258,37 @@ class LiveVoiceServiceTest {
         assertNull(v.startExternal())
         assertEquals(0, stt.cancelled)
     }
+
+    /** F5: clauses run in spoken order; one needing a confirmation (stop) holds the rest until it is answered. */
+    @Test fun compositeCommandsRunInOrderAndWaitForAConfirmation() = runTest {
+        val stt = FakeStt()
+        val answered = CompletableDeferred<Unit>()
+        val logs = mutableListOf<String>()
+        val v = LiveVoiceService(backgroundScope, stt, locale = { "en-IN" }, pendingConfirmationId = { null },
+            onCommand = { c -> commands += c; if (c == Command.StopWorkout) answered.await() },
+            onAnswer = { _, _ -> }, toast = { toasts += it }, log = { logs += it })
+        v.endExternal(assertNotNull(v.startExternal()))
+        stt.result.complete("stop workout and pause music"); runCurrent()
+        assertEquals(listOf<Command>(Command.StopWorkout), commands, "pause music waits for the stop confirmation")
+        answered.complete(Unit); runCurrent()
+        assertEquals(listOf(Command.StopWorkout, Command.PauseMusic), commands)
+        assertTrue(toasts.isEmpty())
+        assertTrue(logs.any { "stop workout and pause music" in it && "StopWorkout" in it && "PauseMusic" in it }, "transcript and parse are logged: $logs")
+    }
+
+    @Test fun partlyUnderstoodUtteranceRunsTheRestAndSaysWhatWasMissed() = runTest {
+        val stt = FakeStt(); val v = voice(stt)
+        v.endExternal(assertNotNull(v.startExternal()))
+        stt.result.complete("next song and order a pizza"); runCurrent()
+        assertEquals(listOf<Command>(Command.NextTrack), commands)
+        assertEquals(listOf("Didn't catch \"order a pizza\""), toasts)
+    }
+
+    @Test fun nothingUnderstoodStillSaysDidntCatchThat() = runTest {
+        val stt = FakeStt(); val v = voice(stt)
+        v.endExternal(assertNotNull(v.startExternal()))
+        stt.result.complete("order a pizza"); runCurrent()
+        assertTrue(commands.isEmpty())
+        assertEquals(listOf("Didn't catch that"), toasts)
+    }
 }

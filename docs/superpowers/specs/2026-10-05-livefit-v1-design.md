@@ -232,6 +232,8 @@ A session becomes **Complete** — Summary data final, history row finalised, el
 2. Glasses run an **energy-based VAD**: stop after **0.8 s of silence** following speech, or at **6 s** max; stream **100 ms `AudioChunk`s** (~3.2 KB each) as they are captured.
 3. Phone `LiveVoiceService` pipes chunks into `SpeechToText` immediately (streaming, partial results), locale from Settings → Voice (default **en-IN**).
 4. Final text → `CommandParser[locale]` → `Command`; if a `Confirmation` is pending → `YesNoParser[locale]` → `Answer`.
+   - **Composite utterances:** the text is first split into clauses on "and", "then", "and then" and commas (per language pack; clauses of filler words such as "hey", "please" are dropped), each clause goes through `CommandParser[locale]`, and the commands run **in spoken order** ("pause music and stop workout" → `PauseMusic`, `StopWorkout`). A clause that needs a confirmation (voice stop) waits for its answer before the next clause runs. If some clauses match nothing, the others still run and the toast names what wasn't understood (`Didn't catch "order a pizza"`); if none match → "Didn't catch that".
+   - Recognised text and its parse are logged at debug level (`LiveFitVoice`); audio is never logged.
 5. Result toast on all devices ("✓ Next song" / "Didn't catch that").
 - **Phone mic button** uses the same pipeline with the phone microphone.
 - **No online recognition.** `SpeechToText` Android implementation = platform on-device recognizer only. If the selected language pack is not installed, voice is disabled with "Voice needs the English (India) pack" → Languages. (Downloaded in the setup wizard, §6.1.)

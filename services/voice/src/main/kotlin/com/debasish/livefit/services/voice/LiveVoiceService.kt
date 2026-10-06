@@ -22,6 +22,8 @@ class LiveVoiceService(
     private val onAnswer: (String, Boolean) -> Unit,
     private val toast: (String) -> Unit,
     private val phoneMic: (() -> Unit)? = null,
+    /** Debug log of recognised text and what it parsed to (never audio), to aid device testing. */
+    private val log: (String) -> Unit = {},
 ) : VoiceService {
     private val _state = MutableStateFlow(VoiceState.Idle)
     override val state: StateFlow<VoiceState> = _state
@@ -86,13 +88,26 @@ class LiveVoiceService(
             }
             if (!current) return@launch // superseded by a newer capture while recognising
             when {
-                text.isNullOrBlank() || pack == null -> toast("Didn't catch that")
+                text.isNullOrBlank() || pack == null -> { log("voice: no transcript"); toast("Didn't catch that") }
                 // The prompt this capture answered expired or was replaced while recognising: drop it quietly.
-                confirmationId != null && pendingConfirmationId() != confirmationId -> Unit
-                confirmationId != null -> pack.parseYesNo(text)?.let { onAnswer(confirmationId, it) } ?: toast("Say yes or no")
-                else -> pack.parseCommand(text)?.let { onCommand(it) } ?: toast("Didn't catch that")
+                confirmationId != null && pendingConfirmationId() != confirmationId -> log("voice \"$text\" -> stale answer for $confirmationId, dropped")
+                confirmationId != null -> pack.parseYesNo(text).also { log("voice \"$text\" -> answer $it for $confirmationId") }
+                    ?.let { onAnswer(confirmationId, it) } ?: toast("Say yes or no")
+                else -> runCommands(pack, text)
             }
         }
+    }
+
+    /**
+     * Composite utterances (F5): clauses run in spoken order; [onCommand] suspends while a stop waits for its confirmation,
+     * so later clauses wait for the answer. Clauses that matched nothing are named in a toast after the rest ran.
+     */
+    private suspend fun runCommands(pack: LanguagePack, text: String) {
+        val parsed = pack.parseUtterance(text)
+        log("voice \"$text\" -> ${parsed.commands}" + if (parsed.notUnderstood.isEmpty()) "" else " not understood ${parsed.notUnderstood}")
+        if (parsed.commands.isEmpty()) { toast("Didn't catch that"); return }
+        for (c in parsed.commands) onCommand(c)
+        if (parsed.notUnderstood.isNotEmpty()) toast("Didn't catch " + parsed.notUnderstood.joinToString(", ") { "\"$it\"" })
     }
 
     private companion object { const val LISTEN_GUARD_MS = 8_000L }
