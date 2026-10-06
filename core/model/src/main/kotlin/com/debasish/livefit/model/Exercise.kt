@@ -51,4 +51,6 @@ data class ExerciseStateReport(
     val sessionId: String,
     val state: ExerciseState,
     val endedBy: EndReason? = null,
+    /** Watch wall-clock time the report was made; lets the phone ignore an Idle report older than its session. */
+    val atMs: Long? = null,
 )

@@ -12,6 +12,7 @@ import com.debasish.livefit.services.workout.SessionAssembler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -25,6 +26,8 @@ import kotlin.coroutines.cancellation.CancellationException
  *
  * Recording never waits for the network: a delta is on disk (or in the retry list) when record returns, and
  * transmission runs in order on [scope] — so a stalled send can't hold back the sensor collector or Stop.
+ * Each send is bounded by [SEND_TIMEOUT_MS]: a send that never returns counts as failed (the delta stays buffered)
+ * instead of halting the queue for the process lifetime.
  */
 class WatchSessionRecorder(
     private val root: File,
@@ -33,10 +36,14 @@ class WatchSessionRecorder(
     private val scope: CoroutineScope,
     private val send: suspend (SessionDelta) -> Unit,
     private val sendClaim: suspend (SessionClaim) -> Unit = {},
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val sendTimeoutMs: Long = SEND_TIMEOUT_MS,
 ) {
     private class Held(val buffer: FileDeltaBuffer, var header: WatchSessionHeader, val assembler: SessionAssembler) {
         /** Deltas whose disk write failed: still sent by [resendUnacked] and re-written on the next record. */
         val retry = sortedMapOf<Long, SessionDelta>()
+        /** When each unacked delta was last sent successfully; the periodic resend skips recent ones. */
+        val sentAtMs = HashMap<Long, Long>()
     }
 
     /** Oldest first. */
@@ -48,6 +55,7 @@ class WatchSessionRecorder(
     }
     /** Sent strictly in order by one drain coroutine at a time. */
     private val outbox = ArrayDeque<Outgoing>()
+    private var inFlight: Outgoing? = null
     private var draining = false
 
     init {
@@ -77,6 +85,8 @@ class WatchSessionRecorder(
     val type: WorkoutType? get() = newest?.header?.type
     val isFinalized: Boolean get() = newest?.header?.finalSeq != null
     val holdsData: Boolean get() = held.isNotEmpty()
+    /** True while [sessionId]'s data is still held (recording, or ended and awaiting its final ack). */
+    fun holds(sessionId: String): Boolean = held.any { it.header.sessionId == sessionId }
 
     fun begin(sessionId: String, type: WorkoutType, tMs: Long) {
         check(newest == null || isFinalized) { "session ${this.sessionId} is still recording" }
@@ -87,7 +97,9 @@ class WatchSessionRecorder(
     }
 
     fun event(e: SessionEvent, final: Boolean = false) = record(listOf(e), emptyList(), final)
-    fun sample(s: Sample) = record(emptyList(), listOf(s), final = false)
+    fun sample(s: Sample) = samples(listOf(s))
+    /** A batch (e.g. screen-off HR points) is one delta. */
+    fun samples(s: List<Sample>) { if (s.isNotEmpty()) record(emptyList(), s, final = false) }
 
     private fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
         val h = newest?.takeIf { it.header.finalSeq == null } ?: return
@@ -109,9 +121,11 @@ class WatchSessionRecorder(
         }
     }
 
-    /** Queues for sending; a delta already waiting isn't queued twice (periodic resends while the link stalls). */
+    private fun Outgoing.isDelta(sessionId: String, seq: Long) = this is Outgoing.Delta && d.sessionId == sessionId && d.seq == seq
+
+    /** Queues for sending; a delta already waiting or being sent isn't queued twice (periodic resends while the link stalls). */
     private fun enqueue(o: Outgoing) {
-        if (o is Outgoing.Delta && outbox.any { it is Outgoing.Delta && it.d.sessionId == o.d.sessionId && it.d.seq == o.d.seq }) return
+        if (o is Outgoing.Delta && (inFlight?.isDelta(o.d.sessionId, o.d.seq) == true || outbox.any { it.isDelta(o.d.sessionId, o.d.seq) })) return
         outbox.addLast(o)
         if (draining) return
         draining = true
@@ -119,26 +133,32 @@ class WatchSessionRecorder(
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 while (true) {
-                    when (val next = outbox.removeFirstOrNull() ?: break) {
-                        is Outgoing.Delta -> trySend { send(next.d) }
+                    val next = outbox.removeFirstOrNull() ?: break
+                    inFlight = next
+                    when (next) {
+                        is Outgoing.Delta -> if (trySend { send(next.d) }) {
+                            held.firstOrNull { it.header.sessionId == next.d.sessionId }?.sentAtMs?.set(next.d.seq, nowMs())
+                        }
                         is Outgoing.Claim -> trySend { sendClaim(next.c) } // retried on next resync
                     }
+                    inFlight = null
                 }
             } finally {
+                inFlight = null
                 draining = false
             }
         }
     }
 
-    /** Failures keep the delta buffered; cancellation must propagate. */
-    private suspend fun trySend(op: suspend () -> Unit) {
-        try { op() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-    }
+    /** False on failure or timeout (the delta stays buffered); cancellation of the drain itself must propagate. */
+    private suspend fun trySend(op: suspend () -> Unit): Boolean =
+        try { withTimeoutOrNull(sendTimeoutMs) { op(); true } ?: false } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
 
     fun onAck(ack: DeltaAck) {
         val h = held.firstOrNull { it.header.sessionId == ack.sessionId } ?: return
         h.buffer.ackUpTo(ack.seq)
         h.retry.keys.removeAll { it <= ack.seq }
+        h.sentAtMs.keys.removeAll { it <= ack.seq }
         outbox.removeAll { it is Outgoing.Delta && it.d.sessionId == ack.sessionId && it.d.seq <= ack.seq }
         val f = h.header.finalSeq ?: return
         if (ack.seq < f) return
@@ -148,18 +168,28 @@ class WatchSessionRecorder(
         if (wasOldest && held.isNotEmpty()) resync() // next session's turn
     }
 
-    /** Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). */
-    fun resendUnacked() {
+    /**
+     * Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). Deltas sent less than
+     * [RESEND_AFTER_MS] ago are skipped, so a slow backlog isn't queued again behind itself.
+     */
+    fun resendUnacked() = replay(all = false)
+
+    private fun replay(all: Boolean) {
         val h = held.firstOrNull() ?: return
         if (h.retry.isNotEmpty()) flushRetry(h)
+        val now = nowMs()
         val toSend = (h.buffer.unacked() + h.retry.values).distinctBy { it.seq }.sortedBy { it.seq }
+            .filter { all || h.sentAtMs[it.seq]?.let { at -> now - at >= RESEND_AFTER_MS } != false }
         for (d in toSend) enqueue(Outgoing.Delta(d))
     }
 
-    /** Claims the oldest held session and replays it (on reconnect, and when the previous session completes). */
+    /** Claims the oldest held session and replays all of it (on reconnect, and when the previous session completes). */
     fun resync() {
-        claim()?.let { enqueue(Outgoing.Claim(it)) } // queued ahead of the replay
-        resendUnacked()
+        val c = claim() ?: return
+        // The claim goes ahead of every queued item of its session (stale live deltas, a backlog); the replay re-adds them.
+        outbox.removeAll { (it is Outgoing.Delta && it.d.sessionId == c.sessionId) || (it is Outgoing.Claim && it.c.sessionId == c.sessionId) }
+        enqueue(Outgoing.Claim(c))
+        replay(all = true)
     }
 
     fun claim(): SessionClaim? {
@@ -172,5 +202,12 @@ class WatchSessionRecorder(
             activeMs = h.assembler.activeMs(),
             lastSeq = h.header.lastSeq,
         )
+    }
+
+    companion object {
+        /** Longer than WatchRuntime's own Data Layer timeout, so this is only the backstop. */
+        const val SEND_TIMEOUT_MS = 15_000L
+        /** A little under the 5 s resend tick, so tick jitter doesn't skip a whole round. */
+        const val RESEND_AFTER_MS = 4_000L
     }
 }

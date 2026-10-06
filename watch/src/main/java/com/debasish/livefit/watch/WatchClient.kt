@@ -94,7 +94,7 @@ object WatchClient {
                 rec.resync() // claims the oldest held session and replays it; newer ones follow after its final ack
             } else {
                 // Tell the hub we hold nothing (lets it finalize a session whose data is gone, spec §4.9).
-                safeSend(WatchPaths.EXERCISE_STATE, Wire.encode(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle)).toByteArray())
+                safeSend(WatchPaths.EXERCISE_STATE, Wire.encode(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle, atMs = System.currentTimeMillis())).toByteArray())
             }
         } catch (e: CancellationException) {
             throw e

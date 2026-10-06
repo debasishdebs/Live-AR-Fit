@@ -71,6 +71,7 @@ class HubWorkoutService(
     private var current: SessionAssembler? = null
     private var claim: SessionClaim? = null
     private var syncUntilSeq: Long? = null
+    /** The watch ended the session: an Ended report, or an ok Stop result. */
     private var endedByReport = false
     private var endReason: EndReason? = null
     private var endedAtMs: Long? = null
@@ -112,11 +113,31 @@ class HubWorkoutService(
             scope.launch { abandon(id); sendStop(id) }
             return
         }
-        scopedOp(ExerciseOp.Stop, setOf(WorkoutPhase.Active, WorkoutPhase.Paused), "stop") { r ->
-            // The watch runs no session at all: ours is gone there, so end it here (spec §4.9 recovery impossible).
+        scopedOp(
+            ExerciseOp.Stop, setOf(WorkoutPhase.Active, WorkoutPhase.Paused), "stop",
+            // Stopping from now on (a second Stop isn't offered); Complete only once the final delta is stored (§4.9).
+            onOk = { r -> mutex.withLock { stoppedOnWatchLocked(r.sessionId) } },
+        ) { r ->
             val e = r.error
-            if (e is ExerciseError.WrongSession && e.activeSessionId == null) { mutex.withLock { lostOnWatchLocked(r.sessionId) }; true } else false
+            mutex.withLock {
+                when {
+                    r.sessionId != currentId || finishedCurrent -> true
+                    endedAtMs != null -> true // already ended here (another Stop succeeded); its deltas are still coming
+                    // Ended on the watch, data still held there (e.g. a concurrent Stop got there first): same as ok.
+                    r.state == ExerciseState.Ended -> { stoppedOnWatchLocked(r.sessionId); true }
+                    // The watch runs no session and holds no data for ours (Idle; a held ended session answers Ended):
+                    // ours is gone there, so end it here (spec §4.9 recovery impossible).
+                    e is ExerciseError.WrongSession && e.activeSessionId == null && r.state == ExerciseState.Idle -> { lostOnWatchLocked(r.sessionId); true }
+                    else -> false
+                }
+            }
         }
+    }
+
+    private suspend fun stoppedOnWatchLocked(id: String) {
+        if (currentId != id || finishedCurrent) return
+        endedByReport = true
+        publish() // records endedAtMs, so Stopping survives a restart
     }
 
     override fun dismissSummary() {
@@ -168,7 +189,11 @@ class HubWorkoutService(
     }
 
     /** [onError] returns true when it handled a failed result itself. */
-    private fun scopedOp(op: ExerciseOp, allowed: Set<WorkoutPhase>, verb: String, onError: suspend (ExerciseResult) -> Boolean = { false }) {
+    private fun scopedOp(
+        op: ExerciseOp, allowed: Set<WorkoutPhase>, verb: String,
+        onOk: suspend (ExerciseResult) -> Unit = {},
+        onError: suspend (ExerciseResult) -> Boolean = { false },
+    ) {
         val phase = _snapshot.value.phase
         if (phase == WorkoutPhase.Syncing) { notice(SYNCING_NOTICE); return }
         if (phase !in allowed) return
@@ -177,7 +202,8 @@ class HubWorkoutService(
             val r = request(id, op)
             when {
                 r == null -> notice("Watch didn't respond")
-                !r.ok && !onError(r) -> notice("Couldn't $verb workout")
+                r.ok -> onOk(r)
+                !onError(r) -> notice("Couldn't $verb workout")
             }
         }
     }
@@ -274,7 +300,9 @@ class HubWorkoutService(
 
     private suspend fun onStateReportLocked(r: ExerciseStateReport) {
         val a = current
-        if (r.state == ExerciseState.Idle && r.sessionId != currentId && a != null && !finishedCurrent && !a.isComplete) {
+        // An Idle report made before the watch started our session (delayed in transit) says nothing about it.
+        val olderThanSession = r.atMs?.let { at -> a?.startedAtMs()?.let { at < it } } == true
+        if (r.state == ExerciseState.Idle && r.sessionId != currentId && a != null && !finishedCurrent && !a.isComplete && !olderThanSession) {
             // Watch holds no buffer for our session: data is gone. Ended sessions finalize as before; a running one
             // only once the watch has started it (deltas stored and no Start result pending), so an Idle report sent
             // before the watch handled our Start can't end it.

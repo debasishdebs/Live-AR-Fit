@@ -100,7 +100,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             // Every point of a (screen-off) batch, at its own time: data point times are relative to boot.
             val boot = Instant.ofEpochMilli(now - SystemClock.elapsedRealtime())
             val hr = m.getData(DataType.HEART_RATE_BPM).map { it.getTimeInstant(boot).toEpochMilli() to it.value.toInt() }
-            batchSamples(hr, now, steps, km, kcal, speed).forEach { queue.trySend(BackendUpdate.Reading(it)) }
+            batchSamples(hr, now, steps, km, kcal, speed).takeIf { it.isNotEmpty() }?.let { queue.trySend(BackendUpdate.Reading(it)) } // one delta per batch
             val st = update.exerciseStateInfo
             val paused = when {
                 st.state == ExerciseState.ACTIVE -> false
@@ -109,10 +109,13 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             }
             if (paused != null && paused != lastPaused) {
                 lastPaused = paused
+                // When Health Services made the update, not when it reached us: a PAUSED update queued before our own
+                // resume is then older than the Resumed event and ignored, instead of recording a spurious pause.
+                val at = update.getUpdateDurationFromBoot()?.let { boot.plus(it).toEpochMilli() }?.coerceAtMost(now) ?: now
                 val active = update.activeDurationCheckpoint?.let { cp ->
-                    cp.activeDuration.toMillis() + if (paused) 0 else (now - cp.time.toEpochMilli()).coerceAtLeast(0)
+                    cp.activeDuration.toMillis() + if (paused) 0 else (at - cp.time.toEpochMilli()).coerceAtLeast(0)
                 }
-                queue.trySend(BackendUpdate.Phase(paused, now, active))
+                queue.trySend(BackendUpdate.Phase(paused, at, active))
             }
             if (st.state.isEnded) {
                 val by = when (st.endReason) {

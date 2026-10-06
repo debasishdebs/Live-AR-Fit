@@ -429,4 +429,31 @@ class WatchExerciseControllerTest {
         assertNull(c.lastError.value)
         assertNull(c.localStart(WorkoutType.Walk))
     }
+
+    /** r2 I1: a session that ended here but whose data is still held is not "no session": Stop is ok, never buffer loss. */
+    @Test fun opsForAnEndedSessionStillHeldAreNotReportedAsLost() = runTest {
+        val (b, c) = rig(send = { error("phone unreachable") }); runCurrent() // final delta stays buffered
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        c.handle(req("r2", "s", ExerciseOp.Stop))
+        assertTrue(results.last().ok)
+        c.handle(req("r3", "s", ExerciseOp.Stop)) // user taps Stop again / retries after a lost result
+        assertTrue(results.last().ok, "repeated Stop of the held session is ok")
+        assertEquals(ExerciseState.Ended, results.last().state)
+        assertEquals(1, b.calls.count { it == "end" })
+        c.handle(req("r4", "s", ExerciseOp.Pause))
+        assertFalse(results.last().ok)
+        assertEquals(ExerciseState.Ended, results.last().state, "not Idle: the phone must not treat it as a lost buffer")
+        c.handle(req("r5", "gone", ExerciseOp.Stop))
+        assertEquals(ExerciseError.WrongSession(null), results.last().error)
+        assertEquals(ExerciseState.Idle, results.last().state, "a session not held at all is reported as no session")
+    }
+
+    /** r2 M2: a screen-off HR batch is recorded as one delta, not one per point. */
+    @Test fun readingBatchIsRecordedAsOneDelta() = runTest {
+        val (b, c) = rig(); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        b.updates.emit(BackendUpdate.Reading((1..60).map { Sample(it * 1_000L, hr = 100 + it) })); runCurrent()
+        assertEquals(2, sent.size)
+        assertEquals(60, sent.last().samples.size)
+    }
 }

@@ -78,6 +78,9 @@ class SessionAssembler(val sessionId: String) {
         return total + ((atMs ?: latestTimestamp() ?: since) - since).coerceAtLeast(0)
     }
 
+    /** The Started event's time (watch clock), if received. */
+    fun startedAtMs(): Long? = events().filterIsInstance<SessionEvent.Started>().firstOrNull()?.tMs
+
     /** When the current phase began: the last Started / Paused / Resumed / Stopped event. */
     fun phaseSinceMs(): Long? = events().lastOrNull { it !is SessionEvent.TypeDetected }?.tMs
 

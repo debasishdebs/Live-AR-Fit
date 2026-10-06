@@ -10,6 +10,8 @@ import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.io.File
@@ -20,6 +22,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class WatchSessionRecorderTest {
     private val live = Provenance.Live("galaxy-watch/health-services")
     private fun tmp(): File = Files.createTempDirectory("lfbuf").toFile()
@@ -263,5 +266,60 @@ class WatchSessionRecorderTest {
         assertEquals(listOf(0L), sent)
         gate.complete(Unit); runCurrent()
         assertEquals(listOf(0L, 1L, 2L, 3L), sent)
+    }
+
+    /** r2 I2: a send that never returns times out (the delta stays buffered), so later deltas and resends still go out. */
+    @Test fun hungSendTimesOutAndSyncContinues() = runTest {
+        val root = tmp()
+        var hang = true
+        val sent = mutableListOf<Long>()
+        val rec = WatchSessionRecorder(root, live, backgroundScope, nowMs = { testScheduler.currentTime }, send = { d ->
+            if (hang && d.seq == 1L) awaitCancellation()
+            sent += d.seq
+        })
+        rec.begin("s", WorkoutType.Run, 0)
+        rec.sample(Sample(1_000, hr = 100)) // this send never completes
+        rec.sample(Sample(2_000, hr = 101))
+        assertEquals(listOf(0L), sent)
+        advanceTimeBy(WatchSessionRecorder.SEND_TIMEOUT_MS + 1); runCurrent()
+        assertEquals(listOf(0L, 2L), sent, "the hung send failed; the queue moved on")
+        hang = false // link recovers
+        rec.resendUnacked(); runCurrent()
+        assertEquals(1L, sent.last(), "the timed-out delta is resent")
+        assertEquals(listOf(0L, 1L, 2L), FileDeltaBuffer(File(root, "s")).unacked().map { it.seq })
+    }
+
+    /** r2 M4: the resend tick skips deltas sent moments ago and anything already queued or in flight. */
+    @Test fun resendSkipsRecentlySentAndInFlightDeltas() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val sent = mutableListOf<Long>()
+        val rec = WatchSessionRecorder(tmp(), live, backgroundScope, nowMs = { testScheduler.currentTime }, send = { d ->
+            if (d.seq == 2L) gate.await()
+            sent += d.seq
+        })
+        rec.begin("s", WorkoutType.Run, 0)
+        rec.sample(Sample(1_000, hr = 100))
+        rec.sample(Sample(2_000, hr = 101)) // in flight, stalled
+        rec.sample(Sample(3_000, hr = 102)) // queued behind it
+        rec.resendUnacked(); runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf(0L, 1L, 2L, 3L), sent, "no duplicates of fresh, in-flight or queued deltas")
+        advanceTimeBy(WatchSessionRecorder.RESEND_AFTER_MS); runCurrent()
+        rec.resendUnacked(); runCurrent()
+        assertEquals(listOf(0L, 1L, 2L, 3L, 0L, 1L, 2L, 3L), sent, "still unacked after the resend interval: resent")
+    }
+
+    /** r2 M1: on reconnect the claim goes out before any delta of its session, even with a backlog queued. */
+    @Test fun resyncSendsTheClaimAheadOfQueuedDeltas() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val out = mutableListOf<String>()
+        val rec = WatchSessionRecorder(tmp(), live, backgroundScope, nowMs = { testScheduler.currentTime },
+            send = { d -> if (d.seq == 0L) gate.await(); out += "d${d.seq}" }, sendClaim = { out += "claim" })
+        rec.begin("s", WorkoutType.Run, 0) // in flight, stalled
+        rec.sample(Sample(1_000, hr = 100))
+        rec.sample(Sample(2_000, hr = 101))
+        rec.resync()
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf("d0", "claim", "d1", "d2"), out)
     }
 }

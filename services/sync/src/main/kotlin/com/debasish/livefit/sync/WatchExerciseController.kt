@@ -44,7 +44,10 @@ interface ExerciseBackend {
 }
 
 sealed interface BackendUpdate {
-    data class Reading(val sample: Sample) : BackendUpdate
+    /** One callback's readings (a screen-off batch can hold many points); recorded as one delta. */
+    data class Reading(val samples: List<Sample>) : BackendUpdate {
+        constructor(sample: Sample) : this(listOf(sample))
+    }
     data class Ended(val by: EndReason) : BackendUpdate
     /**
      * Authoritative Active/Paused state, reported when it changes and first after start/reattach.
@@ -87,7 +90,7 @@ class WatchExerciseController(
         scope.launch {
             backend.updates.collect { u ->
                 when (u) {
-                    is BackendUpdate.Reading -> onReading(u.sample)
+                    is BackendUpdate.Reading -> onReadings(u.samples)
                     is BackendUpdate.Phase -> onBackendPhase(u)
                     is BackendUpdate.Ended -> {
                         stopping?.let { it.complete(Unit); return@collect } // our own stop: localStop writes the final delta
@@ -100,12 +103,12 @@ class WatchExerciseController(
         }
     }
 
-    private suspend fun onReading(s: Sample) {
-        if (activeSessionId == null) return
+    private fun onReadings(batch: List<Sample>) {
+        if (activeSessionId == null || batch.isEmpty()) return
         // Readings that arrive while stopping belong to the session but must not extend its active time.
-        val sample = if (stopping != null) s.copy(tMs = minOf(s.tMs, stopAtMs)) else s
-        recorder.sample(sample)
-        if (recorder.type == WorkoutType.Auto) detector.onSample(sample)?.let { recorder.event(SessionEvent.TypeDetected(sample.tMs, it)) }
+        val samples = if (stopping != null) batch.map { it.copy(tMs = minOf(it.tMs, stopAtMs)) } else batch
+        recorder.samples(samples)
+        if (recorder.type == WorkoutType.Auto) for (s in samples) detector.onSample(s)?.let { recorder.event(SessionEvent.TypeDetected(s.tMs, it)) }
     }
 
     /**
@@ -169,7 +172,12 @@ class WatchExerciseController(
                     }
                 }
             }
-            else -> if (active != req.sessionId) result(false, ExerciseError.WrongSession(active), if (active == null) ExerciseState.Idle else ExerciseState.Active)
+            // Ended here but its data is still held (final delta not yet acked): Stop is already done, and the phone must
+            // not read "no session" as a lost buffer while the deltas are still on their way (state Ended, never Idle).
+            else -> if (active != req.sessionId && recorder.holds(req.sessionId)) {
+                if (op == ExerciseOp.Stop) result(true, state = ExerciseState.Ended) else result(false, ExerciseError.WrongSession(active), ExerciseState.Ended)
+            }
+            else if (active != req.sessionId) result(false, ExerciseError.WrongSession(active), if (active == null) ExerciseState.Idle else ExerciseState.Active)
             else when (op) {
                 ExerciseOp.Pause -> if (localPause()) result(true, state = ExerciseState.Paused) else result(false, ExerciseError.Internal("Couldn't pause on the watch"), ExerciseState.Active)
                 ExerciseOp.Resume -> if (localResume()) result(true, state = ExerciseState.Active) else result(false, ExerciseError.Internal("Couldn't resume on the watch"), ExerciseState.Paused)

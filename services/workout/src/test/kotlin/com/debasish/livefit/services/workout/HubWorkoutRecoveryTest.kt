@@ -234,6 +234,54 @@ class HubWorkoutRecoveryTest {
         assertNull(r.store.summaries[id])
     }
 
+    /** r2 I1: Stop ok → final delta delayed → second Stop → the final delta still completes the session. */
+    @Test fun secondStopWhileTheFinalDeltaIsDelayedKeepsTheWorkoutComplete() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.hub.stop(); runCurrent()
+        r.gateway.reply(state = ExerciseState.Ended); runCurrent()
+        assertEquals(WorkoutPhase.Stopping, r.hub.snapshot.value.phase, "a successful Stop ends the workout here")
+        assertTrue(r.store.lifecycle(id)!!.endedAtMs != null, "Stopping survives a phone restart")
+        val requests = r.gateway.sent.size
+        r.hub.stop(); runCurrent()
+        assertEquals(requests, r.gateway.sent.size, "no second Stop while Stopping")
+        r.gateway.deltas.emit(d(id, 2, listOf(SessionEvent.Stopped(5_000, EndReason.User)), samples = listOf(Sample(4_000, hr = 150)), final = true)); runCurrent()
+        assertEquals(WorkoutPhase.Summary, r.hub.snapshot.value.phase)
+        val s = r.store.summaries[id]!!
+        assertEquals(SessionStatus.Complete, s.status)
+        assertEquals(EndReason.User, s.endReason)
+        assertEquals(150, s.maxHr, "final data kept")
+    }
+
+    /** Two Stops in flight: the watch answers the second for its ended-but-held session — not buffer loss. */
+    @Test fun stopAnsweredForAnEndedSessionTheWatchStillHoldsIsNotBufferLoss() = runTest {
+        val r = Rig(this)
+        val id = active(r)
+        r.gateway.deltas.emit(d(id, 1, samples = listOf(Sample(1_000, hr = 100)))); runCurrent()
+        r.hub.stop(); r.hub.stop(); runCurrent()
+        val (first, second) = r.gateway.sent.takeLast(2).map { r.gateway.sent.indexOf(it) }
+        r.gateway.reply(second, ok = false, error = ExerciseError.WrongSession(null), state = ExerciseState.Ended); runCurrent()
+        assertNull(r.store.summaries[id], "the watch still holds the data")
+        assertTrue("Couldn't stop workout" !in r.notices)
+        r.gateway.reply(first, state = ExerciseState.Ended); runCurrent()
+        r.gateway.deltas.emit(d(id, 2, listOf(SessionEvent.Stopped(5_000, EndReason.User)), final = true)); runCurrent()
+        assertEquals(SessionStatus.Complete, r.store.summaries[id]!!.status)
+    }
+
+    /** r2 M6: an Idle report the watch made before it started our session (delayed in transit) must not end it. */
+    @Test fun idleReportOlderThanTheSessionStartIsIgnored() = runTest {
+        val r = Rig(this); runCurrent()
+        r.hub.start(WorkoutType.Walk); runCurrent()
+        val id = r.gateway.sent.single().sessionId
+        r.gateway.reply()
+        r.gateway.deltas.emit(d(id, 0, listOf(SessionEvent.Started(10_000, WorkoutType.Walk)), samples = listOf(Sample(11_000, hr = 100)))); runCurrent()
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle, atMs = 9_000)); runCurrent()
+        assertEquals(WorkoutPhase.Active, r.hub.snapshot.value.phase)
+        r.gateway.stateReports.emit(ExerciseStateReport(sessionId = "", state = ExerciseState.Idle, atMs = 20_000)); runCurrent()
+        assertEquals(SessionStatus.Incomplete, r.store.summaries[id]!!.status)
+    }
+
     /** Review Focus #5. */
     @Test fun longOfflineGapReplaysAndCompletes() = runTest {
         val r = Rig(this); runCurrent()
