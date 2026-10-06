@@ -2,14 +2,11 @@ package com.debasish.livefit.services.glasses
 
 import android.app.Activity
 import android.content.Context
-import android.util.Base64
 import android.util.Log
-import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.DeviceStatus
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.GlassesEvent
@@ -56,6 +53,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     private var retryJob: Job? = null
     private var connectJob: Job? = null
     private var lastSettings: HudSettingsFrame? = null
+    private val inbound = GlassesInbound() // thread-safe: fed from CXR callback threads
 
     private val _status = MutableStateFlow(DeviceStatus("Rokid Glasses", LinkState.Disconnected))
     override val status: StateFlow<DeviceStatus> = _status
@@ -149,6 +147,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             val old = session
             session = null
             old?.close()
+            inbound.reset()
             val s = manager.create(
                 SessionConfig(
                     sessionType = SessionType.CUSTOM_APP,
@@ -186,18 +185,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             Log.w(TAG, "bad payload on $cmd", e); null
         }
         if (text.isNullOrEmpty()) return
-        when (cmd) {
-            GlassesChannels.LISTEN -> _events.tryEmit(GlassesEvent.Listen)
-            // Audio is Base64 text on lf_audio (spike-verified; deliberate deviation from a raw-bytes argument).
-            GlassesChannels.AUDIO -> runCatching { Base64.decode(text, Base64.NO_WRAP) }.getOrNull()
-                ?.takeIf { it.isNotEmpty() }?.let { _events.tryEmit(GlassesEvent.Audio(it)) }
-            GlassesChannels.LISTEN_END -> _events.tryEmit(GlassesEvent.ListenEnd)
-            GlassesChannels.COMMAND -> {
-                val v = Wire.versionOf(text) ?: return
-                if (v != PROTOCOL_VERSION) _events.tryEmit(GlassesEvent.Outdated(v))
-                else runCatching { Wire.decode<CommandEnvelope>(text) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Issue(it)) }
-            }
-        }
+        inbound.onMessage(cmd, text).forEach { _events.tryEmit(it) }
     }
 
     override suspend fun push(frame: StateFrame) = send(GlassesChannels.STATE, Wire.encode(frame))

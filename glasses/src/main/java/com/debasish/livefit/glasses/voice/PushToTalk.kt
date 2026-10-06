@@ -5,6 +5,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.debasish.livefit.model.GlassesChannels
+import com.debasish.livefit.model.ListenRequest
+import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.voice.EnergyVad
 import com.debasish.livefit.services.voice.VadDecision
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,7 +95,7 @@ class PushToTalk(
         try {
             source = sourceFactory()
             source.start()
-            sendRaw(GlassesChannels.LISTEN, "{}")
+            sendRaw(GlassesChannels.LISTEN, Wire.encode(ListenRequest())) // versioned: the hub ignores voice from a mismatched app
             listenSent = true
             val vad = EnergyVad(maxMs = maxMs)
             val chunk = ByteArray(3_200)

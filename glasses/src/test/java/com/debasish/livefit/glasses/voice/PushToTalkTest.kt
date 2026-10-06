@@ -90,4 +90,14 @@ class PushToTalkTest {
         p.stop(); sources[0].release.release(); awaitIdle(p)
         assertEquals(1, sources.size)
     }
+
+    /** Review #10: lf_listen carries the protocol version the hub checks. */
+    @Test fun listenRequestCarriesTheProtocolVersion() {
+        val payloads = CopyOnWriteArrayList<Pair<String, String>>()
+        val src = object : PcmSource { override fun start() {}; override fun read(buf: ByteArray): Int = -1; override fun close() {} }
+        val p = PushToTalk({ ch, t -> payloads += ch to t }, sourceFactory = { src })
+        p.start(); awaitIdle(p)
+        val listen = payloads.first { it.first == GlassesChannels.LISTEN }.second
+        assertEquals(com.debasish.livefit.model.PROTOCOL_VERSION, com.debasish.livefit.model.Wire.versionOf(listen))
+    }
 }
