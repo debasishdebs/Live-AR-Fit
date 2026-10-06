@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.phone.CompanionLinker
+import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.IconChip
@@ -64,6 +65,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     var pairNote by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        LiveFitHubService.ensureRunning(activity) // Bluetooth now granted: the connectedDevice hub can start
         // Ask for battery-optimization exemption only after the permission dialogs are dismissed.
         activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
     }
@@ -76,6 +78,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     fun pair(kind: DeviceKind, app: String) {
         pairNote = null
         CompanionLinker.associate(activity, kind) { ok ->
+            if (ok) LiveFitHubService.ensureRunning(activity) // an association also satisfies the connectedDevice prerequisite
             pairNote = if (ok) "Paired." else if (Build.VERSION.SDK_INT < 33) "Pair from $app, then tap Next (or Skip)." else "Pairing didn't complete. Try again or Skip."
         }
     }
