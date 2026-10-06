@@ -9,6 +9,9 @@ import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.workout.HrStats
 import com.debasish.livefit.services.workout.SessionAssembler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -19,10 +22,15 @@ import kotlin.coroutines.cancellation.CancellationException
  * Several sessions can be held (an ended one awaiting its final ack + a newer one). Only the **oldest**
  * is sent, so the phone replays one session at a time and never adopts the newer one while the older
  * is still Syncing (adoption would finalize the older one as Incomplete).
+ *
+ * Recording never waits for the network: a delta is on disk (or in the retry list) when record returns, and
+ * transmission runs in order on [scope] — so a stalled send can't hold back the sensor collector or Stop.
  */
 class WatchSessionRecorder(
     private val root: File,
     private val provenance: Provenance,
+    /** Single-threaded, like every caller; the send queue is drained here. */
+    private val scope: CoroutineScope,
     private val send: suspend (SessionDelta) -> Unit,
     private val sendClaim: suspend (SessionClaim) -> Unit = {},
 ) {
@@ -33,6 +41,14 @@ class WatchSessionRecorder(
 
     /** Oldest first. */
     private val held = mutableListOf<Held>()
+
+    private sealed interface Outgoing {
+        data class Delta(val d: SessionDelta) : Outgoing
+        data class Claim(val c: SessionClaim) : Outgoing
+    }
+    /** Sent strictly in order by one drain coroutine at a time. */
+    private val outbox = ArrayDeque<Outgoing>()
+    private var draining = false
 
     init {
         root.mkdirs()
@@ -62,7 +78,7 @@ class WatchSessionRecorder(
     val isFinalized: Boolean get() = newest?.header?.finalSeq != null
     val holdsData: Boolean get() = held.isNotEmpty()
 
-    suspend fun begin(sessionId: String, type: WorkoutType, tMs: Long) {
+    fun begin(sessionId: String, type: WorkoutType, tMs: Long) {
         check(newest == null || isFinalized) { "session ${this.sessionId} is still recording" }
         val buffer = FileDeltaBuffer(File(root, sessionId))
         val h = WatchSessionHeader(sessionId, type, tMs, lastSeq = -1).also { buffer.writeHeader(it) }
@@ -70,10 +86,10 @@ class WatchSessionRecorder(
         record(listOf(SessionEvent.Started(tMs, type)), emptyList(), final = false)
     }
 
-    suspend fun event(e: SessionEvent, final: Boolean = false) = record(listOf(e), emptyList(), final)
-    suspend fun sample(s: Sample) = record(emptyList(), listOf(s), final = false)
+    fun event(e: SessionEvent, final: Boolean = false) = record(listOf(e), emptyList(), final)
+    fun sample(s: Sample) = record(emptyList(), listOf(s), final = false)
 
-    private suspend fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
+    private fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
         val h = newest?.takeIf { it.header.finalSeq == null } ?: return
         val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final)
         h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null)
@@ -81,7 +97,7 @@ class WatchSessionRecorder(
         h.retry[d.seq] = d
         flushRetry(h)
         h.assembler.add(d)
-        if (h === held.first()) trySend(d) // unreachable phone, or an older session first: stays buffered
+        if (h === held.first()) enqueue(Outgoing.Delta(d)) // unreachable phone, or an older session first: stays buffered
     }
 
     private fun flushRetry(h: Held) {
@@ -93,15 +109,37 @@ class WatchSessionRecorder(
         }
     }
 
-    /** Failures keep the delta buffered; cancellation must propagate. */
-    private suspend fun trySend(d: SessionDelta) {
-        try { send(d) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+    /** Queues for sending; a delta already waiting isn't queued twice (periodic resends while the link stalls). */
+    private fun enqueue(o: Outgoing) {
+        if (o is Outgoing.Delta && outbox.any { it is Outgoing.Delta && it.d.sessionId == o.d.sessionId && it.d.seq == o.d.seq }) return
+        outbox.addLast(o)
+        if (draining) return
+        draining = true
+        // Undispatched: a send that doesn't suspend completes before the caller continues, as before.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                while (true) {
+                    when (val next = outbox.removeFirstOrNull() ?: break) {
+                        is Outgoing.Delta -> trySend { send(next.d) }
+                        is Outgoing.Claim -> trySend { sendClaim(next.c) } // retried on next resync
+                    }
+                }
+            } finally {
+                draining = false
+            }
+        }
     }
 
-    suspend fun onAck(ack: DeltaAck) {
+    /** Failures keep the delta buffered; cancellation must propagate. */
+    private suspend fun trySend(op: suspend () -> Unit) {
+        try { op() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+    }
+
+    fun onAck(ack: DeltaAck) {
         val h = held.firstOrNull { it.header.sessionId == ack.sessionId } ?: return
         h.buffer.ackUpTo(ack.seq)
         h.retry.keys.removeAll { it <= ack.seq }
+        outbox.removeAll { it is Outgoing.Delta && it.d.sessionId == ack.sessionId && it.d.seq <= ack.seq }
         val f = h.header.finalSeq ?: return
         if (ack.seq < f) return
         val wasOldest = h === held.first()
@@ -111,18 +149,16 @@ class WatchSessionRecorder(
     }
 
     /** Re-sends the oldest session's unacked deltas (every 5 s while unacked, spec §4.4 step 3). */
-    suspend fun resendUnacked() {
+    fun resendUnacked() {
         val h = held.firstOrNull() ?: return
         if (h.retry.isNotEmpty()) flushRetry(h)
         val toSend = (h.buffer.unacked() + h.retry.values).distinctBy { it.seq }.sortedBy { it.seq }
-        for (d in toSend) trySend(d)
+        for (d in toSend) enqueue(Outgoing.Delta(d))
     }
 
     /** Claims the oldest held session and replays it (on reconnect, and when the previous session completes). */
-    suspend fun resync() {
-        claim()?.let { c ->
-            try { sendClaim(c) } catch (e: CancellationException) { throw e } catch (_: Exception) { /* retried on next resync */ }
-        }
+    fun resync() {
+        claim()?.let { enqueue(Outgoing.Claim(it)) } // queued ahead of the replay
         resendUnacked()
     }
 

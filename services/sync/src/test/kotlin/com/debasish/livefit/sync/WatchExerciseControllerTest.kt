@@ -13,6 +13,7 @@ import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -42,11 +43,13 @@ class WatchExerciseControllerTest {
         var throwOnOther = false
         var throwOnControl = false
         var endDelayMs = 0L
+        /** When set, start() suspends on it (a slow Health Services start). */
+        var startGate: CompletableDeferred<Unit>? = null
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
         override suspend fun otherAppTracking(): String? { if (throwOnOther) error("hs down"); return other }
-        override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; return true }
+        override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; startGate?.await(); return true }
         override suspend fun pause(): Boolean { calls += "pause"; if (throwOnControl) error("hs"); return pauseOk }
         override suspend fun resume(): Boolean { calls += "resume"; if (throwOnControl) error("hs"); return true }
         override suspend fun end(): Boolean {
@@ -67,8 +70,12 @@ class WatchExerciseControllerTest {
     private val sent = mutableListOf<SessionDelta>()
     private val live = Provenance.Live("galaxy-watch/health-services")
 
-    private fun TestScope.rig(backend: FakeBackend = FakeBackend(), root: File = Files.createTempDirectory("w").toFile()): Pair<FakeBackend, WatchExerciseController> {
-        val recorder = WatchSessionRecorder(File(root, "buffer"), live, send = { sent += it })
+    private fun TestScope.rig(
+        backend: FakeBackend = FakeBackend(),
+        root: File = Files.createTempDirectory("w").toFile(),
+        send: suspend (SessionDelta) -> Unit = { sent += it },
+    ): Pair<FakeBackend, WatchExerciseController> {
+        val recorder = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = send)
         var n = 0
         val c = WatchExerciseController(backgroundScope, backend, recorder, Clock { testScheduler.currentTime },
             sendResult = { results += it }, sendState = { states += it }, gpsPrefs = GpsPreferences(File(root, "gps.json")), newId = { "local${n++}" })
@@ -296,5 +303,21 @@ class WatchExerciseControllerTest {
         c.handle(req("r3", "s", ExerciseOp.Stop))
         assertIs<ExerciseError.Internal>(results.last().error)
         assertEquals("s", c.activeSessionId)
+    }
+
+    /** Review #1: a stalled send must not hold back shutdown readings; the final delta follows the final reading. */
+    @Test fun stalledSendDoesNotDropShutdownReadings() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val gate = CompletableDeferred<Unit>()
+        val (b, c) = rig(root = root, send = { d -> if (d.samples.any { it.stepsTotal == 10 }) gate.await(); sent += d }); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        b.updates.emit(BackendUpdate.Reading(Sample(100, hr = 90, stepsTotal = 10))); runCurrent() // its send stalls
+        c.handle(req("r2", "s", ExerciseOp.Stop)) // end() delivers steps=42 + Ended
+        assertTrue(testScheduler.currentTime < 5_000, "Ended was seen; the stop didn't time out")
+        val stored = FileDeltaBuffer(File(root, "buffer/s")).unacked()
+        assertTrue(stored.last().final)
+        assertEquals(42, stored[stored.size - 2].samples.single().stepsTotal, "final reading recorded before the final seq")
+        gate.complete(Unit); runCurrent()
+        assertEquals(stored.map { it.seq }, sent.map { it.seq }, "everything sent once the link recovers, in seq order")
     }
 }
