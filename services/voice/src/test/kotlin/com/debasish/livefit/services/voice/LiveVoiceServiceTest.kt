@@ -55,6 +55,45 @@ class LiveVoiceServiceTest {
         assertTrue(commands.isEmpty())
     }
 
+    /** Review #5: audio captured for C1 must not answer its replacement C2. */
+    @Test fun delayedYesForAReplacedConfirmationIsDiscarded() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        assertTrue(v.startExternal()); v.endExternal(); runCurrent()
+        pending = "c2" // C1 replaced while recognition is still running
+        stt.result.complete("yes"); runCurrent()
+        assertTrue(answers.isEmpty(), "C2 was never answered")
+        assertTrue(commands.isEmpty())
+        assertTrue(toasts.isEmpty(), "a stale answer is dropped quietly")
+        assertEquals(VoiceState.Idle, v.state.value)
+    }
+
+    @Test fun delayedYesForAnExpiredConfirmationIsDiscarded() = runTest {
+        val stt = FakeStt(); val v = voice(stt); pending = "c1"
+        v.startExternal(); v.endExternal(); runCurrent()
+        pending = null
+        stt.result.complete("yes"); runCurrent()
+        assertTrue(answers.isEmpty())
+        assertTrue(commands.isEmpty())
+    }
+
+    /** Review #5: a confirmation that appears mid-capture is not answered by speech meant as a command. */
+    @Test fun confirmationAppearingMidCaptureIsNotAnswered() = runTest {
+        val stt = FakeStt(); val v = voice(stt)
+        v.startExternal(); pending = "c1"
+        v.endExternal(); stt.result.complete("yes"); runCurrent()
+        assertTrue(answers.isEmpty())
+    }
+
+    @Test fun localeIsBoundWhenListeningStarts() = runTest {
+        var loc = "en-IN"
+        val stt = FakeStt()
+        val v = LiveVoiceService(backgroundScope, stt, locale = { loc }, pendingConfirmationId = { pending },
+            onCommand = { commands += it }, onAnswer = { id, yes -> answers += id to yes }, toast = { toasts += it })
+        v.startExternal(); loc = "xx-XX" // no pack for this locale
+        v.endExternal(); stt.result.complete("next song"); runCurrent()
+        assertEquals(listOf<Command>(Command.NextTrack), commands)
+    }
+
     @Test fun unrecognisedSpeechToastsAndChangesNothing() = runTest {
         val stt = FakeStt(); val v = voice(stt)
         v.startExternal(); v.endExternal(); stt.result.complete("what's the weather"); runCurrent()
