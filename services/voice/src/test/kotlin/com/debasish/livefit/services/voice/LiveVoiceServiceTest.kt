@@ -191,4 +191,32 @@ class LiveVoiceServiceTest {
         glasses.onAudio(ByteArray(5)); glasses.onListenEnd() // late duplicates after the capture closed
         assertEquals(100, stt.fed); assertEquals(1, stt.ended)
     }
+
+    /** Review #8: the glasses reopen the mic for a replacement prompt while the old capture is still recognising. */
+    @Test fun answerCaptureForAReplacementIsAcceptedWhileTheStaleCaptureIsProcessing() = runTest {
+        val results = ArrayDeque<CompletableDeferred<String?>>()
+        val stt = object : SpeechToText {
+            override fun isAvailable(locale: String) = true
+            override fun start(locale: String): SttSession = CompletableDeferred<String?>().also { results.addLast(it) }.let { r ->
+                object : SttSession {
+                    override fun feed(pcm: ByteArray) = Unit
+                    override fun end() = Unit
+                    override suspend fun awaitFinal(timeoutMs: Long) = r.await()
+                }
+            }
+        }
+        val v = LiveVoiceService(backgroundScope, stt, locale = { "en-IN" }, pendingConfirmationId = { pending },
+            onCommand = { commands += it }, onAnswer = { id, yes -> answers += id to yes }, toast = { toasts += it })
+        pending = "c1"
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent()
+        assertEquals(VoiceState.Processing, v.state.value)
+        assertNull(v.startExternal(), "same prompt still pending: one capture at a time")
+        pending = "c2"
+        val c2 = assertNotNull(v.startExternal(), "the stale capture must not block the answer to the new prompt")
+        results[0].complete("yes"); runCurrent()
+        assertEquals(VoiceState.Listening, v.state.value, "the stale result does not close the new capture")
+        v.endExternal(c2); results[1].complete("no"); runCurrent()
+        assertEquals(listOf("c2" to false), answers)
+        assertEquals(VoiceState.Idle, v.state.value)
+    }
 }

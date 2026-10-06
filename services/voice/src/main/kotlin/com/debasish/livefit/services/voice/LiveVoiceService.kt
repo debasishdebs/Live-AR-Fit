@@ -36,7 +36,9 @@ class LiveVoiceService(
     override fun listen() { phoneMic?.invoke() }
 
     override fun startExternal(): Long? = synchronized(lock) {
-        if (_state.value != VoiceState.Idle) return@synchronized null
+        if (_state.value == VoiceState.Listening) return@synchronized null
+        // A capture still recognising an answer to a prompt that is gone can only be discarded: let the new prompt's answer in.
+        if (_state.value == VoiceState.Processing && (confirmationAtStart == null || pendingConfirmationId() == confirmationAtStart)) return@synchronized null
         val loc = locale()
         val pack = LanguageRegistry.forLocale(loc)
         if (pack == null || !stt.isAvailable(loc)) {
@@ -74,9 +76,11 @@ class LiveVoiceService(
         }
         scope.launch {
             val text = s.awaitFinal(5_000)
-            synchronized(lock) { session = null }
             // Release the mic before acting: a command may wait on a confirmation whose answer is spoken (stop → "yes").
-            synchronized(lock) { _state.value = VoiceState.Idle }
+            val current = synchronized(lock) {
+                (capture == this@LiveVoiceService.capture).also { if (it) { session = null; _state.value = VoiceState.Idle } }
+            }
+            if (!current) return@launch // superseded by a newer capture while recognising
             when {
                 text.isNullOrBlank() || pack == null -> toast("Didn't catch that")
                 // The prompt this capture answered expired or was replaced while recognising: drop it quietly.
