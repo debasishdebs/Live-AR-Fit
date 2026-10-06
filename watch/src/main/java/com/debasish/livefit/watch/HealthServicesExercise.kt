@@ -3,6 +3,7 @@ package com.debasish.livefit.watch
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.health.services.client.ExerciseUpdateCallback
 import androidx.health.services.client.HealthServices
@@ -21,6 +22,7 @@ import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.sync.BackendUpdate
 import com.debasish.livefit.sync.ExerciseBackend
+import com.debasish.livefit.sync.batchSamples
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.guava.await
@@ -95,8 +97,10 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             m.getData(DataType.DISTANCE_TOTAL)?.total?.let { km = it / 1000.0 }
             m.getData(DataType.CALORIES_TOTAL)?.total?.let { kcal = it }
             m.getData(DataType.SPEED).lastOrNull()?.value?.let { speed = it * 3.6 }
-            val hr = m.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value?.toInt()
-            queue.trySend(BackendUpdate.Reading(Sample(now, hr, steps, km, kcal, speed)))
+            // Every point of a (screen-off) batch, at its own time: data point times are relative to boot.
+            val boot = Instant.ofEpochMilli(now - SystemClock.elapsedRealtime())
+            val hr = m.getData(DataType.HEART_RATE_BPM).map { it.getTimeInstant(boot).toEpochMilli() to it.value.toInt() }
+            batchSamples(hr, now, steps, km, kcal, speed).forEach { queue.trySend(BackendUpdate.Reading(it)) }
             val st = update.exerciseStateInfo
             val paused = when {
                 st.state == ExerciseState.ACTIVE -> false
