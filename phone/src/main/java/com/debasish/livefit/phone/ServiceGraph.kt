@@ -178,7 +178,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         // (Samsung's media controls take the screen when music starts). Only with the live watch link.
         if (dataLayer != null) {
             val launcher = WatchLauncher(app)
-            scope.launch { workout.snapshot.map { it.phase }.distinctUntilChanged().collect { if (watchLaunch.onPhase(it)) scope.launch { launcher.open("workout started") } } }
+            scope.launch { workout.snapshot.map { it.phase }.distinctUntilChanged().collect { if (watchLaunch.onPhase(it)) scope.launch {
+                launcher.open("workout started")
+                // On device, Samsung's media controls open over our screen ~1-3 s later when workout music starts: reopen once after.
+                delay(WATCH_REOPEN_MS)
+                if (workout.snapshot.value.phase == WorkoutPhase.Active) launcher.open("after music start")
+            } } }
             scope.launch { confirm.pending.collect { c -> if (watchLaunch.onConfirmation(c)) scope.launch { launcher.open("confirmation ${c?.kind}") } } }
         }
         // ---- end link wiring ----
@@ -225,3 +230,5 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 }
 
 val Context.services: ServiceGraph get() = (applicationContext as LiveFitApp).services
+
+private const val WATCH_REOPEN_MS = 4_000L

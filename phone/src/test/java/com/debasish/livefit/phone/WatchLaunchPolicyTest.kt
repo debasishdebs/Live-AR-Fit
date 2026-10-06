@@ -5,6 +5,7 @@ import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.WorkoutPhase
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -22,10 +23,11 @@ class WatchLaunchPolicyTest {
         }
     }
 
-    @Test fun startFromTheWatchUiDoesNotRelaunch() {
+    // On device, Samsung's media controls cover our screen even for a start tapped on the watch.
+    @Test fun startFromTheWatchUiAlsoReopensTheWatchScreen() {
         val p = WatchLaunchPolicy()
         p.onStartRequested(DeviceKind.Watch)
-        assertFalse(p.run(WorkoutPhase.Starting, WorkoutPhase.Active).any { it })
+        assertEquals(listOf(false, true), p.run(WorkoutPhase.Starting, WorkoutPhase.Active))
     }
 
     @Test fun failedStartOrAdoptedSessionDoesNotLaunch() {

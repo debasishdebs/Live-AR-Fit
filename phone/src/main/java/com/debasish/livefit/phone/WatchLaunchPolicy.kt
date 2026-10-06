@@ -8,8 +8,8 @@ import com.debasish.livefit.model.WorkoutPhase
 /**
  * When the hub opens LiveFit's screen on the watch (F2, F6). Music starting with a workout brings up Samsung's media
  * controls, so the watch must be told to show our workout screen and any cross-device confirmation.
- * - A successful start (Starting → Active) requested from the glasses, phone or voice opens it; one tapped on the
- *   watch UI does not (it is already in front), nor does a session adopted from the watch.
+ * - A successful start (Starting → Active) requested from any device opens it — also one tapped on the watch, since
+ *   the media controls cover it there too (seen on device) — but not a session adopted from the watch.
  * - Every new confirmation opens it, except a takeover prompt for a start tapped on the watch.
  * Pure; fed from the hub's main thread.
  */
@@ -34,7 +34,7 @@ class WatchLaunchPolicy {
         phase = next
         if (next == WorkoutPhase.Starting) {
             sessionFromWatch = !requested || requestOrigin == DeviceKind.Watch
-            armed = requested && requestOrigin != DeviceKind.Watch
+            armed = requested // watch UI too: music start brings Samsung's media controls over it
             requested = false
             return false
         }
