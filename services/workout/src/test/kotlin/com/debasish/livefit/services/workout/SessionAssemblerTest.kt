@@ -49,6 +49,17 @@ class SessionAssemblerTest {
         assertEquals(30_000, a.snapshot().elapsedMs)
     }
 
+    /** B1: the hub ticks the timer itself; [SessionAssembler.snapshot] takes the estimated watch-clock "now". */
+    @Test fun snapshotAtRunsTheActiveSegmentToTheGivenWatchTime() {
+        val a = SessionAssembler("s")
+        a.add(delta(0, listOf(SessionEvent.Started(1_000, WorkoutType.Walk)), samples = listOf(Sample(3_000, hr = 100))))
+        assertEquals(2_000, a.snapshot().elapsedMs)
+        assertEquals(9_000, a.snapshot(atMs = 10_000).elapsedMs)
+        assertEquals(2_000, a.snapshot(atMs = 2_500).elapsedMs, "never behind the newest recorded timestamp")
+        a.add(delta(1, listOf(SessionEvent.Paused(12_000))))
+        assertEquals(11_000, a.snapshot(atMs = 60_000).elapsedMs, "a paused session doesn't tick")
+    }
+
     @Test fun duplicatesAreIgnoredAndOrderDoesNotMatter() {
         val a = SessionAssembler("s")
         assertTrue(a.add(delta(1, samples = listOf(Sample(2_000, hr = 110, stepsTotal = 5)))))

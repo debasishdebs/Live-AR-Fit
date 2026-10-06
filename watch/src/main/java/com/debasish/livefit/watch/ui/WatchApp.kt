@@ -102,11 +102,15 @@ private fun zoneName(zone: Int?) = when (zone) {
     1 -> "Warm-up"; 2 -> "Fat burn"; 3 -> "Cardio"; 4 -> "Hard"; 5 -> "Max"; else -> "Rest"
 }
 
+private val AMBIENT_PHASES = setOf(WorkoutPhase.Starting, WorkoutPhase.Active, WorkoutPhase.Paused, WorkoutPhase.Syncing)
+
 @Composable
-fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit) {
+fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, ambient: Boolean = false) {
     val s = state.snapshot
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
+            // AOD: a low-power workout screen; the interactive one (with seconds and controls) returns on wake.
+            if (ambient && s.phase in AMBIENT_PHASES) { AmbientLive(s); return@Box }
             when (s.phase) {
                 WorkoutPhase.Idle -> Ready(state.phoneOnline, state.glassesOnline) { onCommand(Command.StartWorkout(it)) }
                 WorkoutPhase.Summary -> Summary(s) { onCommand(Command.DismissSummary) }

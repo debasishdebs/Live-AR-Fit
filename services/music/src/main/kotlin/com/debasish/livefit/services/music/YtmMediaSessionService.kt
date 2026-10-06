@@ -7,21 +7,30 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.media.MediaMetadata
+import android.media.browse.MediaBrowser
 import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
+import android.service.media.MediaBrowserService
+import android.util.Log
+import android.view.KeyEvent
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.QueueItem
 import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.services.MusicService
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /** Controls the official YouTube Music app through its media session (spec §2.3, §5.5). */
@@ -56,8 +65,21 @@ class YtmMediaSessionService(
         override fun onSessionDestroyed() { controller = null; publish() }
     }
 
+    /** B3: attach the moment YouTube Music's session appears, not on the next 1 s poll. Needs notification access. */
+    private val sessionsChanged = MediaSessionManager.OnActiveSessionsChangedListener { attach() }
+    private var sessionsListening = false
+    /** B2: an in-flight headless start, and the media browser connection it may hold. */
+    private var headless: Job? = null
+    private var browser: MediaBrowser? = null
+
     init {
-        scope.launch { while (true) { attach(); _volume.value = currentVolume(); delay(1_000) } }
+        scope.launch { while (true) { listenForSessions(); attach(); _volume.value = currentVolume(); delay(1_000) } }
+    }
+
+    /** Retried every poll: it throws until notification access is granted. */
+    private fun listenForSessions() {
+        if (sessionsListening) return
+        sessionsListening = runCatching { sessions.addOnActiveSessionsChangedListener(sessionsChanged, listener, Handler(Looper.getMainLooper())) }.isSuccess
     }
 
     private fun attach() {
@@ -66,6 +88,7 @@ class YtmMediaSessionService(
             controller?.unregisterCallback(callback)
             controller = c
             c?.registerCallback(callback)
+            Log.i(TAG, if (c != null) "YouTube Music session attached" else "YouTube Music session gone")
         }
         publish()
     }
@@ -81,10 +104,13 @@ class YtmMediaSessionService(
             QueueItem(it.queueId, it.description.title?.toString() ?: "", it.description.subtitle?.toString() ?: "")
         }
         val active = st?.activeQueueItemId?.takeIf { it != MediaSession.QueueItem.UNKNOWN_ID.toLong() }
-        _queue.value = QueueWindowing.window(items, active, queueSize())
+        val title = md?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
+        val artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
+        // No queue reported but a song is loaded: the glasses list still shows it (B3).
+        _queue.value = QueueWindowing.window(items, active, queueSize(), nowPlaying = QueueItem(QueueWindowing.NOW_PLAYING_ID, title, artist))
         _nowPlaying.value = NowPlaying(
-            title = md?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "",
-            artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "",
+            title = title,
+            artist = artist,
             isPlaying = st?.state == PlaybackState.STATE_PLAYING,
             liked = st?.customActions?.any { it.action == LIKE && it.name?.toString()?.contains("Unlike", true) == true } ?: false,
             positionMs = st?.position ?: 0,
@@ -98,7 +124,10 @@ class YtmMediaSessionService(
     override fun pause() { controller?.transportControls?.pause() }
     override fun next() { controller?.transportControls?.skipToNext() }
     override fun previous() { controller?.transportControls?.skipToPrevious() }
-    override fun playQueueItem(queueId: Long) { controller?.transportControls?.skipToQueueItem(queueId) }
+    override fun playQueueItem(queueId: Long) {
+        if (queueId == QueueWindowing.NOW_PLAYING_ID) return // the now-playing fallback row: already current
+        controller?.transportControls?.skipToQueueItem(queueId)
+    }
 
     override fun toggleLike() {
         val c = controller ?: return
@@ -114,16 +143,92 @@ class YtmMediaSessionService(
     }
 
     /**
-     * Plays a search — `null` = just open and resume. Uses the media session (no UI) when YouTube Music has one;
-     * only without a session does it start the YouTube Music activity, and then it returns LiveFit to the front
-     * only if LiveFit was in front when asked (D5).
+     * Plays a search — `null` = just open and resume. Uses the media session (no UI) when YouTube Music has one.
+     * Without a session: the YouTube Music activity only while LiveFit is in front (then LiveFit returns to the front,
+     * D5); in the background Android blocks that start, so it starts headless instead (B2).
      */
     fun playSearch(query: String?) {
         val c = controller
-        when (SearchRoute.of(hasSession = c != null, appInForeground())) {
-            SearchRoute.Session -> { c?.transportControls?.playFromSearch(query ?: "", Bundle()); return }
-            SearchRoute.Activity -> startSearchActivity(query)
+        val route = SearchRoute.of(hasSession = c != null, appInForeground())
+        Log.i(TAG, "play search=${query != null} route=$route")
+        when (route) {
+            SearchRoute.Session -> c?.transportControls?.playFromSearch(query ?: "", Bundle())
             SearchRoute.ActivityThenReturn -> if (startSearchActivity(query)) scope.launch { delay(RETURN_DELAY_MS); bringAppToFront() }
+            SearchRoute.Headless -> startHeadless(query?.takeIf { it.isNotBlank() })
+        }
+    }
+
+    /**
+     * B2: no session and no UI allowed. Bind YouTube Music's media browser service (which brings up its session); if
+     * that is refused, send it a media-button PLAY (media resumption). Once a session answers, apply [query] on it.
+     */
+    private fun startHeadless(query: String?) {
+        headless?.cancel()
+        headless = scope.launch {
+            var c = connectBrowser()
+            if (c != null) Log.i(TAG, "headless: connected to YouTube Music's media browser")
+            else {
+                Log.i(TAG, "headless: no media browser connection; sending media-button PLAY to YouTube Music")
+                sendMediaButtonPlay()
+                c = awaitSession()
+            }
+            if (c == null) { Log.w(TAG, "headless: YouTube Music session did not appear within $SESSION_WAIT_MS ms"); disconnectBrowser(); return@launch }
+            val step = HeadlessStep.onSession(query, c.playbackState?.state == PlaybackState.STATE_PLAYING)
+            Log.i(TAG, "headless: session up, $step")
+            when (step) {
+                is HeadlessStep.PlayFromSearch -> c.transportControls.playFromSearch(step.query, Bundle())
+                HeadlessStep.Play -> c.transportControls.play()
+                HeadlessStep.Done -> Unit
+            }
+            delay(PLAY_CHECK_MS)
+            val state = c.playbackState?.state
+            if (state != PlaybackState.STATE_PLAYING && state != PlaybackState.STATE_BUFFERING && state != PlaybackState.STATE_CONNECTING) {
+                Log.w(TAG, "headless: not playing after $PLAY_CHECK_MS ms (state=$state); sending media-button PLAY")
+                sendMediaButtonPlay()
+            }
+            delay(BROWSER_HOLD_MS) // long enough for YouTube Music's own playback service to take over
+            disconnectBrowser()
+        }
+    }
+
+    /** Polls (on top of the sessions listener) until YouTube Music's session is active, for up to [SESSION_WAIT_MS]. */
+    private suspend fun awaitSession(): MediaController? {
+        repeat((SESSION_WAIT_MS / SESSION_POLL_MS).toInt()) {
+            attach()
+            controller?.let { return it }
+            delay(SESSION_POLL_MS)
+        }
+        return null
+    }
+
+    /** Controller for YouTube Music's session via its exported media browser service, or null if absent or refused. */
+    private suspend fun connectBrowser(): MediaController? {
+        disconnectBrowser()
+        val component = runCatching {
+            app.packageManager.queryIntentServices(Intent(MediaBrowserService.SERVICE_INTERFACE).setPackage(YTM), 0)
+                .firstOrNull()?.serviceInfo?.let { ComponentName(it.packageName, it.name) }
+        }.getOrNull() ?: run { Log.i(TAG, "headless: YouTube Music exports no media browser service"); return null }
+        val result = CompletableDeferred<MediaController?>()
+        lateinit var b: MediaBrowser
+        b = MediaBrowser(app, component, object : MediaBrowser.ConnectionCallback() {
+            override fun onConnected() { result.complete(runCatching { MediaController(app, b.sessionToken) }.getOrNull()) }
+            override fun onConnectionFailed() { Log.i(TAG, "headless: media browser $component refused the connection"); result.complete(null) }
+        }, null)
+        browser = b
+        runCatching { b.connect() }.onFailure { result.complete(null) }
+        return withTimeoutOrNull(BROWSER_WAIT_MS) { result.await() }.also { if (it == null) disconnectBrowser() }
+    }
+
+    private fun disconnectBrowser() {
+        browser?.let { runCatching { it.disconnect() } }
+        browser = null
+    }
+
+    /** Media-button PLAY (down + up) addressed to YouTube Music's receiver: wakes its service and resumes playback. */
+    private fun sendMediaButtonPlay() {
+        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            val intent = Intent(Intent.ACTION_MEDIA_BUTTON).setPackage(YTM).putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(action, KeyEvent.KEYCODE_MEDIA_PLAY))
+            runCatching { app.sendBroadcast(intent) }.onFailure { Log.w(TAG, "headless: media-button broadcast failed", it) }
         }
     }
 
@@ -154,5 +259,12 @@ class YtmMediaSessionService(
         const val LIKE = "thumbs_up_action"
         /** Time for YouTube Music's activity to take the search before LiveFit returns to the front. */
         const val RETURN_DELAY_MS = 1_500L
+        private const val TAG = "LiveFitMusic"
+        /** Headless start (B2): wait for the browser connection, then for a session after the media button. */
+        private const val BROWSER_WAIT_MS = 3_000L
+        private const val SESSION_WAIT_MS = 10_000L
+        private const val SESSION_POLL_MS = 250L
+        private const val PLAY_CHECK_MS = 3_000L
+        private const val BROWSER_HOLD_MS = 30_000L
     }
 }

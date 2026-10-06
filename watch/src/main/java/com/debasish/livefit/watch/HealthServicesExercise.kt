@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.health.services.client.ExerciseUpdateCallback
 import androidx.health.services.client.HealthServices
 import androidx.health.services.client.data.Availability
+import androidx.health.services.client.data.BatchingMode
 import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.ExerciseConfig
 import androidx.health.services.client.data.ExerciseEndReason
@@ -64,7 +65,8 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         steps = 0; km = 0.0; kcal = 0.0; speed = null; lastPaused = null
         startedAfter = Instant.now().minusSeconds(1)
         val exerciseType = hsType(type)
-        val supported = client.getCapabilitiesAsync().await().getExerciseTypeCapabilities(exerciseType).supportedDataTypes
+        val caps = client.getCapabilitiesAsync().await()
+        val supported = caps.getExerciseTypeCapabilities(exerciseType).supportedDataTypes
         val wanted = setOf(DataType.HEART_RATE_BPM, DataType.STEPS_TOTAL, DataType.DISTANCE_TOTAL, DataType.CALORIES_TOTAL, DataType.SPEED)
         // Some watches only offer the per-interval STEPS/DISTANCE types for an exercise: fall back to summing them.
         val fallback = listOfNotNull(
@@ -74,10 +76,14 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         val types = (wanted.filter { it in supported } + fallback.filter { it in supported }).toSet()
         sumSteps = DataType.STEPS in types; sumDistance = DataType.DISTANCE in types
         Log.d(TAG, "exercise $exerciseType supported=${supported.map { it.name }} requested=${types.map { it.name }}")
+        // B1: by default Health Services holds heart rate back in large batches while the screen is off / ambient
+        // (step totals still arrive), so the phone and HUD showed a stale heart rate until the watch woke.
+        val batching = batchingOverrides(caps.supportedBatchingModeOverrides)
+        Log.i(TAG, "batching overrides supported=${caps.supportedBatchingModeOverrides} using=$batching")
         client.setUpdateCallback(callback)
         runCatching { client.prepareExerciseAsync(WarmUpConfig(exerciseType, setOf(DataType.HEART_RATE_BPM))).await() }
         client.startExerciseAsync(
-            ExerciseConfig.builder(exerciseType).setDataTypes(types).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED).build(),
+            ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(batching).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED).build(),
         ).await()
         true
     }.getOrDefault(false)
@@ -96,6 +102,10 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         client.setUpdateCallback(callback)
         true
     }.getOrNull()
+
+    /** HR every ~5 s while not interactive, where the watch supports it; otherwise Health Services' default batching. */
+    private fun batchingOverrides(supported: Set<BatchingMode>): Set<BatchingMode> =
+        setOfNotNull(BatchingMode.HEART_RATE_5_SECONDS.takeIf { it in supported })
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {

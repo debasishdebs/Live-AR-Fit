@@ -29,6 +29,7 @@ dependencies {
     implementation(project(":services:sync"))
     implementation(project(":services:music"))
     implementation("androidx.wear:wear-ongoing:1.0.0")
+    implementation("androidx.wear:wear:1.3.0") // AmbientLifecycleObserver (B1: workout screen on AOD)
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.wear.compose:compose-material:1.4.0")

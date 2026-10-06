@@ -38,8 +38,21 @@ class WorkoutMusicPolicyTest {
         assertEquals(SearchRoute.Session, SearchRoute.of(hasSession = true, appInForeground = true))
         assertEquals(SearchRoute.Session, SearchRoute.of(hasSession = true, appInForeground = false))
     }
-    @Test fun searchFallsBackToTheActivityAndReturnsOnlyIfLiveFitWasInFront() {
+    @Test fun searchUsesTheActivityOnlyWhileLiveFitIsInFront() =
         assertEquals(SearchRoute.ActivityThenReturn, SearchRoute.of(hasSession = false, appInForeground = true))
-        assertEquals(SearchRoute.Activity, SearchRoute.of(hasSession = false, appInForeground = false))
+
+    /** B2: Android blocks a background activity start, so with no session (phone in pocket) playback starts without UI. */
+    @Test fun noSessionInTheBackgroundStartsHeadless() =
+        assertEquals(SearchRoute.Headless, SearchRoute.of(hasSession = false, appInForeground = false))
+
+    /** B2: once the headless start brings YouTube Music's session up, the saved search (if any) is applied on it. */
+    @Test fun headlessStartAppliesTheSearchOnceTheSessionAppears() {
+        assertEquals(HeadlessStep.PlayFromSearch("workout mix"), HeadlessStep.onSession(query = "workout mix", isPlaying = true))
+        assertEquals(HeadlessStep.PlayFromSearch("workout mix"), HeadlessStep.onSession(query = "workout mix", isPlaying = false))
+    }
+
+    @Test fun headlessResumeOnlyPressesPlayIfTheResumedSessionIsNotPlaying() {
+        assertEquals(HeadlessStep.Play, HeadlessStep.onSession(query = null, isPlaying = false))
+        assertEquals(HeadlessStep.Done, HeadlessStep.onSession(query = null, isPlaying = true))
     }
 }
