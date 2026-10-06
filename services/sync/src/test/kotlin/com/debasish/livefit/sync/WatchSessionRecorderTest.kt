@@ -9,6 +9,8 @@ import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.io.File
 import java.nio.file.Files
@@ -25,7 +27,7 @@ class WatchSessionRecorderTest {
     @Test fun deltasArePersistedBeforeSendAndPrunedOnAck() = runTest {
         val root = tmp()
         val sent = mutableListOf<SessionDelta>()
-        val rec = WatchSessionRecorder(root, live, send = { d ->
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = { d ->
             assertTrue(File(root, "s/d-${d.seq}.json").exists(), "persisted before send")
             sent += d
         })
@@ -41,7 +43,7 @@ class WatchSessionRecorderTest {
         val root = tmp()
         val sent = mutableListOf<SessionDelta>()
         var online = false
-        val rec = WatchSessionRecorder(root, live, send = { d -> if (!online) error("offline"); sent += d })
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = { d -> if (!online) error("offline"); sent += d })
         rec.begin("s", WorkoutType.Run, 0)
         val blocker = File(root, "s/d-1.json.tmp").also { it.mkdirs() } // makes the write of seq 1 fail
         rec.sample(Sample(1_000, hr = 100))
@@ -56,7 +58,7 @@ class WatchSessionRecorderTest {
 
     @Test fun ackForAnotherSessionIsIgnored() = runTest {
         val root = tmp()
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.onAck(DeltaAck(sessionId = "other", seq = 0))
         assertEquals(1, FileDeltaBuffer(File(root, "s")).unacked().size)
@@ -64,7 +66,7 @@ class WatchSessionRecorderTest {
 
     @Test fun finalAckClearsTheSession() = runTest {
         val root = tmp()
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
         assertTrue(rec.isFinalized)
@@ -76,12 +78,12 @@ class WatchSessionRecorderTest {
 
     @Test fun survivesProcessRestartAndResendsUnacked() = runTest {
         val root = tmp()
-        WatchSessionRecorder(root, live, send = { error("phone unreachable") }).apply {
+        WatchSessionRecorder(root, live, backgroundScope, send = { error("phone unreachable") }).apply {
             begin("s", WorkoutType.Walk, 0)
             sample(Sample(1_000, hr = 100))
         }
         val resent = mutableListOf<Long>()
-        val rec = WatchSessionRecorder(root, live, send = { resent += it.seq })
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = { resent += it.seq })
         assertEquals("s", rec.sessionId)
         rec.resendUnacked()
         assertEquals(listOf(0L, 1L), resent)
@@ -90,7 +92,7 @@ class WatchSessionRecorderTest {
     }
 
     @Test fun claimDescribesTheHeldSession() = runTest {
-        val rec = WatchSessionRecorder(tmp(), live, send = {})
+        val rec = WatchSessionRecorder(tmp(), live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Run, 0)
         rec.sample(Sample(10_000, hr = 130))
         rec.event(SessionEvent.Paused(10_000))
@@ -105,14 +107,14 @@ class WatchSessionRecorderTest {
     /** Codex P1: acked (deleted) deltas must still count after a watch restart. */
     @Test fun restartAfterPruningRestoresStateFromTheCheckpoint() = runTest {
         val root = tmp()
-        WatchSessionRecorder(root, live, send = {}).apply {
+        WatchSessionRecorder(root, live, backgroundScope, send = {}).apply {
             begin("s", WorkoutType.Walk, 0)
             sample(Sample(10_000, hr = 110, stepsTotal = 20))
             event(SessionEvent.Paused(10_000))
             onAck(DeltaAck(sessionId = "s", seq = 2)) // phone stored everything; files deleted
         }
         assertTrue(FileDeltaBuffer(File(root, "s")).unacked().isEmpty())
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         assertEquals(WorkoutPhase.Paused, rec.assembler!!.phase())
         assertEquals(10_000, rec.assembler!!.activeMs())
         assertEquals(20, rec.assembler!!.snapshot().metrics.steps)
@@ -125,13 +127,13 @@ class WatchSessionRecorderTest {
     /** Average/max HR still cover the whole session after a restart, though only a 120-sample tail is kept. */
     @Test fun restartKeepsFullSessionHeartRateStats() = runTest {
         val root = tmp()
-        WatchSessionRecorder(root, live, send = {}).apply {
+        WatchSessionRecorder(root, live, backgroundScope, send = {}).apply {
             begin("s", WorkoutType.Run, 0)
             sample(Sample(1_000, hr = 190)) // the peak, soon outside the tail
             for (t in 2..300) sample(Sample(t * 1_000L, hr = 100))
             onAck(DeltaAck(sessionId = "s", seq = 300))
         }
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         val snap = rec.assembler!!.snapshot()
         assertEquals(190, snap.maxHeartRate)
         assertEquals((190 + 299 * 100) / 300, snap.avgHeartRate)
@@ -141,7 +143,7 @@ class WatchSessionRecorderTest {
     /** Codex P1: stop A offline → start B → reconnect → both recovered, A first. */
     @Test fun endedSessionIsKeptWhenAnotherStartsAndSyncsFirst() = runTest {
         val root = tmp()
-        WatchSessionRecorder(root, live, send = { error("phone unreachable") }).apply {
+        WatchSessionRecorder(root, live, backgroundScope, send = { error("phone unreachable") }).apply {
             begin("a", WorkoutType.Walk, 0)
             event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
             begin("b", WorkoutType.Run, 10_000)
@@ -149,7 +151,7 @@ class WatchSessionRecorderTest {
         }
         val sent = mutableListOf<Pair<String, Long>>()
         val claims = mutableListOf<SessionClaim>()
-        val rec = WatchSessionRecorder(root, live, send = { sent += it.sessionId to it.seq }, sendClaim = { claims += it })
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = { sent += it.sessionId to it.seq }, sendClaim = { claims += it })
         assertEquals("b", rec.sessionId, "the newest session is the one shown and recorded")
         rec.resync() // reconnect
         assertEquals(listOf("a"), claims.map { it.sessionId })
@@ -169,14 +171,14 @@ class WatchSessionRecorderTest {
 
     @Test fun crashBetweenCheckpointAndDeleteDoesNotDoubleCount() = runTest {
         val root = tmp()
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.sample(Sample(10_000, hr = 110, stepsTotal = 20))
         rec.sample(Sample(20_000, hr = 130, stepsTotal = 40))
         val before = snapshotFiles(File(root, "s"))
         rec.onAck(DeltaAck(sessionId = "s", seq = 2))
         before.forEach { (n, t) -> File(root, "s/$n").writeText(t) } // crash before deletion
-        val r = WatchSessionRecorder(root, live, send = {})
+        val r = WatchSessionRecorder(root, live, backgroundScope, send = {})
         assertTrue(FileDeltaBuffer(File(root, "s")).unacked().isEmpty())
         val snap = r.assembler!!.snapshot()
         assertEquals(40, snap.metrics.steps)
@@ -189,7 +191,7 @@ class WatchSessionRecorderTest {
 
     @Test fun crashAfterFinalAckRemovesTheSession() = runTest {
         val root = tmp()
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Walk, 0)
         rec.event(SessionEvent.Stopped(5_000, EndReason.User), final = true)
         val dir = File(root, "s")
@@ -207,14 +209,14 @@ class WatchSessionRecorderTest {
             cpBuf.ackUpTo(1)
             File(cpBuf.dir, "checkpoint.json").copyTo(File(dir, "checkpoint.json"))
         }
-        val r = WatchSessionRecorder(root, live, send = {})
+        val r = WatchSessionRecorder(root, live, backgroundScope, send = {})
         assertFalse(r.holdsData)
         assertFalse(dir.exists())
     }
 
     @Test fun secondAckMergesIntoTheExistingCheckpoint() = runTest {
         val root = tmp()
-        val rec = WatchSessionRecorder(root, live, send = {})
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = {})
         rec.begin("s", WorkoutType.Run, 0)
         rec.sample(Sample(1_000, hr = 100))
         rec.onAck(DeltaAck(sessionId = "s", seq = 1))
@@ -232,12 +234,12 @@ class WatchSessionRecorderTest {
 
     @Test fun crashBeforeHeaderUpdateKeepsTheDelta() = runTest {
         val root = tmp()
-        WatchSessionRecorder(root, live, send = {}).apply { begin("s", WorkoutType.Walk, 0) }
+        WatchSessionRecorder(root, live, backgroundScope, send = {}).apply { begin("s", WorkoutType.Walk, 0) }
         val buf = FileDeltaBuffer(File(root, "s"))
         // put(d) landed, writeHeader did not
         buf.put(SessionDelta(sessionId = "s", seq = 1, events = listOf(SessionEvent.Stopped(5_000, EndReason.User)), provenance = live, final = true))
         val sent = mutableListOf<Long>()
-        val r = WatchSessionRecorder(root, live, send = { sent += it.seq })
+        val r = WatchSessionRecorder(root, live, backgroundScope, send = { sent += it.seq })
         assertTrue(r.isFinalized)
         assertEquals(1L, buf.readHeader()!!.finalSeq)
         r.sample(Sample(6_000, hr = 90)) // finalized: ignored, must not overwrite d-1
@@ -245,5 +247,21 @@ class WatchSessionRecorderTest {
         assertTrue(buf.unacked().last().final)
         r.resendUnacked()
         assertEquals(listOf(0L, 1L), sent)
+    }
+
+    /** Review #1: recording returns once the delta is on disk; a stalled send only delays later sends, in order. */
+    @Test fun stalledSendNeitherBlocksRecordingNorReordersDeltas() = runTest {
+        val root = tmp()
+        val gate = CompletableDeferred<Unit>()
+        val sent = mutableListOf<Long>()
+        val rec = WatchSessionRecorder(root, live, backgroundScope, send = { d -> if (d.seq == 1L) gate.await(); sent += d.seq })
+        rec.begin("s", WorkoutType.Run, 0)
+        rec.sample(Sample(1_000, hr = 100)) // send stalls
+        rec.sample(Sample(2_000, hr = 101))
+        rec.event(SessionEvent.Stopped(3_000, EndReason.User), final = true)
+        assertEquals(listOf(0L, 1L, 2L, 3L), FileDeltaBuffer(File(root, "s")).unacked().map { it.seq })
+        assertEquals(listOf(0L), sent)
+        gate.complete(Unit); runCurrent()
+        assertEquals(listOf(0L, 1L, 2L, 3L), sent)
     }
 }

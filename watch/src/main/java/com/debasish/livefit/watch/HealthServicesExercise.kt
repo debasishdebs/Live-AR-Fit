@@ -3,6 +3,7 @@ package com.debasish.livefit.watch
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.health.services.client.ExerciseUpdateCallback
 import androidx.health.services.client.HealthServices
@@ -11,6 +12,7 @@ import androidx.health.services.client.data.DataType
 import androidx.health.services.client.data.ExerciseConfig
 import androidx.health.services.client.data.ExerciseEndReason
 import androidx.health.services.client.data.ExerciseLapSummary
+import androidx.health.services.client.data.ExerciseState
 import androidx.health.services.client.data.ExerciseTrackedStatus
 import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
@@ -20,9 +22,11 @@ import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.sync.BackendUpdate
 import com.debasish.livefit.sync.ExerciseBackend
+import com.debasish.livefit.sync.batchSamples
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.guava.await
+import java.time.Instant
 
 /** Health Services implementation of [ExerciseBackend] (spec §5.1). */
 class HealthServicesExercise(context: Context) : ExerciseBackend {
@@ -33,6 +37,10 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
 
     // Cumulative totals arrive in separate updates from HR; keep the latest of each.
     private var steps = 0; private var km = 0.0; private var kcal = 0.0; private var speed: Double? = null
+    /** Last Active/Paused state reported; null = report the next one (after start/reattach). */
+    private var lastPaused: Boolean? = null
+    /** Updates of an exercise that started before our latest start() are a previous one's stragglers. */
+    private var startedAfter: Instant? = null
 
     private val required = listOf(Manifest.permission.BODY_SENSORS, "android.permission.health.READ_HEART_RATE", Manifest.permission.ACTIVITY_RECOGNITION)
 
@@ -51,7 +59,8 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
     }
 
     override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean = runCatching {
-        steps = 0; km = 0.0; kcal = 0.0; speed = null
+        steps = 0; km = 0.0; kcal = 0.0; speed = null; lastPaused = null
+        startedAfter = Instant.now().minusSeconds(1)
         val exerciseType = hsType(type)
         val supported = client.getCapabilitiesAsync().await().getExerciseTypeCapabilities(exerciseType).supportedDataTypes
         val wanted = setOf(DataType.HEART_RATE_BPM, DataType.STEPS_TOTAL, DataType.DISTANCE_TOTAL, DataType.CALORIES_TOTAL, DataType.SPEED)
@@ -74,20 +83,37 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         if (info.exerciseTrackedStatus != ExerciseTrackedStatus.OWNED_EXERCISE_IN_PROGRESS) return@runCatching false
         // Totals only arrive when they change; seed them so the next reading doesn't report 0 steps.
         steps = last?.stepsTotal ?: 0; km = last?.distanceKmTotal ?: 0.0; kcal = last?.kcalTotal ?: 0.0; speed = last?.speedKmh
+        lastPaused = null; startedAfter = null // the first update after registering reports the actual phase
         client.setUpdateCallback(callback)
         true
     }.getOrNull()
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
+            if (startedAfter?.let { update.startTime?.isBefore(it) } == true) return
             val m = update.latestMetrics
+            val now = System.currentTimeMillis()
             m.getData(DataType.STEPS_TOTAL)?.total?.let { steps = it.toInt() }
             m.getData(DataType.DISTANCE_TOTAL)?.total?.let { km = it / 1000.0 }
             m.getData(DataType.CALORIES_TOTAL)?.total?.let { kcal = it }
             m.getData(DataType.SPEED).lastOrNull()?.value?.let { speed = it * 3.6 }
-            val hr = m.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value?.toInt()
-            queue.trySend(BackendUpdate.Reading(Sample(System.currentTimeMillis(), hr, steps, km, kcal, speed)))
+            // Every point of a (screen-off) batch, at its own time: data point times are relative to boot.
+            val boot = Instant.ofEpochMilli(now - SystemClock.elapsedRealtime())
+            val hr = m.getData(DataType.HEART_RATE_BPM).map { it.getTimeInstant(boot).toEpochMilli() to it.value.toInt() }
+            batchSamples(hr, now, steps, km, kcal, speed).forEach { queue.trySend(BackendUpdate.Reading(it)) }
             val st = update.exerciseStateInfo
+            val paused = when {
+                st.state == ExerciseState.ACTIVE -> false
+                st.state.isPaused -> true
+                else -> null // starting, pausing, resuming, ending: wait for the settled state
+            }
+            if (paused != null && paused != lastPaused) {
+                lastPaused = paused
+                val active = update.activeDurationCheckpoint?.let { cp ->
+                    cp.activeDuration.toMillis() + if (paused) 0 else (now - cp.time.toEpochMilli()).coerceAtLeast(0)
+                }
+                queue.trySend(BackendUpdate.Phase(paused, now, active))
+            }
             if (st.state.isEnded) {
                 val by = when (st.endReason) {
                     ExerciseEndReason.USER_END -> EndReason.User

@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
@@ -44,6 +46,11 @@ interface ExerciseBackend {
 sealed interface BackendUpdate {
     data class Reading(val sample: Sample) : BackendUpdate
     data class Ended(val by: EndReason) : BackendUpdate
+    /**
+     * Authoritative Active/Paused state, reported when it changes and first after start/reattach.
+     * [activeMs] is the backend's own active duration at [atMs], if known.
+     */
+    data class Phase(val paused: Boolean, val atMs: Long, val activeMs: Long? = null) : BackendUpdate
 }
 
 /** Watch executor for hub requests; scoped to one session at a time (spec §4.8). */
@@ -68,6 +75,11 @@ class WatchExerciseController(
     private var stopAtMs = 0L
     /** The in-flight stop; a concurrent stop awaits it and returns the same outcome. */
     private var stopOutcome: CompletableDeferred<Boolean>? = null
+    /**
+     * Hub and offline starts run one at a time: Health Services ends our own exercise when a second one starts,
+     * so a start that waited here sees the first one's session and is refused without reaching the backend.
+     */
+    private val startLock = Mutex()
 
     val activeSessionId: String? get() = recorder.sessionId?.takeIf { !recorder.isFinalized }
 
@@ -76,6 +88,7 @@ class WatchExerciseController(
             backend.updates.collect { u ->
                 when (u) {
                     is BackendUpdate.Reading -> onReading(u.sample)
+                    is BackendUpdate.Phase -> onBackendPhase(u)
                     is BackendUpdate.Ended -> {
                         stopping?.let { it.complete(Unit); return@collect } // our own stop: localStop writes the final delta
                         val id = activeSessionId ?: return@collect
@@ -95,6 +108,36 @@ class WatchExerciseController(
         if (recorder.type == WorkoutType.Auto) detector.onSample(sample)?.let { recorder.event(SessionEvent.TypeDetected(sample.tMs, it)) }
     }
 
+    /**
+     * "Actual state wins" (spec §4.8): Health Services paused or resumed without the event being recorded — e.g. the
+     * process died right after the call. Recorded at the time implied by the backend's active duration.
+     */
+    private fun onBackendPhase(u: BackendUpdate.Phase) {
+        if (activeSessionId == null || stopping != null) return
+        val a = recorder.assembler ?: return
+        val since = a.phaseSinceMs() ?: return
+        if (u.atMs < since) return // older than our own last pause/resume
+        val ours = a.activeMs(atMs = u.atMs)
+        when (a.phase()) {
+            WorkoutPhase.Active -> if (u.paused) {
+                val overcounted = u.activeMs?.let { ours - it }?.coerceAtLeast(0) ?: 0
+                recorder.event(SessionEvent.Paused((u.atMs - overcounted).coerceAtLeast(since)))
+            }
+            WorkoutPhase.Paused -> if (!u.paused) {
+                val missed = u.activeMs?.let { it - ours }?.coerceAtLeast(0) ?: 0
+                recorder.event(SessionEvent.Resumed((u.atMs - missed).coerceAtLeast(since)))
+            }
+            else -> Unit
+        }
+    }
+
+    /** After a permission prompt (result or app resume): clears or narrows a PermissionMissing error. */
+    fun recheckPermissions() {
+        if (_lastError.value !is ExerciseError.PermissionMissing) return
+        val missing = backend.missingPermissions()
+        _lastError.value = if (missing.isEmpty()) null else ExerciseError.PermissionMissing(missing)
+    }
+
     suspend fun handle(req: ExerciseRequest) {
         recent[req.requestId]?.let { runCatching { sendResult(it) }; return }
         val result = execute(req)
@@ -110,16 +153,19 @@ class WatchExerciseController(
             ExerciseResult(requestId = req.requestId, sessionId = req.sessionId, ok = ok, error = error, state = state, activeSessionId = activeSessionId)
 
         return when (val op = req.op) {
-            is ExerciseOp.Start -> when {
-                active == req.sessionId -> result(true, state = ExerciseState.Active)
-                active != null -> result(false, ExerciseError.WrongSession(active), ExerciseState.Active)
-                // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
-                recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
-                else -> {
-                    gpsPrefs.set(op.type, op.gps)
-                    when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
-                        null -> result(true, state = ExerciseState.Active)
-                        else -> result(false, e, ExerciseState.Idle)
+            is ExerciseOp.Start -> startLock.withLock {
+                val current = activeSessionId // re-read: another start may have finished while we waited
+                when {
+                    current == req.sessionId -> result(true, state = ExerciseState.Active)
+                    current != null -> result(false, ExerciseError.WrongSession(current), ExerciseState.Active)
+                    // An ended session is still replaying to the phone; starting now would make the phone adopt the new one first.
+                    recorder.holdsData -> result(false, ExerciseError.Internal(SYNCING_PREVIOUS), ExerciseState.Idle)
+                    else -> {
+                        gpsPrefs.set(op.type, op.gps)
+                        when (val e = startExercise({ req.sessionId }, op.type, op.force, op.gps)) {
+                            null -> result(true, state = ExerciseState.Active)
+                            else -> result(false, e, ExerciseState.Idle)
+                        }
                     }
                 }
             }
@@ -152,11 +198,11 @@ class WatchExerciseController(
      * Watch-only start while the phone is unreachable (spec §4.4 "Started on the watch with no phone"): local UUID,
      * same permission and takeover checks; the caller asks the takeover question on the watch.
      */
-    suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? {
-        activeSessionId?.let { return ExerciseError.WrongSession(it) }
+    suspend fun localStart(type: WorkoutType, force: Boolean = false): ExerciseError? = startLock.withLock {
+        activeSessionId?.let { return@withLock ExerciseError.WrongSession(it) }
         val e = startExercise(newId, type, force, gpsPrefs.get(type))
         _lastError.value = e
-        return e
+        e
     }
 
     /** Offline controls from the watch UI use the same paths and are recorded as events only on success. */
@@ -169,14 +215,15 @@ class WatchExerciseController(
     suspend fun localPause(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Active) return false
         if (!safely { backend.pause() }) return false
-        recorder.event(SessionEvent.Paused(clock.nowMs()))
+        // Health Services' own Paused update may have been recorded while pause() ran.
+        if (recorder.assembler?.phase() == WorkoutPhase.Active) recorder.event(SessionEvent.Paused(clock.nowMs()))
         return true
     }
 
     suspend fun localResume(): Boolean {
         if (activeSessionId == null || recorder.assembler?.phase() != WorkoutPhase.Paused) return false
         if (!safely { backend.resume() }) return false
-        recorder.event(SessionEvent.Resumed(clock.nowMs()))
+        if (recorder.assembler?.phase() == WorkoutPhase.Paused) recorder.event(SessionEvent.Resumed(clock.nowMs()))
         return true
     }
 

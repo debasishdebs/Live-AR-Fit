@@ -34,7 +34,7 @@ object WatchRuntime {
         if (initialized) return
         app = context.applicationContext
         recorder = WatchSessionRecorder(
-            File(app.filesDir, "lf-buffer"), Provenance.Live("galaxy-watch/health-services"),
+            File(app.filesDir, "lf-buffer"), Provenance.Live("galaxy-watch/health-services"), scope,
             send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
             sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
         )

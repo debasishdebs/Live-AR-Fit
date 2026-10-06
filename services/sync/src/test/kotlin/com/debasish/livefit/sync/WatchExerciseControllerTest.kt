@@ -13,10 +13,12 @@ import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.io.File
@@ -42,13 +44,26 @@ class WatchExerciseControllerTest {
         var throwOnOther = false
         var throwOnControl = false
         var endDelayMs = 0L
+        /** When set, start() suspends on it (a slow Health Services start). */
+        var startGate: CompletableDeferred<Unit>? = null
+        /** Health Services reports its new state while pause()/resume() are still in flight. */
+        var phaseDuringControl = false
+        var now: () -> Long = { 0 }
         val calls = mutableListOf<String>()
         override val updates = MutableSharedFlow<BackendUpdate>(extraBufferCapacity = 16)
         override fun missingPermissions() = missing
         override suspend fun otherAppTracking(): String? { if (throwOnOther) error("hs down"); return other }
-        override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; return true }
-        override suspend fun pause(): Boolean { calls += "pause"; if (throwOnControl) error("hs"); return pauseOk }
-        override suspend fun resume(): Boolean { calls += "resume"; if (throwOnControl) error("hs"); return true }
+        override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean { calls += "start:$type:$useGps"; startGate?.await(); return true }
+        override suspend fun pause(): Boolean {
+            calls += "pause"; if (throwOnControl) error("hs")
+            if (phaseDuringControl && pauseOk) { updates.emit(BackendUpdate.Phase(paused = true, atMs = now())); kotlinx.coroutines.yield() }
+            return pauseOk
+        }
+        override suspend fun resume(): Boolean {
+            calls += "resume"; if (throwOnControl) error("hs")
+            if (phaseDuringControl) { updates.emit(BackendUpdate.Phase(paused = false, atMs = now())); kotlinx.coroutines.yield() }
+            return true
+        }
         override suspend fun end(): Boolean {
             calls += "end"
             if (throwOnControl) error("hs")
@@ -67,8 +82,12 @@ class WatchExerciseControllerTest {
     private val sent = mutableListOf<SessionDelta>()
     private val live = Provenance.Live("galaxy-watch/health-services")
 
-    private fun TestScope.rig(backend: FakeBackend = FakeBackend(), root: File = Files.createTempDirectory("w").toFile()): Pair<FakeBackend, WatchExerciseController> {
-        val recorder = WatchSessionRecorder(File(root, "buffer"), live, send = { sent += it })
+    private fun TestScope.rig(
+        backend: FakeBackend = FakeBackend(),
+        root: File = Files.createTempDirectory("w").toFile(),
+        send: suspend (SessionDelta) -> Unit = { sent += it },
+    ): Pair<FakeBackend, WatchExerciseController> {
+        val recorder = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = send)
         var n = 0
         val c = WatchExerciseController(backgroundScope, backend, recorder, Clock { testScheduler.currentTime },
             sendResult = { results += it }, sendState = { states += it }, gpsPrefs = GpsPreferences(File(root, "gps.json")), newId = { "local${n++}" })
@@ -296,5 +315,118 @@ class WatchExerciseControllerTest {
         c.handle(req("r3", "s", ExerciseOp.Stop))
         assertIs<ExerciseError.Internal>(results.last().error)
         assertEquals("s", c.activeSessionId)
+    }
+
+    /** Review #1: a stalled send must not hold back shutdown readings; the final delta follows the final reading. */
+    @Test fun stalledSendDoesNotDropShutdownReadings() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val gate = CompletableDeferred<Unit>()
+        val (b, c) = rig(root = root, send = { d -> if (d.samples.any { it.stepsTotal == 10 }) gate.await(); sent += d }); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        b.updates.emit(BackendUpdate.Reading(Sample(100, hr = 90, stepsTotal = 10))); runCurrent() // its send stalls
+        c.handle(req("r2", "s", ExerciseOp.Stop)) // end() delivers steps=42 + Ended
+        assertTrue(testScheduler.currentTime < 5_000, "Ended was seen; the stop didn't time out")
+        val stored = FileDeltaBuffer(File(root, "buffer/s")).unacked()
+        assertTrue(stored.last().final)
+        assertEquals(42, stored[stored.size - 2].samples.single().stepsTotal, "final reading recorded before the final seq")
+        gate.complete(Unit); runCurrent()
+        assertEquals(stored.map { it.seq }, sent.map { it.seq }, "everything sent once the link recovers, in seq order")
+    }
+
+    /** Review #3: a hub Start and an offline Start racing must reach Health Services only once. */
+    @Test fun concurrentStartsReachHealthServicesOnce() = runTest {
+        val backend = FakeBackend().apply { startGate = CompletableDeferred() }
+        val (b, c) = rig(backend); runCurrent()
+        val hub = async { c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk))) }
+        val local = async { c.localStart(WorkoutType.Walk) }
+        runCurrent()
+        b.updates.emit(BackendUpdate.Ended(EndReason.OtherApp)); runCurrent() // stray end while starting: no recorder to close
+        backend.startGate!!.complete(Unit)
+        hub.await()
+        assertEquals(ExerciseError.WrongSession("s"), local.await())
+        assertEquals(1, b.calls.count { it.startsWith("start") })
+        assertTrue(results.single().ok)
+        assertEquals("s", c.activeSessionId)
+        assertTrue(sent.none { it.final })
+    }
+
+    @Test fun concurrentLocalThenHubStartReachesHealthServicesOnce() = runTest {
+        val backend = FakeBackend().apply { startGate = CompletableDeferred() }
+        val (b, c) = rig(backend); runCurrent()
+        val local = async { c.localStart(WorkoutType.Run) }
+        runCurrent()
+        val hub = async { c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk))) }
+        runCurrent()
+        backend.startGate!!.complete(Unit)
+        assertNull(local.await()); hub.await()
+        assertEquals(ExerciseError.WrongSession("local0"), results.single().error)
+        assertEquals(listOf("start:Run:false"), b.calls)
+        assertEquals("local0", c.activeSessionId)
+    }
+
+    private fun phaseEvents() = sent.flatMap { it.events }.filter { it is SessionEvent.Paused || it is SessionEvent.Resumed }
+
+    /** Review #7: Health Services paused, then the process died before the Paused event was saved. */
+    @Test fun recoverRecordsAPauseTheBackendAppliedButWeDidNotSave() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (b1, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        b1.updates.emit(BackendUpdate.Reading(Sample(10_000, hr = 100))); runCurrent()
+        val (b2, c2) = rig(root = root); runCurrent() // new process: durable phase is Active
+        c2.recover()
+        // Health Services says: paused, with 12 s of active time (it paused at 12 s, we'd count to 30 s).
+        b2.updates.emit(BackendUpdate.Phase(paused = true, atMs = 30_000, activeMs = 12_000)); runCurrent()
+        assertEquals(listOf<SessionEvent>(SessionEvent.Paused(12_000)), phaseEvents())
+        b2.updates.emit(BackendUpdate.Reading(Sample(31_000, hr = 90))); runCurrent()
+        val stored = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = {}).assembler!!
+        assertEquals(com.debasish.livefit.model.WorkoutPhase.Paused, stored.phase())
+        assertEquals(12_000, stored.activeMs())
+    }
+
+    @Test fun recoverRecordsAResumeTheBackendAppliedButWeDidNotSave() = runTest {
+        val root = Files.createTempDirectory("w").toFile()
+        val (_, first) = rig(root = root); runCurrent()
+        first.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        advanceTimeBy(10_000)
+        first.handle(req("r2", "s", ExerciseOp.Pause)) // durable phase: Paused at 10 s
+        val (b2, c2) = rig(root = root); runCurrent()
+        c2.recover()
+        // Health Services is active again with 25 s active at 40 s: it resumed at 25 s.
+        b2.updates.emit(BackendUpdate.Phase(paused = false, atMs = 40_000, activeMs = 25_000)); runCurrent()
+        assertEquals(listOf(SessionEvent.Paused(10_000), SessionEvent.Resumed(25_000)), phaseEvents())
+        b2.updates.emit(BackendUpdate.Reading(Sample(40_000, hr = 90))); runCurrent()
+        val stored = WatchSessionRecorder(File(root, "buffer"), live, backgroundScope, send = {}).assembler!!
+        assertEquals(com.debasish.livefit.model.WorkoutPhase.Active, stored.phase())
+        assertEquals(25_000, stored.activeMs())
+    }
+
+    @Test fun backendPhaseMatchingOrOlderThanOurOwnIsIgnored() = runTest {
+        val backend = FakeBackend().apply { phaseDuringControl = true }
+        backend.now = { testScheduler.currentTime }
+        val (b, c) = rig(backend); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Walk)))
+        advanceTimeBy(5_000)
+        c.handle(req("r2", "s", ExerciseOp.Pause)) // Health Services' own Paused arrives while pause() is in flight
+        b.updates.emit(BackendUpdate.Phase(paused = true, atMs = 6_000)); runCurrent() // already paused
+        advanceTimeBy(5_000)
+        c.handle(req("r3", "s", ExerciseOp.Resume))
+        b.updates.emit(BackendUpdate.Phase(paused = true, atMs = 9_000)); runCurrent() // stale: before our resume
+        assertEquals(1, phaseEvents().count { it is SessionEvent.Paused })
+        assertEquals(1, phaseEvents().count { it is SessionEvent.Resumed })
+        assertTrue(results.all { it.ok })
+    }
+
+    /** Review #12: granting the permission clears the PermissionMissing error the watch UI shows. */
+    @Test fun permissionRecheckClearsAResolvedError() = runTest {
+        val backend = FakeBackend().apply { missing = listOf("android.permission.BODY_SENSORS", "android.permission.ACTIVITY_RECOGNITION") }
+        val (_, c) = rig(backend); runCurrent()
+        assertIs<ExerciseError.PermissionMissing>(c.localStart(WorkoutType.Walk))
+        backend.missing = listOf("android.permission.ACTIVITY_RECOGNITION")
+        c.recheckPermissions()
+        assertEquals(ExerciseError.PermissionMissing(listOf("android.permission.ACTIVITY_RECOGNITION")), c.lastError.value)
+        backend.missing = emptyList()
+        c.recheckPermissions()
+        assertNull(c.lastError.value)
+        assertNull(c.localStart(WorkoutType.Walk))
     }
 }

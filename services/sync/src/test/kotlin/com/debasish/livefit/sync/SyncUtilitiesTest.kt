@@ -79,4 +79,20 @@ class SyncUtilitiesTest {
         assertTrue(d.firstTime("b")); assertTrue(d.firstTime("c"))
         assertTrue(d.firstTime("a"), "evicted after capacity")
     }
+
+    /** Review #4: a screen-off batch keeps every heart-rate point at its own time; totals are the latest. */
+    @Test fun heartRateBatchKeepsEveryPoint() {
+        val samples = batchSamples(listOf(2_000L to 100, 1_000L to 190), nowMs = 3_000, steps = 42, km = 0.5, kcal = 30.0, speedKmh = 6.0)
+        assertEquals(listOf(1_000L to 190, 2_000L to 100), samples.map { it.tMs to it.hr })
+        assertTrue(samples.all { it.stepsTotal == 42 && it.distanceKmTotal == 0.5 && it.kcalTotal == 30.0 && it.speedKmh == 6.0 })
+        val a = com.debasish.livefit.services.workout.SessionAssembler("s")
+        a.add(com.debasish.livefit.model.SessionDelta(sessionId = "s", seq = 0, samples = samples, provenance = com.debasish.livefit.model.Provenance.Fake))
+        assertEquals(190, a.snapshot().maxHeartRate)
+        assertEquals(100, a.snapshot().metrics.heartRate, "live display shows the newest point")
+    }
+
+    @Test fun updateWithoutHeartRateIsOneTotalsSampleAndFutureTimesAreClamped() {
+        assertEquals(listOf(com.debasish.livefit.model.Sample(3_000, null, 42)), batchSamples(emptyList(), 3_000, 42, 0.0, 0.0, null))
+        assertEquals(3_000, batchSamples(listOf(9_000L to 120), 3_000, 0, 0.0, 0.0, null).single().tMs)
+    }
 }
