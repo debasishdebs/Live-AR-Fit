@@ -405,10 +405,8 @@ private fun LinkIcon(icon: ImageVector, state: LinkState) {
 private fun RecDot() {
     val t = rememberInfiniteTransition(label = "rec")
     val a by t.animateFloat(Hud.TERTIARY, Hud.SECONDARY, infiniteRepeatable(tween(1_200), RepeatMode.Reverse), label = "recAlpha")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(10.dp).background(Hud.Green.copy(alpha = a), CircleShape))
-        Label(" REC", 24.sp, Hud.TERTIARY, FontWeight.Bold)
-    }
+    // Dot only: a "REC" label pushed the status row (clock + device rings) off the HUD.
+    Box(Modifier.size(10.dp).background(Hud.Green.copy(alpha = a), CircleShape))
 }
 
 @Composable

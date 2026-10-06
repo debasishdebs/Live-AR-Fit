@@ -16,7 +16,8 @@ object CommandParser {
         fun has(vararg words: String) = words.any { Regex("\\b$it\\b").containsMatchIn(t) }
 
         val music = has("music", "song", "songs", "track", "tune")
-        val workout = has("workout", "work out", "exercise", "run", "running", "walk", "walking", "ride", "cycle", "cycling", "bike", "auto")
+        val workout = has("workout", "work out", "work", // "work": recognizers clip "start workout" to "start work"
+            "exercise", "run", "running", "walk", "walking", "ride", "cycle", "cycling", "bike", "auto")
         val down = has("down", "quieter", "lower", "decrease")
 
         return when {

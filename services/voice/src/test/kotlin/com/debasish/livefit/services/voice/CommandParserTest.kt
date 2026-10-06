@@ -22,6 +22,7 @@ class CommandParserTest {
         Command.StartWorkout(WorkoutType.Walk),
         "start workout", "Start workout.", "Start work out", "start my workout", "begin workout",
         "start exercise", "hey, start the workout please", "start a walk", "start walking", "begin walking",
+        "start work", // seen on device: the recognizer clipped "start workout"
     )
 
     @Test fun startRun() = assertParses(
