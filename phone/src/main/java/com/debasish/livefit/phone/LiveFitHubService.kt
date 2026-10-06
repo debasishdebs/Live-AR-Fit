@@ -16,8 +16,6 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.model.WorkoutPhase
-import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ui.AppActivity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -33,22 +31,13 @@ class LiveFitHubService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "LiveFit hub", NotificationManager.IMPORTANCE_LOW))
         val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        runCatching { ServiceCompat.startForeground(this, ID, notification("LiveFit ready"), type) }
+        runCatching { ServiceCompat.startForeground(this, ID, notification(READY), type) }
             .onFailure { stopSelf(); return } // missing BLUETOOTH_CONNECT: setup wizard grants it, then ensureRunning() retries
         running = true
         val graph = services
         connectGlassesIfNearby(graph)
         watcher = graph.scope.launch {
-            graph.workout.snapshot.collect { s ->
-                val text = when (s.phase) {
-                    WorkoutPhase.Active, WorkoutPhase.Paused ->
-                        "${s.displayType.label} · ${formatElapsed(s.elapsedMs)}" + (s.metrics.heartRate?.let { " · ♥ $it" } ?: "")
-                    WorkoutPhase.Syncing -> "Syncing watch data…"
-                    WorkoutPhase.Stopping -> "Saving workout…"
-                    else -> "LiveFit ready"
-                }
-                nm.notify(ID, notification(text))
-            }
+            HubNotification.postChanges(graph.workout.snapshot, initial = READY) { text -> nm.notify(ID, notification(text)) }
         }
     }
 
@@ -81,6 +70,7 @@ class LiveFitHubService : Service() {
     companion object {
         private const val CHANNEL = "hub"
         private const val ID = 7
+        private const val READY = "LiveFit ready"
         /** True while the service is in the foreground (set once startForeground succeeded). */
         @Volatile private var running = false
 

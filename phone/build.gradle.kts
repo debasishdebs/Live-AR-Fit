@@ -32,6 +32,7 @@ android {
 dependencies {
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     implementation(project(":core:services"))
     implementation(project(":services:workout"))
     implementation(project(":services:sync"))
