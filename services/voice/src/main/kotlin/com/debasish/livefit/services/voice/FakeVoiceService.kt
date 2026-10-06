@@ -33,7 +33,7 @@ class FakeVoiceService(
         }
     }
 
-    override fun startExternal(): Boolean = false
-    override fun feed(pcm: ByteArray) = Unit
-    override fun endExternal() = Unit
+    override fun startExternal(): Long? = null
+    override fun feed(capture: Long, pcm: ByteArray) = Unit
+    override fun endExternal(capture: Long) = Unit
 }

@@ -6,6 +6,7 @@ class AuthGate(private val timeoutMs: Long = AUTH_TIMEOUT_MS) {
         private set
     private var inFlight = false
     private var startedAt = 0L
+    private var rejected = false // the SDK rejected a token since the last started session
 
     /** True when the caller should launch the authorization UI now (none is in flight, or the last one is stale). */
     fun begin(now: Long): Boolean {
@@ -28,6 +29,20 @@ class AuthGate(private val timeoutMs: Long = AUTH_TIMEOUT_MS) {
         if (ok) authorized = true
         return true
     }
+
+    /**
+     * The SDK rejected the saved token (TOKEN_EXPIRED / NOT_AUTHENTICATED): authorization is gone.
+     * Returns true when the caller should re-authorize; false when a token was already rejected since the
+     * last started session (i.e. right after re-authorizing), so the rejection can't relaunch authorization in a loop.
+     */
+    fun tokenRejected(): Boolean {
+        authorized = false
+        inFlight = false
+        return !rejected.also { rejected = true }
+    }
+
+    /** A session started with the current token: a later rejection may re-authorize again. */
+    fun sessionStarted() { rejected = false }
 
     companion object { const val AUTH_TIMEOUT_MS = 30_000L }
 }

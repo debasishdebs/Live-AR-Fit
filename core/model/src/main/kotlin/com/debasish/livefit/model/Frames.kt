@@ -38,6 +38,10 @@ data class StateFrame(
 @Serializable
 data class HudSettingsFrame(val protocolVersion: Int = PROTOCOL_VERSION, val settings: HudSettings)
 
+/** Glasses → phone on lf_listen: opens push-to-talk. Versioned so an outdated glasses app can't drive voice (spec §4.7). */
+@Serializable
+data class ListenRequest(val protocolVersion: Int = PROTOCOL_VERSION)
+
 /** Every command travels with a unique id so resends are applied once (spec §4.5). */
 @Serializable
 data class CommandEnvelope(

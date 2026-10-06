@@ -5,6 +5,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.debasish.livefit.model.GlassesChannels
+import com.debasish.livefit.model.ListenRequest
+import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.voice.EnergyVad
 import com.debasish.livefit.services.voice.VadDecision
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,41 +51,66 @@ class PushToTalk(
 ) {
     private val _recording = MutableStateFlow(false)
     val recording: StateFlow<Boolean> = _recording
-    @Volatile private var stopRequested = false
+    private val lock = Any()
+    private var running = false // a capture thread is alive (it may already be closing)
+    private var stopRequested = false
+    private var restartMaxMs: Int? = null // start() while the old capture closes: reopen when it exits (review #8)
 
     fun toggle(maxMs: Int = 6_000) = if (_recording.value) stop() else start(maxMs)
 
-    fun stop() { stopRequested = true }
+    fun stop() = synchronized(lock) { stopRequested = true; restartMaxMs = null }
 
     fun start(maxMs: Int = 6_000) {
-        if (_recording.value) return
         if (!hasPermission()) { onError("RECORD_AUDIO not granted"); return }
-        _recording.value = true
-        stopRequested = false
+        synchronized(lock) {
+            if (running) { if (stopRequested) restartMaxMs = maxMs; return }
+            running = true
+            stopRequested = false
+            _recording.value = true
+        }
         thread(name = "ptt") {
-            var source: PcmSource? = null
-            var listenSent = false
+            var next: Int? = maxMs
             try {
-                source = sourceFactory()
-                source.start()
-                sendRaw(GlassesChannels.LISTEN, "{}")
-                listenSent = true
-                val vad = EnergyVad(maxMs = maxMs)
-                val chunk = ByteArray(3_200)
-                while (!stopRequested) {
-                    val n = source.read(chunk)
-                    if (n <= 0) break
-                    val bytes = chunk.copyOf(n)
-                    sendRaw(GlassesChannels.AUDIO, AudioChunks.encode(bytes))
-                    if (vad.feed(bytes) != VadDecision.Continue) break
+                while (next != null) {
+                    capture(next)
+                    next = takeRestartOrFinish()
                 }
-            } catch (e: Exception) {
-                onError("Mic unavailable: ${e.message}")
             } finally {
-                runCatching { source?.close() }
-                if (listenSent) runCatching { sendRaw(GlassesChannels.LISTEN_END, "{}") }
-                _recording.value = false
+                if (next != null) synchronized(lock) { running = false; restartMaxMs = null; _recording.value = false } // thread died
             }
+        }
+    }
+
+    /** Atomically: hand the thread a queued restart, or mark capture finished so the next start() opens a new one. */
+    private fun takeRestartOrFinish(): Int? = synchronized(lock) {
+        restartMaxMs.also { r ->
+            restartMaxMs = null
+            if (r != null) stopRequested = false else { running = false; _recording.value = false }
+        }
+    }
+
+    private fun capture(maxMs: Int) {
+        var source: PcmSource? = null
+        var listenSent = false
+        try {
+            source = sourceFactory()
+            source.start()
+            sendRaw(GlassesChannels.LISTEN, Wire.encode(ListenRequest())) // versioned: the hub ignores voice from a mismatched app
+            listenSent = true
+            val vad = EnergyVad(maxMs = maxMs)
+            val chunk = ByteArray(3_200)
+            while (!synchronized(lock) { stopRequested }) {
+                val n = source.read(chunk)
+                if (n <= 0) break
+                val bytes = chunk.copyOf(n)
+                sendRaw(GlassesChannels.AUDIO, AudioChunks.encode(bytes))
+                if (vad.feed(bytes) != VadDecision.Continue) break
+            }
+        } catch (e: Exception) {
+            onError("Mic unavailable: ${e.message}")
+        } finally {
+            runCatching { source?.close() }
+            if (listenSent) runCatching { sendRaw(GlassesChannels.LISTEN_END, "{}") }
         }
     }
 }

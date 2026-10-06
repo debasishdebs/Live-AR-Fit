@@ -30,6 +30,7 @@ import com.debasish.livefit.services.music.MusicAction
 import com.debasish.livefit.services.music.WorkoutMusicPolicy
 import com.debasish.livefit.services.music.YtmMediaSessionService
 import com.debasish.livefit.services.voice.FakeVoiceService
+import com.debasish.livefit.services.voice.GlassesVoiceBridge
 import com.debasish.livefit.services.voice.LiveVoiceService
 import com.debasish.livefit.services.voice.android.AndroidOnDeviceStt
 import com.debasish.livefit.services.voice.android.PhoneMic
@@ -135,11 +136,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         scope.launch { watch.commands.collect(router::dispatch) }
         dataLayer?.let { link -> scope.launch { link.outdated.collect { router.markOutdated(DeviceKind.Watch) } } }
         scope.launch {
+            val glassesVoice = GlassesVoiceBridge(voice) // forwards audio/end only to a capture the glasses own
             glasses.events.collect { e ->
                 when (e) {
-                    GlassesEvent.Listen -> voice.startExternal()
-                    is GlassesEvent.Audio -> voice.feed(e.pcm)
-                    GlassesEvent.ListenEnd -> voice.endExternal()
+                    GlassesEvent.Listen -> glassesVoice.onListen()
+                    is GlassesEvent.Audio -> glassesVoice.onAudio(e.pcm)
+                    GlassesEvent.ListenEnd -> glassesVoice.onListenEnd()
                     is GlassesEvent.Issue -> router.dispatch(e.envelope)
                     is GlassesEvent.Outdated -> router.markOutdated(DeviceKind.Glasses)
                 }

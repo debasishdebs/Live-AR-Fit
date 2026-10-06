@@ -2,14 +2,11 @@ package com.debasish.livefit.services.glasses
 
 import android.app.Activity
 import android.content.Context
-import android.util.Base64
 import android.util.Log
-import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.DeviceStatus
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
-import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.GlassesEvent
@@ -56,6 +53,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     private var retryJob: Job? = null
     private var connectJob: Job? = null
     private var lastSettings: HudSettingsFrame? = null
+    private val inbound = GlassesInbound() // thread-safe: fed from CXR callback threads
 
     private val _status = MutableStateFlow(DeviceStatus("Rokid Glasses", LinkState.Disconnected))
     override val status: StateFlow<DeviceStatus> = _status
@@ -149,6 +147,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             val old = session
             session = null
             old?.close()
+            inbound.reset()
             val s = manager.create(
                 SessionConfig(
                     sessionType = SessionType.CUSTOM_APP,
@@ -177,6 +176,16 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         }
     }
 
+    /**
+     * Forget the rejected token and the in-process authorization (review #11). The retry then goes through the
+     * normal bounded authorization path in [openSession]; a fresh token rejected again stops at "Authorize in Hi Rokid".
+     */
+    private fun onTokenRejected() {
+        app.getSharedPreferences(PREFS, 0).edit().remove(KEY_TOKEN).apply()
+        if (auth.tokenRejected()) act(policy.onEvent(LinkEvent.ConnectFailed))
+        else { authDeclined = true; act(policy.onEvent(LinkEvent.AuthFailed)) }
+    }
+
     private fun onGlassesMessage(cmd: String, bytes: ByteArray?) {
         val text = try {
             bytes?.let { Caps.fromBytes(it).at(0).string }
@@ -186,18 +195,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             Log.w(TAG, "bad payload on $cmd", e); null
         }
         if (text.isNullOrEmpty()) return
-        when (cmd) {
-            GlassesChannels.LISTEN -> _events.tryEmit(GlassesEvent.Listen)
-            // Audio is Base64 text on lf_audio (spike-verified; deliberate deviation from a raw-bytes argument).
-            GlassesChannels.AUDIO -> runCatching { Base64.decode(text, Base64.NO_WRAP) }.getOrNull()
-                ?.takeIf { it.isNotEmpty() }?.let { _events.tryEmit(GlassesEvent.Audio(it)) }
-            GlassesChannels.LISTEN_END -> _events.tryEmit(GlassesEvent.ListenEnd)
-            GlassesChannels.COMMAND -> {
-                val v = Wire.versionOf(text) ?: return
-                if (v != PROTOCOL_VERSION) _events.tryEmit(GlassesEvent.Outdated(v))
-                else runCatching { Wire.decode<CommandEnvelope>(text) }.getOrNull()?.let { _events.tryEmit(GlassesEvent.Issue(it)) }
-            }
-        }
+        inbound.onMessage(cmd, text).forEach { _events.tryEmit(it) }
     }
 
     override suspend fun push(frame: StateFrame) = send(GlassesChannels.STATE, Wire.encode(frame))
@@ -223,7 +221,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     /** CXR callbacks arrive on binder threads: hop onto [scope] before touching the policy or session. */
     private fun lifecycleFor(s: CxrSession) = object : ISessionLifecycleCbk {
         private fun ifCurrent(event: LinkEvent) = post { if (s === session) act(policy.onEvent(event)) }
-        override fun onSessionStarted() = ifCurrent(LinkEvent.Started)
+        override fun onSessionStarted() = post { if (s === session) { auth.sessionStarted(); act(policy.onEvent(LinkEvent.Started)) } }
         override fun onSessionPaused(reason: PausedReason) = ifCurrent(LinkEvent.Paused)
         override fun onSessionResumed() = ifCurrent(LinkEvent.Resumed)
         override fun onSessionTerminating(reason: TerminatingReason, graceMs: Long) = Unit
@@ -234,7 +232,11 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             act(policy.onEvent(if (glassesLeft) LinkEvent.GlassesExited else LinkEvent.Closed))
         }
         override fun onConnectResult(ok: Boolean, code: SessionErrorCode?) = post {
-            if (!ok && s === session) { session = null; Log.w(TAG, "connect failed $code"); act(policy.onEvent(LinkEvent.ConnectFailed)) }
+            if (ok || s !== session) return@post
+            session = null
+            Log.w(TAG, "connect failed $code")
+            if (code == SessionErrorCode.TOKEN_EXPIRED || code == SessionErrorCode.NOT_AUTHENTICATED) onTokenRejected()
+            else act(policy.onEvent(LinkEvent.ConnectFailed))
         }
     }
 

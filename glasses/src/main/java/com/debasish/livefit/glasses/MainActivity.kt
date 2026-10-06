@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.debasish.livefit.glasses.hud.ConfirmInput
+import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudMode
 import com.debasish.livefit.glasses.hud.HudOverlay
@@ -91,7 +92,8 @@ class MainActivity : ComponentActivity() {
         val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
         when (keyCode) {
             KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER ->
-                if (pending) confirmInput.onTap()?.let { controller.send(it); ptt.stop() } else ptt.toggle()
+                if (pending) confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
+                else if (controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
             // One swipe can emit several key events; debounce like the UPI app does.
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 val now = System.currentTimeMillis()
