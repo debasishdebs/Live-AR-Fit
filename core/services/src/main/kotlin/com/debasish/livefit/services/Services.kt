@@ -123,7 +123,11 @@ interface HistoryStore : SessionStore {
     /** Finalized sessions, newest first (Complete and Incomplete; Demo = Fake provenance). */
     val sessions: Flow<List<com.debasish.livefit.model.SessionSummary>>
     suspend fun samples(sessionId: String): List<com.debasish.livefit.model.Sample>
-    suspend fun clearAll()
+    /**
+     * "Clear history": removes finalized sessions (Complete/Incomplete) and their samples from view and storage.
+     * Open sessions keep their data, and lifecycle tombstones stay so stale traffic is still rejected.
+     */
+    suspend fun clearFinished()
 }
 
 /** Platform speech-to-text, on-device only (spec §5.4). */

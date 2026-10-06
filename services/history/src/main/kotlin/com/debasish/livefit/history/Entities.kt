@@ -6,9 +6,9 @@ import androidx.room.Index
 @Entity(tableName = "session", primaryKeys = ["id"])
 data class SessionEntity(
     val id: String,
-    /** JSON of SessionSummary once finalized; null while open. */
+    /** JSON of SessionSummary once finalized ("" once cleared); null while open. */
     val summaryJson: String?,
-    /** SessionStatus name while open/finalized, or "Discarded" (tombstone of an abandoned start). */
+    /** SessionStatus name while open/finalized, "Discarded" (tombstone of an abandoned start) or "Cleared" (finalized, removed by Clear history). */
     val status: String,
     val startMs: Long,
     val createdAtMs: Long,

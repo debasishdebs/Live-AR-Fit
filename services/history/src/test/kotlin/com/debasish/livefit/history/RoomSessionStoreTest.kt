@@ -56,8 +56,54 @@ class RoomSessionStoreTest {
         s.storeDelta(d(0)); s.discard("s")
         assertTrue(s.deltas("s").isEmpty())
         assertTrue(s.openSessionIds().isEmpty())
-        s.clearAll()
+        s.clearFinished()
         assertTrue(s.sessions.first().isEmpty())
+    }
+
+    private fun summary(id: String, status: SessionStatus = SessionStatus.Complete) =
+        SessionSummary(id = id, type = WorkoutType.Run, startMs = 0, endMs = 9_000, activeMs = 9_000, provenance = live, status = status, endReason = EndReason.User)
+
+    /** Review #2: clearing history keeps a running session's acknowledged data across a restart. */
+    @Test fun clearFinishedKeepsOpenSessionAcrossRestart() = runTest {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db1 = HistoryDatabase.create(ctx)
+        val s1 = RoomSessionStore(db1)
+        s1.storeDelta(d(0, samples = listOf(Sample(1_000, hr = 100)), events = listOf(SessionEvent.Started(0, WorkoutType.Run))))
+        s1.storeDelta(d(1, samples = listOf(Sample(2_000, hr = 105)))) // acked: the watch may already have pruned 0..1
+        s1.storeDelta(SessionDelta(sessionId = "old", seq = 0, samples = listOf(Sample(500, hr = 90)), provenance = live))
+        s1.finalize(summary("old"))
+        s1.clearFinished()
+        assertEquals(2L, s1.storeDelta(d(2))) // new deltas after the clear
+        db1.close()
+
+        val s2 = RoomSessionStore(HistoryDatabase.create(ctx)) // phone restart
+        assertEquals(listOf(0L, 1L, 2L), s2.deltas("s").map { it.seq })
+        assertEquals(listOf(100, 105), s2.samples("s").map { it.hr })
+        assertEquals(listOf("s"), s2.openSessionIds())
+        assertEquals(StoredSessionState.Open, s2.lifecycle("s")!!.state)
+        assertTrue(s2.sessions.first().isEmpty())
+        assertTrue(s2.samples("old").isEmpty())
+        assertTrue(s2.deltas("old").isEmpty())
+    }
+
+    @Test fun clearFinishedKeepsTombstonesButHidesThem() = runTest {
+        val s = store()
+        s.discard("abandoned")
+        s.storeDelta(SessionDelta(sessionId = "done", seq = 0, samples = listOf(Sample(500, hr = 90)), provenance = live))
+        s.markEnded("done", EndReason.User, 9_000)
+        s.finalize(summary("done", SessionStatus.Incomplete))
+        s.clearFinished()
+        assertTrue(s.sessions.first().isEmpty())
+        assertEquals(StoredSessionState.Discarded, s.lifecycle("abandoned")!!.state)
+        assertEquals("stale replays are still rejected", StoredSessionState.Finalized, s.lifecycle("done")!!.state)
+        // A late finalize (e.g. a replayed final delta) must not bring the cleared workout back.
+        s.finalize(summary("done"))
+        assertTrue(s.sessions.first().isEmpty())
+        assertTrue("done" !in s.openSessionIds())
+        // Later workouts still show up.
+        s.storeDelta(SessionDelta(sessionId = "next", seq = 0, provenance = live))
+        s.finalize(summary("next"))
+        assertEquals(listOf("next"), s.sessions.first().map { it.id })
     }
 
     /** The hub's restart memory (Codex P1): tombstones, end time and reason survive in the database. */
