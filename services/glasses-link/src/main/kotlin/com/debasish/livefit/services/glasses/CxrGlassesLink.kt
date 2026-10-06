@@ -176,6 +176,16 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         }
     }
 
+    /**
+     * Forget the rejected token and the in-process authorization (review #11). The retry then goes through the
+     * normal bounded authorization path in [openSession]; a fresh token rejected again stops at "Authorize in Hi Rokid".
+     */
+    private fun onTokenRejected() {
+        app.getSharedPreferences(PREFS, 0).edit().remove(KEY_TOKEN).apply()
+        if (auth.tokenRejected()) act(policy.onEvent(LinkEvent.ConnectFailed))
+        else { authDeclined = true; act(policy.onEvent(LinkEvent.AuthFailed)) }
+    }
+
     private fun onGlassesMessage(cmd: String, bytes: ByteArray?) {
         val text = try {
             bytes?.let { Caps.fromBytes(it).at(0).string }
@@ -211,7 +221,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     /** CXR callbacks arrive on binder threads: hop onto [scope] before touching the policy or session. */
     private fun lifecycleFor(s: CxrSession) = object : ISessionLifecycleCbk {
         private fun ifCurrent(event: LinkEvent) = post { if (s === session) act(policy.onEvent(event)) }
-        override fun onSessionStarted() = ifCurrent(LinkEvent.Started)
+        override fun onSessionStarted() = post { if (s === session) { auth.sessionStarted(); act(policy.onEvent(LinkEvent.Started)) } }
         override fun onSessionPaused(reason: PausedReason) = ifCurrent(LinkEvent.Paused)
         override fun onSessionResumed() = ifCurrent(LinkEvent.Resumed)
         override fun onSessionTerminating(reason: TerminatingReason, graceMs: Long) = Unit
@@ -222,7 +232,11 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             act(policy.onEvent(if (glassesLeft) LinkEvent.GlassesExited else LinkEvent.Closed))
         }
         override fun onConnectResult(ok: Boolean, code: SessionErrorCode?) = post {
-            if (!ok && s === session) { session = null; Log.w(TAG, "connect failed $code"); act(policy.onEvent(LinkEvent.ConnectFailed)) }
+            if (ok || s !== session) return@post
+            session = null
+            Log.w(TAG, "connect failed $code")
+            if (code == SessionErrorCode.TOKEN_EXPIRED || code == SessionErrorCode.NOT_AUTHENTICATED) onTokenRejected()
+            else act(policy.onEvent(LinkEvent.ConnectFailed))
         }
     }
 

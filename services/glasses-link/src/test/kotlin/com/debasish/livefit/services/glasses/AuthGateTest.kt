@@ -35,4 +35,32 @@ class AuthGateTest {
         assertTrue(g.result(false))
         assertTrue(g.begin(1))
     }
+
+    /** Review #11: TOKEN_EXPIRED / NOT_AUTHENTICATED drop the in-process authorization. */
+    @Test fun rejectedTokenRevokesAuthorizationAndAllowsOneReauthorization() {
+        val g = AuthGate()
+        g.begin(0); g.result(true)
+        assertTrue(g.tokenRejected(), "first rejection: go through authorization again")
+        assertFalse(g.authorized)
+        assertTrue(g.begin(1), "a new attempt may launch at once")
+        assertTrue(g.result(true))
+        assertTrue(g.authorized)
+    }
+
+    @Test fun tokenRejectedAgainRightAfterReauthorizingGivesUp() {
+        val g = AuthGate()
+        g.begin(0); g.result(true)
+        assertTrue(g.tokenRejected())
+        g.begin(1); g.result(true)
+        assertFalse(g.tokenRejected(), "no relaunch loop")
+        assertFalse(g.authorized)
+    }
+
+    @Test fun aStartedSessionRearmsReauthorization() {
+        val g = AuthGate()
+        g.begin(0); g.result(true)
+        g.tokenRejected(); g.begin(1); g.result(true)
+        g.sessionStarted()
+        assertTrue(g.tokenRejected(), "a later expiry is a new rejection")
+    }
 }
