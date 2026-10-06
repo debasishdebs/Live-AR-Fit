@@ -88,9 +88,10 @@ class LiveVoiceService(
             }
             if (!current) return@launch // superseded by a newer capture while recognising
             when {
+                // The prompt this capture answered was answered elsewhere, expired or was replaced while recognising: end quietly,
+                // whatever was (or wasn't) heard — a "Didn't catch that" / "Say yes or no" would ask about a prompt that is gone (V1).
+                confirmationId != null && pendingConfirmationId() != confirmationId -> log("voice \"${text.orEmpty()}\" -> stale answer for $confirmationId, dropped")
                 text.isNullOrBlank() || pack == null -> { log("voice: no transcript"); toast("Didn't catch that") }
-                // The prompt this capture answered expired or was replaced while recognising: drop it quietly.
-                confirmationId != null && pendingConfirmationId() != confirmationId -> log("voice \"$text\" -> stale answer for $confirmationId, dropped")
                 confirmationId != null -> pack.parseYesNo(text).also { log("voice \"$text\" -> answer $it for $confirmationId") }
                     ?.let { onAnswer(confirmationId, it) } ?: toast("Say yes or no")
                 else -> runCommands(pack, text)
