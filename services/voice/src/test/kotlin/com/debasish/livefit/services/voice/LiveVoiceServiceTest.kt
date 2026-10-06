@@ -24,11 +24,13 @@ class LiveVoiceServiceTest {
         var sessions = 0
         var ended = 0
         var fed = 0
+        var cancelled = 0
         val result = CompletableDeferred<String?>()
         override fun isAvailable(locale: String) = available
         override fun start(locale: String): SttSession { sessions++; return object : SttSession {
             override fun feed(pcm: ByteArray) { fed += pcm.size }
             override fun end() { ended++ }
+            override fun cancel() { cancelled++ }
             override suspend fun awaitFinal(timeoutMs: Long) = withTimeoutOrNull(timeoutMs) { result.await() }
         } }
     }
@@ -218,5 +220,42 @@ class LiveVoiceServiceTest {
         v.endExternal(c2); results[1].complete("no"); runCurrent()
         assertEquals(listOf("c2" to false), answers)
         assertEquals(VoiceState.Idle, v.state.value)
+    }
+
+    /** Review M3: a prompt arriving while a command is still recognising preempts it, and the old recognizer is cancelled. */
+    @Test fun newPromptPreemptsAProcessingCommandCapture() = runTest {
+        val results = ArrayDeque<CompletableDeferred<String?>>()
+        var cancelled = 0
+        val stt = object : SpeechToText {
+            override fun isAvailable(locale: String) = true
+            override fun start(locale: String): SttSession = CompletableDeferred<String?>().also { results.addLast(it) }.let { r ->
+                object : SttSession {
+                    override fun feed(pcm: ByteArray) = Unit
+                    override fun end() = Unit
+                    override fun cancel() { cancelled++; r.complete(null) }
+                    override suspend fun awaitFinal(timeoutMs: Long) = r.await()
+                }
+            }
+        }
+        val v = LiveVoiceService(backgroundScope, stt, locale = { "en-IN" }, pendingConfirmationId = { pending },
+            onCommand = { commands += it }, onAnswer = { id, yes -> answers += id to yes }, toast = { toasts += it })
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent() // mid-command, no prompt
+        assertEquals(VoiceState.Processing, v.state.value)
+        pending = "c1"
+        val answer = assertNotNull(v.startExternal(), "the answer to the new prompt must not be dropped")
+        assertEquals(1, cancelled, "the superseded recognizer is cancelled")
+        runCurrent()
+        assertEquals(VoiceState.Listening, v.state.value)
+        assertTrue(toasts.isEmpty(), "the cancelled capture ends quietly")
+        v.endExternal(answer); results[1].complete("yes"); runCurrent()
+        assertEquals(listOf("c1" to true), answers)
+        assertTrue(commands.isEmpty())
+    }
+
+    @Test fun processingCommandStillBlocksAPlainSecondListen() = runTest {
+        val stt = FakeStt(); val v = voice(stt)
+        v.endExternal(assertNotNull(v.startExternal())); runCurrent()
+        assertNull(v.startExternal())
+        assertEquals(0, stt.cancelled)
     }
 }

@@ -142,6 +142,8 @@ interface SttSession {
     /** 16 kHz mono PCM16 little-endian. */
     fun feed(pcm: ByteArray)
     fun end()
+    /** Abandons recognition (a newer capture superseded this one): releases the recognizer; [awaitFinal] then returns promptly. */
+    fun cancel() {}
     /** Final (or last partial) text; null on error/timeout. */
     suspend fun awaitFinal(timeoutMs: Long): String?
 }

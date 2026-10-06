@@ -37,14 +37,18 @@ class LiveVoiceService(
 
     override fun startExternal(): Long? = synchronized(lock) {
         if (_state.value == VoiceState.Listening) return@synchronized null
-        // A capture still recognising an answer to a prompt that is gone can only be discarded: let the new prompt's answer in.
-        if (_state.value == VoiceState.Processing && (confirmationAtStart == null || pendingConfirmationId() == confirmationAtStart)) return@synchronized null
+        // A capture still recognising for a prompt that is no longer the pending one (or for a command, when a prompt has since
+        // arrived) can only be discarded: let the new prompt's answer in (review M3).
+        val preempt = _state.value == VoiceState.Processing
+        if (preempt && pendingConfirmationId() == confirmationAtStart) return@synchronized null
         val loc = locale()
         val pack = LanguageRegistry.forLocale(loc)
         if (pack == null || !stt.isAvailable(loc)) {
             toast("Voice needs the ${pack?.displayName ?: loc} pack")
             return@synchronized null
         }
+        // Release the superseded recognizer first: some devices answer a second on-device recognizer with ERROR_RECOGNIZER_BUSY.
+        if (preempt) session?.cancel()
         val s = stt.start(loc)
         session = s
         val id = ++capture
