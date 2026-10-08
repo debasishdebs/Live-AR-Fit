@@ -144,6 +144,10 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 - **Done:** brainstorming (architectural path). Decisions: watch GPS first + phone fallback; glasses street map rendered by phone from OSM tiles (glasses have no internet); watch real OSM tiles; page set Glance → Workout → Stats → Playlist → Map → Music controls on both; page mode / scroll mode; full gesture → action mapping per page/mode. Flagged: long press is reserved by the system ("Hi Rokid"), so scroll exit = idle timeout / ✕ Back. Spec: `docs/superpowers/specs/2026-10-09-livefit-pages-maps-gestures-design.md`.
 - **Why:** new subsystem + cross-device protocol change → full spec before planning.
 
+### 18. Codex review of the pages/map spec (8 findings + 2 corrections)
+- **Done:** verified (watch exercise FGS is health-only; zoom 16 ≈ 1.08 km at 480 px) and applied all: 10 s GPS freshness + degraded states, chronological route merge with watch precedence/duplicates/clock tolerance, `health|location` watch FGS + phone hub re-promotion on visibility, watch route file surviving acks/process death, Map visibility re-announced on reconnect + stale image rejection, per-page gesture safety, page fallback to Workout + scroll-mode rules, watch Playlist via QueueFrame; default zoom 18. Commit `2f5a7ad`.
+- **Why:** each finding pointed at a real gap in the contract that would have surfaced as an on-device bug.
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
