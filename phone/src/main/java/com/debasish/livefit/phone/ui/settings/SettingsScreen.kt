@@ -44,6 +44,9 @@ import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.components.SectionLabel
 import com.debasish.livefit.phone.ui.components.SoftCard
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
+import androidx.compose.ui.platform.LocalContext
+import com.debasish.livefit.phone.ui.linked.hasMusicAccess
+import com.debasish.livefit.phone.ui.linked.musicStatusLabel
 
 @Composable
 fun SettingsScreen(
@@ -59,7 +62,7 @@ fun SettingsScreen(
     val watch by services.watch.status.collectAsStateWithLifecycle()
     val glassesStatus = glasses.link.name + (glasses.batteryPct?.let { " · $it%" } ?: "")
     val watchStatus = watch.link.name + (watch.batteryPct?.let { " · $it%" } ?: "")
-    val musicStatus = if (services.musicConnected.collectAsStateWithLifecycle().value) "Connected" else "Needs notification access"
+    val musicStatus = musicStatusLabel(services.musicConnected.collectAsStateWithLifecycle().value, hasMusicAccess(LocalContext.current))
     val nearby by services.settings.startWhenNearby.collectAsStateWithLifecycle()
     val nearbyStatus = "Start LiveFit when nearby: " + nearby.filterValues { it }.keys
         .joinToString { if (it == com.debasish.livefit.model.DeviceKind.Glasses) "glasses" else "watch" }.ifEmpty { "off" }

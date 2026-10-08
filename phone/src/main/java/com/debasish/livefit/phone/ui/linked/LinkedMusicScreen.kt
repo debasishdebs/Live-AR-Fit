@@ -53,7 +53,7 @@ fun LinkedMusicScreen(services: ServiceGraph, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
         ScreenHeader("YouTube Music", onBack)
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-            ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "Music control", if (connected) "Connected" else "Needs notification access",
+            ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "Music control", musicStatusLabel(connected, hasMusicAccess(context)),
                 { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
         }
         SectionLabel("When a workout starts")
