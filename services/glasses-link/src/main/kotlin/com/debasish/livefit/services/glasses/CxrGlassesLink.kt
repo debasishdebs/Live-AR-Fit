@@ -57,6 +57,8 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     private var lastSettings: HudSettingsFrame? = null
     private var lastQueue: QueueFrame? = null
     private val inbound = GlassesInbound() // thread-safe: fed from CXR callback threads
+    /** Session-less CXRLink kept bound while "closed on glasses", to notice the user reopening LiveFit there (R1). */
+    private val watcher = GlassAppWatcher(app) { post { act(policy.onEvent(LinkEvent.GlassesAppOpened)) } }
 
     private val _status = MutableStateFlow(DeviceStatus("Rokid Glasses", LinkState.Disconnected))
     override val status: StateFlow<DeviceStatus> = _status
@@ -114,6 +116,15 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         act(policy.manualConnect())
     }
 
+    /** App resumed (R1 fix a): one manual connect when disconnected and authorized; checked on [scope] after any pending connect. */
+    fun connectOnResume() = post {
+        val hasToken = app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null) != null
+        if (!shouldReconnectOnResume(_status.value.link, hasToken, authDeclined)) return@post
+        Log.i(TAG, "app resumed: reconnecting (${_status.value.detail ?: "disconnected"})")
+        auth.clearStale(System.currentTimeMillis())
+        act(policy.manualConnect())
+    }
+
     override fun connectOnce() = post {
         auth.clearStale(System.currentTimeMillis())
         act(policy.autoConnect())
@@ -131,9 +142,20 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             LinkAction.MarkClosedOnGlasses -> _status.update { it.copy(link = LinkState.Disconnected, detail = "LiveFit closed on glasses") }
             LinkAction.MarkAuthNeeded -> _status.update { it.copy(link = LinkState.Disconnected, detail = "Authorize in Hi Rokid") }
         }
+        syncWatcher()
+    }
+
+    /** Watch the glasses' foreground app only while closed on glasses (R1); any other state releases the extra bind. */
+    private fun syncWatcher() {
+        if (!policy.closedOnGlasses) { watcher.stop(); return }
+        if (watcher.active) return
+        val token = app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null) ?: return
+        preferGlobalHiRokid()
+        watcher.start(token)
     }
 
     private fun openSession() {
+        watcher.stop() // unbind the watcher before a session binds its own CXRLink
         val token = app.getSharedPreferences(PREFS, 0).getString(KEY_TOKEN, null)
         if (token == null || !auth.authorized) {
             // Background authorization: companion apps may start activities (spec §5.3).

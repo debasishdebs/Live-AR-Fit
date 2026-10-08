@@ -241,6 +241,7 @@ private fun ItemRow(item: ListItem, source: ListSource, onClick: () -> Unit) {
             item.subtitle?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = LiveFitColors.InkSoft) }
         }
         item.trailingText?.let { Text(it, style = MaterialTheme.typography.titleMedium, color = LiveFitColors.Ink) }
+        item.toggle?.let { androidx.compose.material3.Switch(it, null) }
         StatusBadge(item.status, source)
     }
 }

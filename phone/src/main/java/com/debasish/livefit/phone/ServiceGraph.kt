@@ -196,7 +196,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         // ---- end link wiring ----
         // Connecting is owned by the authorization flow (AuthActivity / GlassesSessionPolicy): CXR-L must be authorized in-process first.
         // Presence re-arm only; the glasses connect when CompanionPresenceService reports them or the app opens.
-        CompanionLinker.observePresence(app)
+        CompanionLinker.observePresence(app, settings::startWhenNearby)
     }
 
     private fun buildFrame() = StateFrame(

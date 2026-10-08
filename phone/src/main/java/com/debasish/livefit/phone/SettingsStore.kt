@@ -1,6 +1,7 @@
 package com.debasish.livefit.phone
 
 import android.content.Context
+import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.music.MusicOnStart
@@ -55,9 +56,25 @@ class SettingsStore(context: Context) {
     val gpsOutdoors: StateFlow<Boolean> = _gpsOutdoors
     fun setGpsOutdoors(v: Boolean) { _gpsOutdoors.value = v; prefs.edit().putString("gpsOutdoors", v.toString()).apply() }
 
+    /** Settings → Nearby devices (R2): start the hub when this companion-paired device comes nearby. Default on. */
+    private val _startWhenNearby = MutableStateFlow(
+        NEARBY_KINDS.associateWith { prefs.getString(nearbyKey(it), null)?.toBooleanStrictOrNull() ?: true },
+    )
+    val startWhenNearby: StateFlow<Map<DeviceKind, Boolean>> = _startWhenNearby
+    fun startWhenNearby(kind: DeviceKind): Boolean = _startWhenNearby.value[kind] ?: true
+    fun setStartWhenNearby(kind: DeviceKind, v: Boolean) {
+        _startWhenNearby.value = _startWhenNearby.value + (kind to v)
+        prefs.edit().putString(nearbyKey(kind), v.toString()).apply()
+    }
+    private fun nearbyKey(kind: DeviceKind) = "startWhenNearby.${kind.name}"
+
     private val _setupDone = MutableStateFlow(prefs.getBoolean("setupDone", false))
     val setupDone: StateFlow<Boolean> = _setupDone
     fun setSetupDone() { _setupDone.value = true; prefs.edit().putBoolean("setupDone", true).apply() }
 
-    private companion object { const val KEY_HUD = "hud" }
+    companion object {
+        private const val KEY_HUD = "hud"
+        /** Companion-paired devices listed under Settings → Nearby devices. */
+        val NEARBY_KINDS = listOf(DeviceKind.Glasses, DeviceKind.Watch)
+    }
 }

@@ -35,7 +35,8 @@ object CompanionLinker {
             }
             override fun onAssociationCreated(info: AssociationInfo) {
                 activity.getSharedPreferences("companion", 0).edit().putInt(kind.name, info.id).apply()
-                observe(activity, info.id)
+                val enabled = (activity.application as? LiveFitApp)?.services?.settings?.startWhenNearby(kind) ?: true
+                if (enabled) observe(activity, info.id)
                 onResult(true)
             }
             override fun onFailure(error: CharSequence?) { Log.w(TAG, "associate failed: $error"); onResult(false) }
@@ -56,10 +57,19 @@ object CompanionLinker {
         return true
     }
 
-    /** Call at app start: re-arms presence observation for saved associations. */
-    fun observePresence(context: Context) {
+    /**
+     * Call at app start and whenever a "Start LiveFit when nearby" toggle changes (R2): observes the presence of saved
+     * associations whose toggle is on and stops observing (and forgets the presence of) those whose toggle is off.
+     */
+    fun observePresence(context: Context, enabled: (DeviceKind) -> Boolean) {
         val prefs = context.getSharedPreferences("companion", 0)
-        DeviceKind.entries.mapNotNull { k -> prefs.getInt(k.name, -1).takeIf { it >= 0 } }.forEach { observe(context, it) }
+        val paired = DeviceKind.entries.mapNotNull { k -> prefs.getInt(k.name, -1).takeIf { it >= 0 }?.let { k to it } }.toMap()
+        val plan = NearbyPolicy.observation(paired, enabled)
+        plan.observe.forEach { observe(context, it) }
+        plan.stopObserving.forEach { id ->
+            stopObserving(context, id)
+            synchronized(this) { presence.remove(id) }
+        }
     }
 
     /** Transports that can report a device as nearby; present = any of them still reports it. */
@@ -122,6 +132,20 @@ object CompanionLinker {
             }
         } catch (e: Exception) {
             Log.w(TAG, "observe presence failed for $associationId", e)
+        }
+    }
+
+    private fun stopObserving(context: Context, associationId: Int) {
+        val cdm = context.getSystemService(CompanionDeviceManager::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= 36) {
+                cdm.stopObservingDevicePresence(ObservingDevicePresenceRequest.Builder().setAssociationId(associationId).build())
+            } else if (Build.VERSION.SDK_INT >= 33) {
+                @Suppress("DEPRECATION")
+                cdm.myAssociations.firstOrNull { it.id == associationId }?.deviceMacAddress?.toString()?.let { cdm.stopObservingDevicePresence(it) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "stop observing presence failed for $associationId", e)
         }
     }
 

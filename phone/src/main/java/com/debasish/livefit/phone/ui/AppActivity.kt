@@ -124,7 +124,11 @@ class AppActivity : ComponentActivity() {
                                 onLanguages = { nav.navigate(listRoute(ListSources.LANGUAGES, filter = null)) },
                                 onDeveloper = { startActivity(Intent().setClassName(packageName, "com.debasish.livefit.phone.SpikeActivity")) },
                                 onNavigate = { route ->
-                                    nav.navigate(if (route == "permissions") listRoute(ListSources.PERMISSIONS, filter = null) else route)
+                                    nav.navigate(when (route) {
+                                        "permissions" -> listRoute(ListSources.PERMISSIONS, filter = null)
+                                        "nearby" -> listRoute(ListSources.NEARBY, filter = null)
+                                        else -> route
+                                    })
                                 },
                             )
                         }
@@ -158,10 +162,14 @@ class AppActivity : ComponentActivity() {
         }
     }
 
-    /** App opened or back from a permission screen: start the hub if it isn't running yet (spec §5.2). */
+    /**
+     * App opened or back from a permission screen: start the hub if it isn't running yet (spec §5.2), and reconnect
+     * the glasses once if they are disconnected, including after LiveFit was closed on the glasses (spec §5.3, R1).
+     */
     override fun onResume() {
         super.onResume()
         LiveFitHubService.ensureRunning(this)
+        (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.connectOnResume()
     }
 
     companion object {
