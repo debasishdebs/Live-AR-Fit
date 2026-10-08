@@ -8,22 +8,67 @@ Branch for all work: `design/livefit-v1-v2`. Devices: phone Samsung S25 (Android
 
 ## Origin: brainstorming → spec (2026-10-05, from session transcripts)
 
-| Time | Prompt (owner's words, trimmed) | What it settled |
-|---|---|---|
-| 10:23 | "lets brainstorm. I want to build a app for Rokid which I can invoke using 'Hi Rokid -> Phrase' … companion app: 1) Connect to HealthConnect … read HR, steps, calories, distance, speed live 2) one-time YouTube Music authorization … play, like, playlist, next/back, speed, volume … can we even capture all the required info? identify the gaps" | Gap analysis: Health Connect is batch, not live. |
-| 10:25 | "If it's batch, so are GoogleFit APIs? then how can we get live data … I've samsung watch and AIVELA smart ring" | Live data must come from a watch app (Health Services) over the Wearable Data Layer. |
-| 10:35 | "focus on AIVELA and Huawei later, V1 with samsung watch only. Go ahead with common interface design … youtube: play directly on phone and control externally? okay" | V1 = Galaxy Watch only behind a source interface; YTM controlled via MediaSession. |
-| 11:16 | "Use RokidSDK ofcourse … native glass app … persistent link ~1 Hz … like via voice and phone, speed ignore for V1" | CXR SDK, native glasses APK, persistent link, V1 music scope. |
-| 11:25–14:08 | Spike on real devices (CXR auth without secrets, watch remote start, voice via glasses mic, offline voice pack in-app) | Verified feasibility (see memory "livefit-spike-results"). |
-| 14:36–16:32 | Mock-up reviews: HUD big numbers (HR, kcal, timer, type) + icons, HUD 50 % smaller, HUD settings apply/back-auto-apply, permanent footer, summary pages | UI decisions captured in the spec. |
-| 16:36–16:38 | "Confirmation … on mobile, watch or glass, first answer wins" / "glass yes/no: click and voice, both" | Cross-device confirmation rule. |
-| 16:38 | `/superpowers:brainstorming` | Formal brainstorming started. |
-| 16:45 | "just write spec for V1 and V2. Call out V3 in detail so I can restart brainstorming for just V3" | Spec split: V1, V2, V3 roadmap. |
-| 16:53–16:55 | Approach A chosen: phone owns the workout, watch streams raw readings | Architecture. |
-| 17:39 | "Activity like Google Fit: daily/weekly/monthly bar charts" | Activity tab design. |
-| 17:42 | "YT sign-in under Settings → Linked services … pair/unpair there too … Health Connect writes only live data, never fake" | Linked services + provenance gate. |
-| 17:45 | "Do not use Google online recognizer; download pack at setup … decouple for a future iPhone app" | Offline-only voice, interfaces for portability. |
-| 18:06–18:21 | REVIEW-BRIEF for Codex + three Codex spec-review rounds fixed | Spec approved → `superpowers:writing-plans` (V1 + V2 plans). |
+Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my answer) → **settled**.
+
+**10:23 — Initial idea**
+- *Prompt:* "lets brainstorm. I want to build a app for Rokid which I can invoke using 'Hi Rokid -> Phrase' … companion app: 1) connect to HealthConnect and read HR, steps, breathing, calories, distance, speed live; 2) one-time YouTube Music authorization to play, like, playlist, next/back, 0.5x/2x, volume … can we even capture all the required info? identify the gaps."
+- *Response:* Mostly feasible, but two assumptions don't hold. **Health Connect isn't live** (it stores records synced in batches, minutes–hours late; no push; breathing mostly sleep-only). **No official YouTube Music playback API** (Data API manages playlists, can't play). Workarounds proposed for both.
+- *Settled:* need a live source other than Health Connect; music via the YTM app, not our own player.
+
+**10:25 — Live data source**
+- *Prompt:* "If it's batch, so are GoogleFit APIs? how can we get live data as am working out? I've samsung watch and AIVELA smart ring."
+- *Response:* Google Fit is deprecated (shutting down 2026). Live data must come from the devices: a small **Wear OS watch app using Health Services `ExerciseClient`** streaming to the phone over the **Wearable Data Layer**; the ring is unknown. Also: only one workout session per watch (Samsung Health conflict), keep an ongoing activity.
+- *Settled:* watch app is the live sensor.
+
+**10:35 — Scope + YouTube**
+- *Prompt:* "V1 with samsung watch only. Go ahead with common interface design … youtube: play directly on phone and control externally? okay … we have existing repos in /Desktop/rokid to see connections and voice."
+- *Response:* Phone is the **coordinator** ("Hi Rokid → start workout" → glasses → phone → watch start → confirm). **YouTube Music app plays on the phone** (Premium, background); we act as a remote via `NotificationListenerService` + `MediaController`, volume via phone/glasses, "play X" via `MEDIA_PLAY_FROM_SEARCH`, like via YTM custom action.
+- *Settled:* V1 = Galaxy Watch only behind a metrics-source interface; YTM remote control.
+
+**11:16 — Platform choices**
+- *Prompt:* "Use RokidSDK ofcourse … native glass app … persistent link ~1 Hz … like via voice and phone, speed ignore for V1 … how to test watch remote start?"
+- *Response:* Checked the repos: existing apps used plain Bluetooth serial, **not** the Rokid SDK, and had no voice code — flagged as a correction. Agreed native glasses APK + persistent link.
+- *Settled:* Rokid CXR SDK only (saved to memory), native glasses app, persistent link, V1 music scope (no speed).
+
+**11:25 — SDK credentials**
+- *Prompt:* "we dont have the secrets … people around the world build apps using that only."
+- *Response:* Acknowledged the earlier mistake; credentials come from Rokid's developer portal — then verified on device that **CXR-L 1.1.2 needs no clientSecret/.lc** (token via Hi Rokid authorization).
+- *Settled:* no secrets needed.
+
+**11:30–12:03 — Device spike**
+- *Prompts:* devices connected; "user 11" error; glasses app rotated; can't launch our app by voice from Rokid home.
+- *Response:* Verified on 3 devices: phone opens glasses app in ~1 s, 1 Hz link, watch remote start with live data, YTM controls. Fixed portrait orientation. "Hi Rokid" wake reaches us but the **assistant keeps the mic** (silent audio) and answers itself; voice-launch of sideloaded apps isn't possible.
+- *Settled:* voice via glasses touchpad tap → glasses mic → phone speech recognition.
+
+**13:49–14:08 — Voice test + offline pack**
+- *Prompts:* tap-and-talk tests; "how to download the english pack? bundle the download option in our companion app (Settings → Languages)."
+- *Response:* Built the Languages screen, downloaded English offline; "start workout" recognised without internet.
+- *Settled:* in-app language-pack download.
+
+**14:36–16:32 — Mock-ups and UX**
+- *Prompts:* "everything says coming in build phase?"; HUD big numbers = HR, calories, timer, workout type + iconography; HUD 50 % smaller; HUD placement must affect only the workout HUD; Apply button / auto-apply on back; voice showed wrong commands; watch HR ring colour + zones; summary pages; permanent footer; Samsung Health takeover test.
+- *Response:* Explained design-first stubs; built modular-services mock-ups (`:core:model`, `:core:services`, six service modules with Fake/Live); real phone↔glasses link with live HUD; Apply flow; voice was the Fake service (fixed-phrase demo) → added parser unit tests (found 8 parser bugs); watch↔phone↔glasses sync with phone as hub; footer fixed; takeover test: SH detected, polite start refused, forced start ends SH's workout (~7 s handover) — not reversible.
+- *Settled:* HUD/phone/watch UI direction; takeover must **ask first**.
+
+**16:36–16:38 — Confirmations**
+- *Prompts:* "Confirmation … on mobile, watch or glass, any one place, global" / "glass yes/no: click or voice? both."
+- *Response:* Same prompt on all three devices, first answer wins, others dismissed; glasses: ✓/✕ highlight, swipe moves, tap confirms, double-tap = No, mic auto-opens ~6 s for spoken yes/no; 15 s no answer = No.
+- *Settled:* cross-device confirmation pattern (also for "End workout?" by voice).
+
+**16:38–16:55 — Formal brainstorming (`/superpowers:brainstorming`)**
+- *Prompts:* skill invoked; assumptions corrected (sideloaded APKs, English now/local languages later, ≤1 s latency); "just write spec for V1 and V2, V3 called out in detail"; chose **approach A**.
+- *Response:* Classified as architectural; reflected understanding; latency fix = push-on-change frames; Activity = LiveFit workouts + daily totals card; offered approaches → **A: phone owns the workout, watch streams raw readings and buffers offline until acked**. Plan: V1 + V2 specs + V3 roadmap.
+- *Settled:* architecture A, doc split.
+
+**16:55–17:45 — Design sections 1–6 approved**
+- *Prompts:* section approvals; "Activity like Google Fit with daily/weekly/monthly bar charts"; "YT sign-in under Settings → Linked services, pair/unpair there too; Health Connect writes only live data, never fake"; "Do not use Google online recognizer; download pack at setup; decouple for a future iPhone app."
+- *Response:* Sections: architecture/modules, data flow & sync (StateFrame push-on-change, 5 s heartbeat, latency budget), Live services (Health Services in FGS + ongoing activity, warm-up, GPS rules, takeover check), V2 (Health Connect write-back with clientRecordId de-dup + retry queue + provenance gate; YouTube playlists), Linked services pages, offline-only voice behind a `SpeechToText` interface + first-run setup.
+- *Settled:* full V1/V2 design.
+
+**18:06–18:21 — Review**
+- *Prompts:* "summary of all context and decisions for Codex" → saved as `docs/superpowers/specs/REVIEW-BRIEF.md`; three rounds of Codex spec findings pasted.
+- *Response:* Fixed each round (e.g. 12 s offline rule vs 5 s heartbeat, complete offline recovery, session-scoped commands so a late start can't stop a newer workout, abandoned-start handling) — commits `d9f8422`, `183be30`, ….
+- *Settled:* specs approved → `superpowers:writing-plans` (V1 + V2 plans), then the plan reviews (0a below).
 
 ## Earlier in the session (before context compaction)
 
@@ -89,7 +134,10 @@ Branch for all work: `design/livefit-v1-v2`. Devices: phone Samsung S25 (Android
 ---
 
 ### 15. "What were the initial brainstorming prompts that led to the spec?"
-- **Done:** read the 2026-10-05 transcripts and added the "Origin: brainstorming → spec" table above.
+- **Done:** read the 2026-10-05 transcripts and added the "Origin: brainstorming → spec" section above.
+
+### 16. "Add summarized responses to the initial questions"
+- **Done:** each origin entry now has Prompt → Response (summary of my answer) → Settled.
 
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
