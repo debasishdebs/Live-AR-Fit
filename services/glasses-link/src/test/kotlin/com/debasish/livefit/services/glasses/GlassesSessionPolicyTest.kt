@@ -1,5 +1,6 @@
 package com.debasish.livefit.services.glasses
 
+import com.debasish.livefit.model.LinkState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -97,5 +98,45 @@ class GlassesSessionPolicyTest {
         assertTrue(p.autoConnect().isEmpty(), "a connect is already in flight")
         p.onEvent(LinkEvent.Started)
         assertTrue(p.autoConnect().isEmpty(), "open session")
+    }
+
+    /** R1: the user reopened LiveFit on the glasses after closing it there: that is consent, so reconnect. */
+    @Test fun glassesAppOpenedReconnectsOnlyAfterAClosedOnGlasses() {
+        val p = GlassesSessionPolicy()
+        assertTrue(p.onEvent(LinkEvent.GlassesAppOpened).isEmpty(), "never closed on glasses")
+        p.onEvent(LinkEvent.DevicePresent); p.onEvent(LinkEvent.Started)
+        assertTrue(p.onEvent(LinkEvent.GlassesAppOpened).isEmpty(), "session open")
+        p.onEvent(LinkEvent.GlassesExited)
+        assertTrue(p.closedOnGlasses)
+        assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.onEvent(LinkEvent.GlassesAppOpened))
+        assertTrue(!p.closedOnGlasses)
+        assertTrue(p.onEvent(LinkEvent.GlassesAppOpened).isEmpty(), "connect already in flight")
+    }
+
+    @Test fun closedOnGlassesEndsOnDeviceGoneOrManualConnect() {
+        val p = GlassesSessionPolicy()
+        p.manualConnect(); p.onEvent(LinkEvent.Started); p.onEvent(LinkEvent.GlassesExited)
+        p.onEvent(LinkEvent.DeviceGone)
+        assertTrue(!p.closedOnGlasses)
+        assertTrue(p.onEvent(LinkEvent.GlassesAppOpened).isEmpty())
+        p.manualConnect(); p.onEvent(LinkEvent.Started); p.onEvent(LinkEvent.GlassesExited)
+        p.manualConnect()
+        assertTrue(!p.closedOnGlasses)
+    }
+
+    /** After a close on the glasses the hub still treats a fresh presence / hub start like Idle (unchanged). */
+    @Test fun closedOnGlassesStillAllowsPresenceAndAutoConnect() {
+        val p = GlassesSessionPolicy()
+        p.manualConnect(); p.onEvent(LinkEvent.Started); p.onEvent(LinkEvent.GlassesExited)
+        assertEquals(listOf(LinkAction.MarkConnecting, LinkAction.Connect), p.autoConnect())
+    }
+
+    /** R1 fix a: AppActivity resume reconnects a disconnected, authorized link once; never re-prompts a declined auth. */
+    @Test fun resumeReconnectsOnlyAnAuthorizedDisconnectedLink() {
+        assertTrue(shouldReconnectOnResume(LinkState.Disconnected, hasToken = true, authDeclined = false))
+        assertTrue(!shouldReconnectOnResume(LinkState.Disconnected, hasToken = false, authDeclined = false), "never authorized")
+        assertTrue(!shouldReconnectOnResume(LinkState.Disconnected, hasToken = true, authDeclined = true), "declined")
+        assertTrue(!shouldReconnectOnResume(LinkState.Connecting, hasToken = true, authDeclined = false))
+        assertTrue(!shouldReconnectOnResume(LinkState.Connected, hasToken = true, authDeclined = false))
     }
 }
