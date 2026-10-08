@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
+import com.debasish.livefit.phone.ui.list.sources.NearbyDevicesSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutDaysSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutHistorySource
@@ -22,6 +23,8 @@ data class ListItem(
     val status: ItemStatus = ItemStatus.None,
     /** Optional right-aligned value, e.g. "4.2 km". */
     val trailingText: String? = null,
+    /** Non-null shows a trailing on/off switch; tapping the row runs the source's action (which flips it). */
+    val toggle: Boolean? = null,
 )
 
 /** Generic row state; each source names it (e.g. Done = "Downloaded" or "Granted"). */
@@ -74,6 +77,8 @@ object ListSources {
     const val WORKOUTS = "workouts"
     /** Activity tab level 1 (one row per day); rows open [WORKOUTS] filtered by date. */
     const val WORKOUT_DAYS = "workout-days"
+    /** Settings → Nearby devices (R2): per paired device, "Start LiveFit when nearby". */
+    const val NEARBY = "nearby"
 
     /** [open] navigates to a route (e.g. a session detail or a filtered list). */
     fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
@@ -81,6 +86,7 @@ object ListSources {
         PERMISSIONS -> PermissionSource(context)
         WORKOUTS -> WorkoutHistorySource(services.history, open)
         WORKOUT_DAYS -> WorkoutDaysSource(services.history, open)
+        NEARBY -> NearbyDevicesSource(context.applicationContext, services.settings, open)
         else -> error("Unknown list source: $id")
     }
 }

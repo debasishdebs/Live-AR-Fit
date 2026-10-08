@@ -124,7 +124,11 @@ class AppActivity : ComponentActivity() {
                                 onLanguages = { nav.navigate(listRoute(ListSources.LANGUAGES, filter = null)) },
                                 onDeveloper = { startActivity(Intent().setClassName(packageName, "com.debasish.livefit.phone.SpikeActivity")) },
                                 onNavigate = { route ->
-                                    nav.navigate(if (route == "permissions") listRoute(ListSources.PERMISSIONS, filter = null) else route)
+                                    nav.navigate(when (route) {
+                                        "permissions" -> listRoute(ListSources.PERMISSIONS, filter = null)
+                                        "nearby" -> listRoute(ListSources.NEARBY, filter = null)
+                                        else -> route
+                                    })
                                 },
                             )
                         }

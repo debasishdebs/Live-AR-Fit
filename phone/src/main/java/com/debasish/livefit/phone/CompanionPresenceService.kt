@@ -5,6 +5,7 @@ import android.companion.CompanionDeviceService
 import android.companion.DevicePresenceEvent
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.services.glasses.CxrGlassesLink
@@ -31,12 +32,19 @@ class CompanionPresenceService : CompanionDeviceService() {
 
     private fun handle(associationId: Int, source: CompanionLinker.Source, reported: Boolean) {
         val graph = (application as LiveFitApp).services // builds and starts the hub graph
+        val kind = CompanionLinker.kindFor(this, associationId)
+        // Settings → Nearby devices (R2): a device with "Start LiveFit when nearby" off is ignored (late events too).
+        val enabled = kind?.let(graph.settings::startWhenNearby) ?: true
+        if (!enabled) { Log.i(TAG, "presence of $kind ignored: Start LiveFit when nearby is off"); return }
         // Gone only when every transport (BLE + BT) has dropped it.
         val present = CompanionLinker.setPresent(associationId, source, reported)
-        if (present) LiveFitHubService.ensureRunning(this)
-        if (CompanionLinker.kindFor(this, associationId) == DeviceKind.Glasses) CxrGlassesLink.instance?.onDevicePresence(present)
         // Spec §5.2: stop the hub when no linked device is present and no workout is active.
         val idle = graph.workout.snapshot.value.phase.let { it == WorkoutPhase.Idle || it == WorkoutPhase.Summary }
-        if (!present && idle && !CompanionLinker.anyPresent()) stopService(Intent(this, LiveFitHubService::class.java))
+        val hub = NearbyPolicy.onPresence(enabled, present, idle, CompanionLinker.anyPresent())
+        if (hub == NearbyPolicy.Hub.Start) LiveFitHubService.ensureRunning(this)
+        if (kind == DeviceKind.Glasses) CxrGlassesLink.instance?.onDevicePresence(present)
+        if (hub == NearbyPolicy.Hub.Stop) stopService(Intent(this, LiveFitHubService::class.java))
     }
+
+    private companion object { const val TAG = "CompanionPresence" }
 }

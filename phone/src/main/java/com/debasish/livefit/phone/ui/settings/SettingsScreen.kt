@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Info
@@ -58,6 +59,9 @@ fun SettingsScreen(
     val glassesStatus = glasses.link.name + (glasses.batteryPct?.let { " · $it%" } ?: "")
     val watchStatus = watch.link.name + (watch.batteryPct?.let { " · $it%" } ?: "")
     val musicStatus = if (services.musicConnected.collectAsStateWithLifecycle().value) "Connected" else "Needs notification access"
+    val nearby by services.settings.startWhenNearby.collectAsStateWithLifecycle()
+    val nearbyStatus = "Start LiveFit when nearby: " + nearby.filterValues { it }.keys
+        .joinToString { if (it == com.debasish.livefit.model.DeviceKind.Glasses) "glasses" else "watch" }.ifEmpty { "off" }
     val phase = services.workout.snapshot.collectAsStateWithLifecycle().value.phase
     // Clearing only touches finished workouts, but stay out of the way while one is running or saving.
     val canClear = phase == WorkoutPhase.Idle || phase == WorkoutPhase.Summary
@@ -86,6 +90,8 @@ fun SettingsScreen(
             ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, "Galaxy Watch", watchStatus, { onNavigate("linked/watch") })
             Divider()
             ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "YouTube Music", musicStatus, { onNavigate("linked/music") })
+            Divider()
+            ChipRow(Icons.Rounded.Bluetooth, LiveFitColors.ChipSky, "Nearby devices", nearbyStatus, { onNavigate("nearby") })
         }
         SectionLabel("Glasses")
         Group { ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") }) }
