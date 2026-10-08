@@ -6,6 +6,25 @@ Branch for all work: `design/livefit-v1-v2`. Devices: phone Samsung S25 (Android
 
 ---
 
+## Origin: brainstorming → spec (2026-10-05, from session transcripts)
+
+| Time | Prompt (owner's words, trimmed) | What it settled |
+|---|---|---|
+| 10:23 | "lets brainstorm. I want to build a app for Rokid which I can invoke using 'Hi Rokid -> Phrase' … companion app: 1) Connect to HealthConnect … read HR, steps, calories, distance, speed live 2) one-time YouTube Music authorization … play, like, playlist, next/back, speed, volume … can we even capture all the required info? identify the gaps" | Gap analysis: Health Connect is batch, not live. |
+| 10:25 | "If it's batch, so are GoogleFit APIs? then how can we get live data … I've samsung watch and AIVELA smart ring" | Live data must come from a watch app (Health Services) over the Wearable Data Layer. |
+| 10:35 | "focus on AIVELA and Huawei later, V1 with samsung watch only. Go ahead with common interface design … youtube: play directly on phone and control externally? okay" | V1 = Galaxy Watch only behind a source interface; YTM controlled via MediaSession. |
+| 11:16 | "Use RokidSDK ofcourse … native glass app … persistent link ~1 Hz … like via voice and phone, speed ignore for V1" | CXR SDK, native glasses APK, persistent link, V1 music scope. |
+| 11:25–14:08 | Spike on real devices (CXR auth without secrets, watch remote start, voice via glasses mic, offline voice pack in-app) | Verified feasibility (see memory "livefit-spike-results"). |
+| 14:36–16:32 | Mock-up reviews: HUD big numbers (HR, kcal, timer, type) + icons, HUD 50 % smaller, HUD settings apply/back-auto-apply, permanent footer, summary pages | UI decisions captured in the spec. |
+| 16:36–16:38 | "Confirmation … on mobile, watch or glass, first answer wins" / "glass yes/no: click and voice, both" | Cross-device confirmation rule. |
+| 16:38 | `/superpowers:brainstorming` | Formal brainstorming started. |
+| 16:45 | "just write spec for V1 and V2. Call out V3 in detail so I can restart brainstorming for just V3" | Spec split: V1, V2, V3 roadmap. |
+| 16:53–16:55 | Approach A chosen: phone owns the workout, watch streams raw readings | Architecture. |
+| 17:39 | "Activity like Google Fit: daily/weekly/monthly bar charts" | Activity tab design. |
+| 17:42 | "YT sign-in under Settings → Linked services … pair/unpair there too … Health Connect writes only live data, never fake" | Linked services + provenance gate. |
+| 17:45 | "Do not use Google online recognizer; download pack at setup … decouple for a future iPhone app" | Offline-only voice, interfaces for portability. |
+| 18:06–18:21 | REVIEW-BRIEF for Codex + three Codex spec-review rounds fixed | Spec approved → `superpowers:writing-plans` (V1 + V2 plans). |
+
 ## Earlier in the session (before context compaction)
 
 | # | Prompt (summary) | Outcome |
@@ -68,6 +87,9 @@ Branch for all work: `design/livefit-v1-v2`. Devices: phone Samsung S25 (Android
 - **Done:** this file; will be appended after every following prompt.
 
 ---
+
+### 15. "What were the initial brainstorming prompts that led to the spec?"
+- **Done:** read the 2026-10-05 transcripts and added the "Origin: brainstorming → spec" table above.
 
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
