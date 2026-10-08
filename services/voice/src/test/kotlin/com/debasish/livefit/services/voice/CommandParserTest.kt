@@ -1,6 +1,7 @@
 package com.debasish.livefit.services.voice
 
 import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.WorkoutType
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -94,6 +95,34 @@ class CommandParserTest {
         Command.Volume(up = false),
         "volume down", "quieter", "turn it down", "lower the volume", "decrease volume",
     )
+
+    // --- Glasses pages (P2) ------------------------------------------------------------
+
+    @Test fun glanceView() = assertParses(
+        Command.ShowGlassesPage(HudPage.Glance),
+        "glance view", "Glance view.", "show glance", "glance mode", "open glance", "switch to glance view", "glance", "glance screen",
+    )
+
+    @Test fun workoutView() = assertParses(
+        Command.ShowGlassesPage(HudPage.Workout),
+        "workout view", "Workout view.", "show workout", "open workout", "work out view", "show the workout page", "go to workout view",
+        "workout screen", "switch to workout",
+    )
+
+    @Test fun playlistView() = assertParses(
+        Command.ShowGlassesPage(HudPage.Playlist),
+        "playlist view", "Playlist view.", "show playlist", "open playlist", "music view", "show music", "open the playlist",
+        "show queue", "songs view", "go to playlist", "playlist", "switch to music view",
+    )
+
+    /** View words never steal real commands. */
+    @Test fun pageWordsDoNotStealCommands() {
+        assertParses(Command.PlayMusic, "play playlist", "play my playlist", "start playlist")
+        assertParses(Command.PauseMusic, "pause playlist")
+        assertParses(Command.StartWorkout(WorkoutType.Walk), "start workout", "start workout mode")
+        assertParses(Command.StopWorkout, "stop workout")
+        assertParses(Command.NextTrack, "next song")
+    }
 
     // --- Disambiguation ----------------------------------------------------------------
 

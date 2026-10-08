@@ -1,6 +1,7 @@
 package com.debasish.livefit.services.voice
 
 import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.WorkoutType
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,6 +22,12 @@ class CompositeCommandTest {
         assertComposite("next song and then like it", listOf(Command.NextTrack, Command.LikeTrack))
         assertComposite("Pause the workout, pause music.", listOf(Command.PauseWorkout, Command.PauseMusic))
         assertComposite("resume workout, then volume up and next song", listOf(Command.ResumeWorkout, Command.Volume(up = true), Command.NextTrack))
+    }
+
+    /** P2: page views combine with other commands. */
+    @Test fun pageViewsCombine() {
+        assertComposite("pause music and playlist view", listOf(Command.PauseMusic, Command.ShowGlassesPage(HudPage.Playlist)))
+        assertComposite("start a run, then glance view", listOf(Command.StartWorkout(WorkoutType.Run), Command.ShowGlassesPage(HudPage.Glance)))
     }
 
     @Test fun singleCommandsAndFillerParseAsBefore() {

@@ -39,6 +39,8 @@ interface GlassesLinkService {
     suspend fun pushSettings(frame: com.debasish.livefit.model.HudSettingsFrame)
     /** Music-screen queue window (lf_queue); sent on change and on every (re)connect. */
     suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
+    /** Shows a HUD page on the glasses (lf_page, voice "playlist view"); dropped while not connected. */
+    suspend fun pushPage(request: com.debasish.livefit.model.PageRequest) {}
 }
 
 sealed interface GlassesEvent {

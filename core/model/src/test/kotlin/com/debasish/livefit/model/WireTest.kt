@@ -23,6 +23,7 @@ class WireTest {
         val commands = listOf(
             Command.StartWorkout(WorkoutType.Cycle), Command.SetVolume(0.75f), Command.Answer("c1", yes = true),
             Command.PauseWorkout, Command.Volume(up = false), Command.PlayQueueItem(9_007_199_254_740_993L),
+            Command.ShowGlassesPage(HudPage.Playlist),
         )
         for (c in commands) roundTrip(CommandEnvelope(id = "id-$c", origin = DeviceKind.Watch, command = c))
     }
@@ -68,8 +69,19 @@ class WireTest {
         assertTrue(json.contains("\"cmd\":\"com.debasish.livefit.model.Command.PlayQueueItem\"") && json.contains("\"queueId\":42"), json)
     }
 
-    /** §4.7: v2 added lf_queue and PlayQueueItem; a v1 peer is outdated. */
-    @Test fun protocolVersionIsTwo() = assertEquals(2, PROTOCOL_VERSION)
+    /** §4.7: v2 added lf_queue and PlayQueueItem; v3 added lf_page (PageRequest) and ShowGlassesPage. Older peers are outdated. */
+    @Test fun protocolVersionIsThree() = assertEquals(3, PROTOCOL_VERSION)
+
+    @Test fun glassesPagesAreGlanceWorkoutPlaylist() = assertEquals(listOf(HudPage.Glance, HudPage.Workout, HudPage.Playlist), HudPage.entries)
+
+    /** P2: voice "playlist view" → lf_page; the glasses apply only a current-version request. */
+    @Test fun pageRequestParsesOnlyCurrentVersion() {
+        for (p in HudPage.entries) assertEquals(p, PageRequest.parse(Wire.encode(PageRequest(page = p))))
+        assertTrue(Wire.encode(PageRequest(page = HudPage.Glance)).contains("\"protocolVersion\":$PROTOCOL_VERSION"))
+        assertEquals(null, PageRequest.parse("""{"protocolVersion":2,"page":"Glance"}"""), "a v2 phone is outdated since v3")
+        assertEquals(null, PageRequest.parse("""{"protocolVersion":$PROTOCOL_VERSION,"page":"Nope"}"""), "unknown page")
+        assertEquals(null, PageRequest.parse("garbage"))
+    }
 
     @Test fun hudSettingsFrameRoundTrips() =
         roundTrip(HudSettingsFrame(settings = HudSettings(scale = 0.5f, position = HudPosition.TopRight, items = setOf(HudItem.HeartRate))))
@@ -92,6 +104,7 @@ class WireTest {
         assertTrue(Wire.encode(DiscoverableRequest()).contains("\"protocolVersion\":$PROTOCOL_VERSION"))
         assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":0,"seconds":120}"""), "outdated sender")
         assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":1,"seconds":120}"""), "a v1 phone is outdated since v2")
+        assertEquals(null, DiscoverableRequest.parse("""{"protocolVersion":2,"seconds":120}"""), "a v2 phone is outdated since v3")
         assertEquals(null, DiscoverableRequest.parse("""{"seconds":120}"""), "unversioned")
         assertEquals(null, DiscoverableRequest.parse("garbage"))
         assertEquals(300, DiscoverableRequest.parse("""{"protocolVersion":$PROTOCOL_VERSION,"seconds":9999}"""), "clamped to the platform maximum")

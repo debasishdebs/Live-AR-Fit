@@ -246,6 +246,10 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         send(GlassesChannels.QUEUE, Wire.encode(frame))
     }
 
+    override suspend fun pushPage(request: com.debasish.livefit.model.PageRequest) {
+        send(GlassesChannels.PAGE, Wire.encode(request)) // not replayed on reconnect: a page request is a one-off
+    }
+
     private fun send(channel: String, json: String): Boolean {
         if (_status.value.link != LinkState.Connected) return false
         val s = session ?: return false

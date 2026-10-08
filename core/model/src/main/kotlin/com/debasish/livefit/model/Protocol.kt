@@ -10,8 +10,9 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 2: glasses music screen — `lf_queue` (QueueFrame) and `Command.PlayQueueItem` (a v1 phone can't decode the new command).
+ * 3: glasses pages by voice — `lf_page` (PageRequest) and `Command.ShowGlassesPage` (a v2 glasses app would drop the request).
  */
-const val PROTOCOL_VERSION = 2
+const val PROTOCOL_VERSION = 3
 
 /** CXR custom-command names (spec §4.2). */
 object GlassesChannels {
@@ -25,6 +26,8 @@ object GlassesChannels {
     const val QUEUE = "lf_queue"
     /** Phone → glasses: make the glasses discoverable so the companion pairing picker can list them. */
     const val DISCOVERABLE = "lf_discoverable"
+    /** Phone → glasses: show this HUD page ([PageRequest]), e.g. after voice "playlist view". */
+    const val PAGE = "lf_page"
 }
 
 /** Wearable Data Layer message paths (spec §4.2). */

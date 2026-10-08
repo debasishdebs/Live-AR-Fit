@@ -8,6 +8,7 @@ import com.debasish.livefit.phone.ServiceGraph
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
 import com.debasish.livefit.phone.ui.list.sources.NearbyDevicesSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
+import com.debasish.livefit.phone.ui.list.sources.VoiceCommandSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutDaysSource
 import com.debasish.livefit.phone.ui.list.sources.WorkoutHistorySource
 import org.json.JSONObject
@@ -23,7 +24,7 @@ data class ListItem(
     val status: ItemStatus = ItemStatus.None,
     /** Optional right-aligned value, e.g. "4.2 km". */
     val trailingText: String? = null,
-    /** Non-null shows a trailing on/off switch; tapping the row runs the source's action (which flips it). */
+    /** Non-null shows an on/off switch (tap the row to flip it); greyed out when the row has no action. */
     val toggle: Boolean? = null,
 )
 
@@ -79,6 +80,8 @@ object ListSources {
     const val WORKOUT_DAYS = "workout-days"
     /** Settings → Nearby devices (R2): per paired device, "Start LiveFit when nearby". */
     const val NEARBY = "nearby"
+    /** Settings → Voice → Voice commands (per-group toggles). */
+    const val VOICE_COMMANDS = "voice-commands"
 
     /** [open] navigates to a route (e.g. a session detail or a filtered list). */
     fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
@@ -87,6 +90,7 @@ object ListSources {
         WORKOUTS -> WorkoutHistorySource(services.history, open)
         WORKOUT_DAYS -> WorkoutDaysSource(services.history, open)
         NEARBY -> NearbyDevicesSource(context.applicationContext, services.settings, open)
+        VOICE_COMMANDS -> VoiceCommandSource({ services.settings.disabledVoiceGroups.value }, services.settings::setVoiceGroupEnabled)
         else -> error("Unknown list source: $id")
     }
 }

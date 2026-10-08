@@ -6,6 +6,7 @@ import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.music.MusicOnStart
 import com.debasish.livefit.services.music.QueueWindowing
+import com.debasish.livefit.services.voice.VoiceCommandGroup
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -67,6 +68,13 @@ class SettingsStore(context: Context) {
         prefs.edit().putString(nearbyKey(kind), v.toString()).apply()
     }
     private fun nearbyKey(kind: DeviceKind) = "startWhenNearby.${kind.name}"
+    /** Settings → Voice → Voice commands: groups turned off (default none; yes/no answers can't be). */
+    private val _disabledVoiceGroups = pref("disabledVoiceGroups", emptySet<VoiceCommandGroup>()) { VoiceCommandGroup.decode(it) }
+    val disabledVoiceGroups: StateFlow<Set<VoiceCommandGroup>> = _disabledVoiceGroups
+    fun setVoiceGroupEnabled(group: VoiceCommandGroup, enabled: Boolean) {
+        val next = VoiceCommandGroup.withEnabled(_disabledVoiceGroups.value, group, enabled)
+        _disabledVoiceGroups.value = next; prefs.edit().putString("disabledVoiceGroups", VoiceCommandGroup.encode(next)).apply()
+    }
 
     private val _setupDone = MutableStateFlow(prefs.getBoolean("setupDone", false))
     val setupDone: StateFlow<Boolean> = _setupDone

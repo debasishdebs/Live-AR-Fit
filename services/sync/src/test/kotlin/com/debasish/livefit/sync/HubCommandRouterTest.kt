@@ -78,6 +78,29 @@ class HubCommandRouterTest {
         assertEquals(listOf("Playing selected song"), toasts)
     }
 
+    /** P2: voice "playlist view" is forwarded to the glasses (lf_page) with a short toast; repeats just resend the same page. */
+    @Test fun showGlassesPageIsForwardedToTheGlasses() = runTest {
+        val pages = mutableListOf<com.debasish.livefit.model.HudPage>()
+        val r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = { toasts += it }, showGlassesPage = { pages += it })
+        r.dispatchVoice(Command.ShowGlassesPage(com.debasish.livefit.model.HudPage.Playlist))
+        r.dispatchVoice(Command.ShowGlassesPage(com.debasish.livefit.model.HudPage.Glance))
+        r.dispatch(env("p", Command.ShowGlassesPage(com.debasish.livefit.model.HudPage.Workout), origin = DeviceKind.Phone))
+        runCurrent()
+        assertEquals(listOf(com.debasish.livefit.model.HudPage.Playlist, com.debasish.livefit.model.HudPage.Glance, com.debasish.livefit.model.HudPage.Workout), pages)
+        assertEquals(listOf("Playlist view", "Glance view", "Workout view"), toasts)
+        assertTrue(calls.isEmpty(), "no workout or music side effects")
+    }
+
+    /** P1: a workout start lands the glasses on the workout page; sent before the start so a later "glance view" clause wins. */
+    @Test fun workoutStartShowsTheWorkoutPage() = runTest {
+        val r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = {}, showGlassesPage = { calls += "page:$it" })
+        r.dispatch(env("s", Command.StartWorkout(WorkoutType.Run), origin = DeviceKind.Watch))
+        r.dispatchVoice(Command.StartWorkout(WorkoutType.Walk))
+        r.dispatchVoice(Command.ShowGlassesPage(com.debasish.livefit.model.HudPage.Glance))
+        runCurrent()
+        assertEquals(listOf("page:Workout", "start:Run", "page:Workout", "start:Walk", "page:Glance"), calls)
+    }
+
     @Test fun duplicateIdsAreAppliedOnce() = runTest {
         val r = router()
         r.dispatch(env("same", Command.NextTrack)); r.dispatch(env("same", Command.NextTrack)); runCurrent()
