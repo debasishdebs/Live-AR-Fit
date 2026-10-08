@@ -148,6 +148,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 - **Done:** verified (watch exercise FGS is health-only; zoom 16 ≈ 1.08 km at 480 px) and applied all: 10 s GPS freshness + degraded states, chronological route merge with watch precedence/duplicates/clock tolerance, `health|location` watch FGS + phone hub re-promotion on visibility, watch route file surviving acks/process death, Map visibility re-announced on reconnect + stale image rejection, per-page gesture safety, page fallback to Workout + scroll-mode rules, watch Playlist via QueueFrame; default zoom 18. Commit `2f5a7ad`.
 - **Why:** each finding pointed at a real gap in the contract that would have surfaced as an on-device bug.
 
+### 19. Codex spec review round 2 (3 findings) + "glasses maps are reference only"
+- **Done:** dedicated watch time-sync (RTT-bounded) instead of delivery-based offset — uncalibrated fixes never live; usable-live = −2…10 s age + ≤ 30 m accuracy for marker and source switching; render epoch per phone process/reconnect so restarted phones' images aren't rejected; noted map accuracy as reference-only with future improvement.
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
