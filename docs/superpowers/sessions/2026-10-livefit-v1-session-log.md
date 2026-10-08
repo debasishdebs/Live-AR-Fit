@@ -151,6 +151,10 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 19. Codex spec review round 2 (3 findings) + "glasses maps are reference only"
 - **Done:** dedicated watch time-sync (RTT-bounded) instead of delivery-based offset — uncalibrated fixes never live; usable-live = −2…10 s age + ≤ 30 m accuracy for marker and source switching; render epoch per phone process/reconnect so restarted phones' images aren't rejected; noted map accuracy as reference-only with future improvement.
 
+### 20. `/superpowers:writing-plans` for the pages/map spec
+- **Done:** 25-task TDD plan `docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md` (`630b34b`), 7 parallel lanes after a protocol-v4 first task; 12 rulings on spec gaps listed in the plan (e.g. GPS outdoors applies to all types incl. Walk, Room v2 migration, `lf_map` bytes with Base64 fallback).
+- **Why:** spec approved by invoking the planning skill; plan drafted by an Opus agent with code access, self-reviewed (no placeholders, coverage of time-sync/epochs/route file/pages/gestures/QueueFrame).
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
