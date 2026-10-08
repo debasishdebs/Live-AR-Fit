@@ -10,7 +10,7 @@ data class TapOutcome(val nav: HudNav, val command: Command? = null, val talk: B
 
 /**
  * Touchpad navigation outside confirmations (spec §6.3). One gesture = one [Swipe] ([SwipeClassifier]). Pages are the
- * ordered list [PAGES]; switching never wraps. Double-tap never navigates (it closes the app, see [CloseConfirm]).
+ * ordered list [PAGES]; switching cycles (forward past the last page returns to the first, and back). Double-tap never navigates (it closes the app, see [CloseConfirm]).
  * - Workout page: any swipe = next/previous page; tap = talk. Full/glance ([mode]) is kept across page switches.
  * - Music page: the highlight is always shown, on the current song unless moved; short swipe moves it (no wrap);
  *   long swipe = next/previous page; tap = play/pause when the highlight is on the current song, else play the
@@ -30,7 +30,7 @@ data class HudNav(
         page == HudPage.Music && !swipe.long -> highlightIndex(queue)?.let { i ->
             copy(highlightId = queue.items[(i + if (swipe.forward) 1 else -1).coerceIn(0, queue.items.lastIndex)].queueId, lastInputMs = nowMs)
         } ?: this
-        else -> PAGES[(PAGES.indexOf(page) + if (swipe.forward) 1 else -1).coerceIn(0, PAGES.lastIndex)]
+        else -> PAGES[Math.floorMod(PAGES.indexOf(page) + if (swipe.forward) 1 else -1, PAGES.size)] // cycles both ways (owner)
             .let { if (it == page) this else resetHighlight().copy(page = it) }
     }
 

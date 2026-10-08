@@ -23,13 +23,13 @@ class HudNavTest {
     @Test fun anySwipeOnTheWorkoutPageMovesBetweenPages() {
         assertEquals(music, HudNav().onSwipe(short, q, 0), "short forward = next page")
         assertEquals(music, HudNav().onSwipe(long, q, 0), "long forward = next page")
-        assertEquals(HudNav(), HudNav().onSwipe(shortBack, q, 0), "back before the first page does nothing")
-        assertEquals(HudNav(), HudNav().onSwipe(longBack, q, 0))
+        assertEquals(music, HudNav().onSwipe(shortBack, q, 0), "back before the first page cycles to the last")
+        assertEquals(music, HudNav().onSwipe(longBack, q, 0))
     }
 
-    @Test fun longSwipeOnTheMusicPageMovesBetweenPagesWithoutWrapping() {
+    @Test fun longSwipeOnTheMusicPageCyclesPages() {
         assertEquals(HudNav(), music.onSwipe(longBack, q, 0), "long back = workout page")
-        assertEquals(music, music.onSwipe(long, q, 0), "forward past the last page does nothing")
+        assertEquals(HudNav(), music.onSwipe(long, q, 0), "forward past the last page cycles to the first")
     }
 
     @Test fun workoutPageKeepsFullOrGlanceAcrossPageSwitches() {
