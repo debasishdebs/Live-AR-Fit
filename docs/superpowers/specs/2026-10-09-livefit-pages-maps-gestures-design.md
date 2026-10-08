@@ -20,17 +20,26 @@ Out of scope: turn-by-turn navigation, route planning, offline map packs, map on
 ## 2. GPS and maps
 
 ### 2.1 Position source (`LocationSource`, phone hub)
-- **Watch first.** During GPS workouts (Run, Cycle, Auto, and Walk when "GPS outdoors" is on) the watch enables Health Services `LOCATION`. Each fix `{lat, lon, accuracyM, bearingDeg?, tMs}` is carried in the watch's session deltas (same ordered, acknowledged, offline-buffered path as samples), so the track survives disconnects and replays.
-- **Phone fallback.** If no watch fix arrives for **15 s** while a GPS workout is active, the phone uses fused location (`PRIORITY_HIGH_ACCURACY`, 1 s) until watch fixes resume for 5 s. Each point records `source = Watch | Phone`.
-- **Constraint:** Android gives location to a foreground service only if it was started while the app was visible; the hub may have been started in the background (presence/boot). The phone fallback therefore works only when the hub currently holds a location-capable FGS start (LiveFit opened on the phone during the workout, or the workout started from the phone UI). Otherwise the fallback reports "Phone GPS unavailable — open LiveFit" in Linked services and the map shows the last watch point.
-- **Permissions:** phone `ACCESS_FINE_LOCATION` (setup step "Map fallback", optional) and FGS type `location` added to the hub; watch already has location.
-
-### 2.2 Route
-- `RouteTrack` (pure, `:core:model`): appends a fix only if `accuracyM ≤ 30` and it is ≥ 3 m from the last kept point; keeps start point, current point and bearing (from fix or last two points).
-- Stored with the session (Room table `route_point(sessionId, idx, lat, lon, accuracyM, source, tMs)`); history detail shows a static route thumbnail (§2.4).
+- **Watch first.** During GPS workouts (Run, Cycle, Auto, and Walk when "GPS outdoors" is on) the watch enables Health Services `LOCATION`. Each fix `{lat, lon, accuracyM, bearingDeg?, fixTimeMs}` (fix time from the data point, converted with the update's boot-time base) is carried in the watch's session deltas (ordered, acknowledged, offline-buffered), so the track survives disconnects and replays.
+- **Freshness (separate from image cadence).** A fix is **live** if `now − fixTimeMs ≤ 10 s` (phone clock, after the watch-clock offset already estimated by the hub). Health Services may batch location while the watch screen is off (the 5 s override in V1 covers HR only); the watch requests any location batching override the device reports in `supportedBatchingModeOverrides` and logs the list. Batched fixes are still recorded, but only a live fix moves the **current-position marker**.
+- **Degraded display.** No live fix for 10–30 s → position arrow drawn hollow + "GPS delayed"; > 30 s → "GPS lost", last point kept. The route still grows when (batched/replayed) fixes arrive, in time order (§2.2).
+- **Phone fallback.** Starts when no **live** watch fix for **15 s** during a GPS workout; stops when watch fixes have been live continuously for **10 s** (replayed or batched old fixes never count, so replay after a reconnect can't flip the source). While both exist, live watch fixes win.
+- **Fallback benefits glasses and history only.** The watch map always uses the watch's own fixes (§2.6).
+- **Foreground-service requirements.**
+  - Watch: the exercise service runs with FGS type **`health|location`** during GPS workouts (declare both; start with `location` only when `ACCESS_FINE_LOCATION` is granted, else `health` and GPS off — never crash on denial).
+  - Phone: hub manifest adds type `location`. Because a hub started from the background (presence/boot/update) cannot hold location, the hub **re-promotes itself** (`startForeground(..., CONNECTED_DEVICE | LOCATION)`) whenever LiveFit's Activity becomes visible and fine location is granted; until then the fallback is unavailable and Linked services shows "Phone GPS available after opening LiveFit".
+  - Phone `ACCESS_FINE_LOCATION` is optional (setup step "Map fallback"); denial keeps the hub starting normally with type `connectedDevice` only.
+### 2.2 Route (merge and storage)
+- `RouteTrack` (pure, `:core:model`) keeps points **sorted by `fixTimeMs`**, not by arrival. Inserting an older replayed watch fix places it chronologically.
+- **Filtering:** drop `accuracyM > 30`; drop a point < 3 m from its chronological neighbour of the same source.
+- **Duplicates:** same source + same `fixTimeMs` (±50 ms) + same position (±1 m) → ignored (replay/resend safe).
+- **Overlap/precedence:** within any time window where both sources have points, **watch points win**: phone points within ±5 s of a watch point are hidden from the drawn route (kept in storage with `source = Phone` for diagnostics).
+- **Clock tolerance:** watch fix times are mapped to phone time with the hub's watch-clock offset; points more than 2 min in the future are rejected; ordering ties break watch-first.
+- **Storage:** Room `route_point(sessionId, fixTimeMs, source, lat, lon, accuracyM)` with a unique key `(sessionId, source, fixTimeMs)`; history detail shows a static route thumbnail.
+- **Bearing/current point:** the latest **live** point (§2.1); bearing from the fix or from the last two kept points.
 
 ### 2.3 Shared map math (`:core:map`, pure Kotlin)
-- Web-Mercator slippy-tile math (lat/lon ↔ tile x/y/z ↔ pixel), viewport centred on the current position, north-up, default zoom 16 (~300 m across 480 px).
+- Web-Mercator slippy-tile math (lat/lon ↔ tile x/y/z ↔ pixel), viewport centred on the current position, north-up, default **zoom 18 (~270 m across 480 px at latitude 20°; ~1.08 km at zoom 16)**, zoom 17 for Cycle.
 - Route projection to viewport pixels; decimation for drawing.
 - Used by the phone glasses renderer and the watch map so both look identical.
 
@@ -40,12 +49,13 @@ Out of scope: turn-by-turn navigation, route planning, offline map packs, map on
 
 ### 2.5 Glasses map (phone renders → glasses display)
 - Glasses have no internet. The phone composes a **480×480** image: tiles converted to the HUD palette (black background, streets as dim green luminance, water/park dropped), plus route line (bright), position arrow, start marker, scale bar and attribution; encoded PNG (target ≤ 40 KB).
-- Sent on new channel `lf_map` (binary stream payload) **only while the glasses report the Map page visible** (`lf_page_state` glasses→phone on every page change). Cadence: every 3 s or after ≥ 25 m movement, whichever first; never more than 1/s.
+- Sent on new channel `lf_map` (binary stream payload) **only while the glasses report the Map page visible**. The glasses send `lf_page_state{page, seq}` on every page change **and on every connect/reconnect** (so a restarted phone learns the current page without a page change); the phone **clears** visibility on disconnect. Each image carries `{sessionId, renderSeq}`; the glasses drop images whose `sessionId` isn't the current session or whose `renderSeq` is older than the last shown. Cadence: every 3 s or after ≥ 25 m movement, whichever first; never more than 1/s.
 - No tiles (offline/failure): route-only rendering on black with "No map — route only".
 - When not on the Map page nothing image-related is sent.
 
 ### 2.6 Watch map
-- Native Compose map on the watch: tiles via the watch's network + cache, its own route from its own fixes (no round-trip to the phone). Rotary bezel = zoom (14–18), always re-centres on the current position. Offline: route-only on black.
+- Native Compose map on the watch: tiles via the watch's network + cache, its own route from its own fixes (no round-trip to the phone).
+- **Route persistence on the watch:** the full-session route is kept in its own file (`route.bin`, append-only, per session) independent of delta resend retention — acknowledged deltas may be deleted but the route stays, and is reloaded after watch process death (route and start marker survive). Deleted when the session is finalized on the phone and the watch summary is dismissed. Rotary bezel = zoom (14–18), always re-centres on the current position. Offline: route-only on black.
 
 ## 3. Pages
 
@@ -67,6 +77,11 @@ Order (cycling): **Glance → Workout → Stats → Playlist → Map → Music c
 
 ### 3.2 Settings → Pages
 Generic list screen with one switch per page and a subtitle "Glasses + Watch". Stored on the phone; sent in the settings frame to glasses (existing `lf_settings`) and to the watch (settings message on the Data Layer) on change and on every (re)connect.
+
+### 3.3 Page transitions
+- If the visible page becomes unavailable (disabled in Settings, or Map ineligible because the GPS workout ended) the device **switches to Workout immediately**.
+- Any actual page change (swipe, voice, fallback) **clears Scroll mode and any highlight/selector**.
+- Scroll mode **stays** after Play highlighted / Press selected (so you can keep choosing); the idle timer **restarts** on every gesture handled in Scroll mode (tap, short or long swipe); confirmations pause it.
 
 ## 4. Glasses touchpad
 
@@ -96,7 +111,7 @@ Action catalogue (only actions valid for the context are offered):
 `None, Talk (voice), Next page, Previous page, +2 pages, −2 pages, Close app, Enter scroll mode, Exit scroll mode, Highlight next/prev row, Highlight ±2 rows, Play highlighted, Selector next/prev, Press selected, Play/pause, Next song, Previous song, Volume up, Volume down, Like song`.
 
 Safety rules enforced by the phone UI and the glasses:
-- Some gesture in page mode must map to **Close app** and some to **Next page** (otherwise the screen refuses the change with a message).
+- **For every page separately** (including currently disabled pages), the page-mode mapping must contain at least one gesture → **Close app** and one → **Next page** (or Previous page); the phone refuses a change that breaks this for any page, and the glasses validate the received table per page and fall back to defaults for any page that fails.
 - In scroll mode, if no gesture maps to Exit scroll, the ✕ Back item and idle timeout still exit.
 - Confirmation overlays are not configurable.
 
@@ -110,7 +125,7 @@ Touchscreen + bezel, native behaviour: horizontal swipe between enabled pages, t
 - Disabled page → toast "<Page> page is turned off in Settings". Voice page commands move the glasses only.
 
 ## 6. Protocol
-- `protocolVersion` → **4** (coordinated upgrade, §4.7): new `lf_map` (phone→glasses image), `lf_page_state` (glasses→phone visible page), settings frame gains `pages` + `gestures`; watch settings message gains `pages`; watch deltas gain location fixes. All three APKs updated together (`tools/install-all.sh`).
+- `protocolVersion` → **4** (coordinated upgrade, §4.7): new `lf_map` (phone→glasses image), `lf_page_state` (glasses→phone visible page), settings frame gains `pages` + `gestures`; watch settings message gains `pages`; watch deltas gain location fixes; **watch Playlist:** the phone sends the queue window (`QueueFrame`: items with `queueId`, title, artist, current `queueId`) to the watch on change and on every reconnect; watch selection sends the existing `PlayQueueItem(queueId)` command (play/pause when it's the current item); an unavailable/empty queue shows an explicit empty state ("Nothing queued — start music on the phone"). All three APKs updated together (`tools/install-all.sh`).
 
 ## 7. Error handling
 | Situation | Behaviour |
@@ -124,4 +139,5 @@ Touchscreen + bezel, native behaviour: horizontal swipe between enabled pages, t
 
 ## 8. Testing
 - JVM: `RouteTrack` filtering/bearing, tile math + viewport/projection, palette conversion (luminance mapping) on a sample tile, page set + skip rules, gesture resolution for every default + custom mapping + safety rules, fallback switching timer, voice phrases, protocol v4 serialization.
-- Device: outdoor walk — map on glasses (cadence, size, attribution) and watch (tiles, zoom); watch GPS off → phone fallback with LiveFit open; page toggles reflected on both; every default gesture on glasses; a custom mapping change applied live.
+- JVM additions: chronological merge with replayed watch fixes behind phone points, duplicate suppression, source switching ignores non-live fixes, per-page gesture safety validation, page fallback on disable/ineligible, scroll-mode timer reset rules, stale image rejection.
+- Device: outdoor walk **with the watch screen off and phone locked** (fix age, "GPS delayed" behaviour); reconnect while Map is visible without changing pages; acknowledgement then watch process death (route + start marker survive); map on glasses (cadence, size, attribution) and watch (tiles, zoom); watch GPS off → phone fallback with LiveFit open; page toggles reflected on both; every default gesture on glasses; a custom mapping change applied live.
