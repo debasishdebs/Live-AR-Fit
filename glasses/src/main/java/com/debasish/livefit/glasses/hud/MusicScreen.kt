@@ -36,7 +36,7 @@ private const val MUSIC_ROWS = 7
 /**
  * Glasses music screen (M1, spec §6.3): now playing on top, then the YouTube Music queue window. Played songs are
  * dim (35 %), upcoming 60 %, the current song full brightness with a ▶ mark; the highlight is an outline (like the
- * ✓/✕ choices), never a fill, and only drawn in list mode ([highlight] non-null). A dim hint line sits at the bottom.
+ * ✓/✕ choices), never a fill, always drawn while the queue has songs ([highlight], on the current song unless moved). A dim hint line sits at the bottom.
  */
 @Composable
 fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: String) {
@@ -79,9 +79,9 @@ fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: Str
         }
         Spacer(Modifier.height(6.dp))
         val hint = when {
-            highlight != null -> "swipe to move · tap to play"
-            queue.items.isEmpty() -> "tap: talk · swipe back: workout"
-            else -> "tap: choose · swipe back: workout"
+            highlight == null -> "tap: talk · long swipe: pages"
+            highlight == queue.currentIndex -> "swipe: songs · long swipe: pages · tap: play/pause"
+            else -> "swipe: songs · long swipe: pages · tap: play song"
         }
         Label(hint, 18.sp, Hud.TERTIARY, maxLines = 2) // the HUD block is narrow at 40 % size
     }

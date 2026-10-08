@@ -123,7 +123,7 @@ fun HudScreen(
     /** Music screen (M1) instead of the workout HUD; overlays still draw on top. */
     page: HudPage = HudPage.Workout,
     queue: QueueWindow = QueueWindow(),
-    /** Highlighted queue row (list mode only); null = page mode, no highlight. */
+    /** Highlighted queue row on the music page; null = none (empty queue or another page). */
     musicHighlight: Int? = null,
 ) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle

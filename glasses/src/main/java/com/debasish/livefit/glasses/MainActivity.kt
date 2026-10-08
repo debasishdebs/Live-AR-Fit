@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -24,15 +26,18 @@ import com.debasish.livefit.glasses.hud.HudClock
 import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudNav
-import com.debasish.livefit.model.WorkoutPhase
+import com.debasish.livefit.glasses.hud.Swipe
+import com.debasish.livefit.glasses.hud.SwipeClassifier
+import com.debasish.livefit.glasses.hud.SwipeKey
 import com.debasish.livefit.glasses.hud.HudOverlay
 import com.debasish.livefit.glasses.hud.HudScreen
 import com.debasish.livefit.glasses.voice.PushToTalk
 import com.rokid.cxr.CXRServiceBridge
 
 /**
- * Glasses HUD. Touchpad (see [HudNav]): workout page tap = talk, back swipe = toggle full/glance, forward swipe = music
- * page; music page back swipe = workout page, tap = list mode (swipe = move highlight, tap = play it, 6 s idle = leave).
+ * Glasses HUD. Touchpad (see [HudNav]): each swipe's key burst becomes one [Swipe] ([SwipeClassifier]). Workout page
+ * tap = talk, any swipe = next/previous page; music page short swipe = move the highlight, long swipe = pages, tap =
+ * play/pause (highlight on the current song) or play the highlighted song; 6 s idle = highlight back on the current song.
  * Double-tap (two KEYCODE_NOTIFICATION or BACK, [DoubleTapDetector]) on any page = close the app, asking first while a
  * workout records ([CloseConfirm]). A pending hub confirmation overrides all of these ([ConfirmInput]), then our close prompt.
  */
@@ -41,7 +46,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: HudController
     private lateinit var ptt: PushToTalk
     private var nav by mutableStateOf(HudNav())
-    private var lastSwipe = 0L
+    private val swipes = SwipeClassifier()
+    private val swipeTimer = Handler(Looper.getMainLooper())
+    private val closeSwipe = Runnable { swipes.onTimer(android.os.SystemClock.uptimeMillis())?.let(::onSwipe); scheduleSwipeClose() }
     private val confirmInput = ConfirmInput()
     private var highlightYes by mutableStateOf(true)
     private var localToast by mutableStateOf<String?>(null)
@@ -100,8 +107,8 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.LaunchedEffect(closeConfirm.shownAtMs) {
                 if (closeConfirm.shown) { kotlinx.coroutines.delay(CloseConfirm.TIMEOUT_MS); closeConfirm = closeConfirm.timedOut(System.currentTimeMillis()) }
             }
-            androidx.compose.runtime.LaunchedEffect(nav.listMode, nav.lastInputMs) {
-                if (nav.listMode) { kotlinx.coroutines.delay(HudNav.LIST_IDLE_MS); nav = nav.timedOut(System.currentTimeMillis()) }
+            androidx.compose.runtime.LaunchedEffect(nav.highlightId, nav.lastInputMs) {
+                if (nav.highlightId != null) { kotlinx.coroutines.delay(HudNav.IDLE_MS); nav = nav.timedOut(System.currentTimeMillis()) }
             }
             androidx.compose.runtime.LaunchedEffect(localToast) {
                 // While a confirmation is shown the error stays inside it; the id effect clears it.
@@ -144,15 +151,54 @@ class MainActivity : ComponentActivity() {
         }.onFailure { Log.w(TAG, "discoverable prompt failed", it) }
     }
 
-    /** Every key is logged (debug) so touchpad codes can be checked on device; the double-tap key never reaches the system. */
+    /**
+     * Every key is logged (debug) so touchpad codes can be checked on device; the touch/double-tap key (83) never
+     * reaches the system. Swipe keys are consumed here (down and up) and classified on key-down by event time.
+     */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         Log.d(TAG, "key action=${event.action} code=${event.keyCode} scan=${event.scanCode} repeat=${event.repeatCount} t=${event.eventTime}")
+        val firstDown = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         if (event.keyCode == KeyEvent.KEYCODE_NOTIFICATION) {
             // Consumed (down and up) so the Rokid system does not move our task to the back on its own.
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && doubleTap.onNotificationKey(System.currentTimeMillis())) onDoubleTap()
+            if (firstDown) {
+                swipes.onTouch(event.eventTime)?.let(::onSwipe) // a new touch closes the previous swipe
+                scheduleSwipeClose()
+                if (doubleTap.onNotificationKey(System.currentTimeMillis())) onDoubleTap()
+            }
+            return true
+        }
+        val key = when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_RIGHT -> SwipeKey.Right
+            KeyEvent.KEYCODE_DPAD_LEFT -> SwipeKey.Left
+            KeyEvent.KEYCODE_DPAD_DOWN -> SwipeKey.Down
+            KeyEvent.KEYCODE_DPAD_UP -> SwipeKey.Up
+            else -> null
+        }
+        if (key != null) {
+            if (firstDown) {
+                doubleTap.onGestureKey()
+                swipes.onKey(key, event.eventTime)?.let(::onSwipe)
+                scheduleSwipeClose()
+            }
             return true
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    private fun scheduleSwipeClose() {
+        swipeTimer.removeCallbacks(closeSwipe)
+        swipes.deadlineMs?.let { swipeTimer.postAtTime(closeSwipe, it) } // eventTime and postAtTime share the uptime clock
+    }
+
+    /** One logical swipe: the pending confirmation, then our close prompt, then page/highlight navigation. */
+    private fun onSwipe(swipe: Swipe) {
+        Log.d(TAG, "swipe $swipe")
+        val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
+        when {
+            pending -> { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
+            closeConfirm.shown -> closeConfirm = closeConfirm.onSwipe()
+            else -> nav = nav.onSwipe(swipe, controller.queue.value, System.currentTimeMillis())
+        }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
@@ -165,24 +211,9 @@ class MainActivity : ComponentActivity() {
                 else -> {
                     val tap = nav.onTap(controller.queue.value, now)
                     nav = tap.nav
-                    tap.play?.let(controller::send) // music list: play the highlighted song
+                    tap.command?.let(controller::send) // music page: play/pause or play the highlighted song
                     if (tap.talk && controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
                 }
-            }
-            // One swipe can emit several key events; debounce like the UPI app does.
-            // Rokid swipes arrive as horizontal keys: RIGHT/DOWN = forward, LEFT/UP = back.
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (now - lastSwipe > 350) {
-                    when {
-                        pending -> { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
-                        closeConfirm.shown -> closeConfirm = closeConfirm.onSwipe()
-                        else -> nav = nav.onSwipe(
-                            forward = keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == KeyEvent.KEYCODE_DPAD_DOWN,
-                            inWorkout = inWorkout(), queue = controller.queue.value, nowMs = now,
-                        )
-                    }
-                }
-                lastSwipe = now
             }
             else -> return super.onKeyUp(keyCode, event)
         }
@@ -213,11 +244,8 @@ class MainActivity : ComponentActivity() {
         ptt.stop()
         closeConfirm = CloseConfirm()
         nav = HudNav(mode = nav.mode)
+        swipeTimer.removeCallbacks(closeSwipe)
         moveTaskToBack(true)
-    }
-
-    private fun inWorkout(): Boolean = controller.frame.value?.workout?.phase.let {
-        it == WorkoutPhase.Starting || it == WorkoutPhase.Active || it == WorkoutPhase.Paused || it == WorkoutPhase.Syncing
     }
 
     /** Never leave the mic open once the app is no longer in the foreground. */

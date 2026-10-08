@@ -37,6 +37,14 @@ class DoubleTapDetectorTest {
         assertFalse(d.onNotificationKey(1_100)); assertFalse(d.onNotificationKey(1_250))
     }
 
+    @Test fun aSwipeOrTapBetweenTwoTouchesIsNotADoubleTap() {
+        // Every touchpad gesture starts with key 83: a quick swipe then a touch must not close the app.
+        val d = DoubleTapDetector()
+        assertFalse(d.onNotificationKey(0)); d.onGestureKey()
+        assertFalse(d.onNotificationKey(200), "the swipe's touch then the next touch")
+        assertTrue(d.onNotificationKey(350), "a real double-tap right after still counts")
+    }
+
     @Test fun aThirdKeyDoesNotPairWithTheSecond() {
         val d = DoubleTapDetector()
         d.onNotificationKey(0); assertTrue(d.onNotificationKey(150))

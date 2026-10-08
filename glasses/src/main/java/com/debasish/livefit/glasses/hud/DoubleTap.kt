@@ -6,7 +6,8 @@ import com.debasish.livefit.model.WorkoutPhase
  * Turns the touchpad's double-tap into one event (spec §6.3). On the owner's glasses a double-tap arrives as two
  * KEYCODE_NOTIFICATION (83) presses ~150 ms apart; other firmware sends BACK. Two 83 presses within [WINDOW_MS], or
  * one BACK, is a double-tap; keys within [SETTLE_MS] of a fired double-tap are its tail (a firmware sending both).
- * A lone 83 press does nothing.
+ * A lone 83 press does nothing. Every touchpad gesture starts with an 83 press, so a swipe or tap key in between
+ * ([onGestureKey]) breaks the pair: a quick swipe then a touch is not a double-tap.
  */
 class DoubleTapDetector {
     private var firstMs: Long? = null
@@ -20,6 +21,9 @@ class DoubleTapDetector {
         firstMs = nowMs
         return false
     }
+
+    /** A swipe or tap key: the last 83 press belonged to that gesture. */
+    fun onGestureKey() { firstMs = null }
 
     /** A BACK press. True = a double-tap. */
     fun onBack(nowMs: Long): Boolean = if (settling(nowMs)) false else fire(nowMs)
