@@ -139,6 +139,11 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 16. "Add summarized responses to the initial questions"
 - **Done:** each origin entry now has Prompt → Response (summary of my answer) → Settled.
 
+### 17. Live GPS map page, music controls page, shared pages, configurable gestures
+- **Asked:** live GPS route over a map as a page on glasses and watch; music controls page on both; one setting controls pages on both surfaces; later: same pages on both, scroll mode via tap, long swipe = 2 steps / volume on music page, every gesture configurable in hierarchical phone settings.
+- **Done:** brainstorming (architectural path). Decisions: watch GPS first + phone fallback; glasses street map rendered by phone from OSM tiles (glasses have no internet); watch real OSM tiles; page set Glance → Workout → Stats → Playlist → Map → Music controls on both; page mode / scroll mode; full gesture → action mapping per page/mode. Flagged: long press is reserved by the system ("Hi Rokid"), so scroll exit = idle timeout / ✕ Back. Spec: `docs/superpowers/specs/2026-10-09-livefit-pages-maps-gestures-design.md`.
+- **Why:** new subsystem + cross-device protocol change → full spec before planning.
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
