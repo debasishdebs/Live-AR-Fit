@@ -12,6 +12,7 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Straighten
 import androidx.compose.material.icons.rounded.Watch
@@ -89,6 +90,12 @@ fun SettingsScreen(
         }
         SectionLabel("Glasses")
         Group { ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") }) }
+        SectionLabel("Voice")
+        Group {
+            val voiceOff = services.settings.disabledVoiceGroups.collectAsStateWithLifecycle().value.size
+            ChipRow(Icons.Rounded.Mic, LiveFitColors.ChipViolet, "Voice commands", if (voiceOff == 0) "All on" else "$voiceOff turned off",
+                { onNavigate(com.debasish.livefit.phone.ui.AppActivity.listRoute(com.debasish.livefit.phone.ui.list.ListSources.VOICE_COMMANDS, filter = null)) })
+        }
         SectionLabel("Workout")
         Group {
             ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Run, Cycle, Auto", onClick = { services.settings.setGpsOutdoors(!gps) },

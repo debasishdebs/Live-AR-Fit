@@ -35,8 +35,9 @@ import com.debasish.livefit.glasses.voice.PushToTalk
 import com.rokid.cxr.CXRServiceBridge
 
 /**
- * Glasses HUD. Touchpad (see [HudNav]): each swipe's key burst becomes one [Swipe] ([SwipeClassifier]). Workout page
- * tap = talk, any swipe = next/previous page; music page short swipe = move the highlight, long swipe = pages, tap =
+ * Glasses HUD. Pages glance / workout / playlist, starting on workout; voice switches them via lf_page ([HudNav.show]).
+ * Touchpad (see [HudNav]): each swipe's key burst becomes one [Swipe] ([SwipeClassifier]). Glance and workout pages:
+ * tap = talk, any swipe = next/previous page; playlist page short swipe = move the highlight, long swipe = pages, tap =
  * play/pause (highlight on the current song) or play the highlighted song; 6 s idle = highlight back on the current song.
  * Double-tap (two KEYCODE_NOTIFICATION or BACK, [DoubleTapDetector]) on any page = close the app, asking first while a
  * workout records ([CloseConfirm]). A pending hub confirmation overrides all of these ([ConfirmInput]), then our close prompt.
@@ -67,7 +68,8 @@ class MainActivity : ComponentActivity() {
             override fun onRokidAccountChanged(p0: String?) {}
             override fun onAudioNoise(p0: Float) {}
         })
-        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } }).also { it.start() }
+        controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } },
+            onPage = { p -> runOnUiThread { nav = nav.show(p) } }).also { it.start() }
         ptt = PushToTalk(
             controller::sendRaw,
             hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -123,7 +125,7 @@ class MainActivity : ComponentActivity() {
                 listening -> HudOverlay.LocalListening
                 else -> HudOverlay.None
             }
-            HudScreen(frame, settings, connection, nav.mode, battery, history, overlay = overlay, clock = clock,
+            HudScreen(frame, settings, connection, battery, history, overlay = overlay, clock = clock,
                 page = nav.page, queue = queue, musicHighlight = nav.visibleHighlight(queue))
         }
     }
@@ -243,7 +245,7 @@ class MainActivity : ComponentActivity() {
     private fun closeApp() {
         ptt.stop()
         closeConfirm = CloseConfirm()
-        nav = HudNav(mode = nav.mode)
+        nav = HudNav()
         swipeTimer.removeCallbacks(closeSwipe)
         moveTaskToBack(true)
     }

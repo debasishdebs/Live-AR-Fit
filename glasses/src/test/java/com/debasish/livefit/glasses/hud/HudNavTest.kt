@@ -1,6 +1,7 @@
 package com.debasish.livefit.glasses.hud
 
 import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.QueueItem
 import com.debasish.livefit.model.QueueWindow
 import kotlin.test.Test
@@ -11,30 +12,50 @@ import kotlin.test.assertTrue
 
 class HudNavTest {
     private val q = QueueWindow((10L..14L).map { QueueItem(it, "Song $it") }, currentIndex = 2) // current = 12
-    private val music = HudNav(page = HudPage.Music)
+    private val music = HudNav(page = HudPage.Playlist)
+    private val glance = HudNav(page = HudPage.Glance)
 
     private val short = Swipe(forward = true, long = false)
     private val shortBack = Swipe(forward = false, long = false)
     private val long = Swipe(forward = true, long = true)
     private val longBack = Swipe(forward = false, long = true)
 
-    @Test fun pagesAreAnOrderedListWithWorkoutFirst() = assertEquals(listOf(HudPage.Workout, HudPage.Music), HudNav.PAGES)
+    @Test fun pagesAreGlanceWorkoutPlaylist() = assertEquals(listOf(HudPage.Glance, HudPage.Workout, HudPage.Playlist), HudNav.PAGES)
+
+    @Test fun appStartLandsOnTheWorkoutPage() = assertEquals(HudPage.Workout, HudNav().page)
 
     @Test fun anySwipeOnTheWorkoutPageMovesBetweenPages() {
         assertEquals(music, HudNav().onSwipe(short, q, 0), "short forward = next page")
         assertEquals(music, HudNav().onSwipe(long, q, 0), "long forward = next page")
-        assertEquals(music, HudNav().onSwipe(shortBack, q, 0), "back before the first page cycles to the last")
-        assertEquals(music, HudNav().onSwipe(longBack, q, 0))
+        assertEquals(glance, HudNav().onSwipe(shortBack, q, 0), "back = glance page")
+        assertEquals(glance, HudNav().onSwipe(longBack, q, 0))
+    }
+
+    @Test fun anySwipeOnTheGlancePageMovesBetweenPages() {
+        assertEquals(HudNav(), glance.onSwipe(short, q, 0), "forward = workout page")
+        assertEquals(HudNav(), glance.onSwipe(long, q, 0))
+        assertEquals(music, glance.onSwipe(shortBack, q, 0), "back before the first page cycles to the last")
+        assertEquals(music, glance.onSwipe(longBack, q, 0))
     }
 
     @Test fun longSwipeOnTheMusicPageCyclesPages() {
         assertEquals(HudNav(), music.onSwipe(longBack, q, 0), "long back = workout page")
-        assertEquals(HudNav(), music.onSwipe(long, q, 0), "forward past the last page cycles to the first")
+        assertEquals(glance, music.onSwipe(long, q, 0), "forward past the last page cycles to the first")
     }
 
-    @Test fun workoutPageKeepsFullOrGlanceAcrossPageSwitches() {
-        val glance = HudNav(mode = HudMode.Glance)
-        assertEquals(glance, glance.onSwipe(long, q, 0).onSwipe(longBack, q, 0))
+    @Test fun showGoesToThePageAndIsIdempotent() {
+        assertEquals(music, HudNav().show(HudPage.Playlist))
+        assertEquals(music, music.show(HudPage.Playlist), "same page again: nothing changes")
+        assertEquals(glance, music.show(HudPage.Glance))
+        val moved = music.onSwipe(short, q, 1_000)
+        assertEquals(moved, moved.show(HudPage.Playlist), "re-showing the playlist keeps the moved highlight")
+        assertEquals(music, moved.show(HudPage.Workout).show(HudPage.Playlist), "leaving forgets the highlight")
+    }
+
+    @Test fun tapOnGlancePageIsTalk() {
+        val t = glance.onTap(q, 0)
+        assertTrue(t.talk); assertNull(t.command); assertEquals(glance, t.nav)
+        assertNull(glance.visibleHighlight(q))
     }
 
     @Test fun musicPageShowsTheHighlightAtOnceOnTheCurrentSong() {
@@ -50,7 +71,7 @@ class HudNavTest {
         m = m.onSwipe(short, q, 0).onSwipe(short, q, 0); assertEquals(4, m.visibleHighlight(q), "no wrap past the last item")
         repeat(6) { m = m.onSwipe(shortBack, q, 0) }
         assertEquals(0, m.visibleHighlight(q), "no wrap before the first")
-        assertEquals(HudPage.Music, m.page, "short swipes never leave the music page")
+        assertEquals(HudPage.Playlist, m.page, "short swipes never leave the music page")
     }
 
     @Test fun shortSwipeWithAnEmptyQueueDoesNothing() = assertEquals(music, music.onSwipe(short, QueueWindow(), 0))

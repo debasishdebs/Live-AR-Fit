@@ -12,6 +12,7 @@ import com.debasish.livefit.model.DeviceState
 import com.debasish.livefit.model.Devices
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.PageRequest
 import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WorkoutPhase
@@ -33,6 +34,7 @@ import com.debasish.livefit.services.music.YtmMediaSessionService
 import com.debasish.livefit.services.voice.FakeVoiceService
 import com.debasish.livefit.services.voice.GlassesVoiceBridge
 import com.debasish.livefit.services.voice.LiveVoiceService
+import com.debasish.livefit.services.voice.VoiceCommandGate
 import com.debasish.livefit.services.voice.android.AndroidOnDeviceStt
 import com.debasish.livefit.services.voice.android.PhoneMic
 import com.debasish.livefit.services.watch.DataLayerWatchLink
@@ -83,7 +85,10 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast
     private val watchLaunch = WatchLaunchPolicy()
-    val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested)
+    val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested,
+        showGlassesPage = { page -> scope.launch { glasses.pushPage(PageRequest(page = page)) } })
+    /** Voice commands pass Settings → Voice → Voice commands first (P3). */
+    private val voiceGate = VoiceCommandGate(disabled = { settings.disabledVoiceGroups.value }, toast = ::flash, dispatch = router::dispatchVoice)
 
     // ---- Voice binding (after the router, which it feeds) ----
     private val stt: AndroidOnDeviceStt? = if (bindings.liveVoice) AndroidOnDeviceStt(app) else null
@@ -92,12 +97,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
         scope, stt,
         locale = { settings.voiceLocale.value },
         pendingConfirmationId = { confirm.pending.value?.id },
-        onCommand = { router.dispatchVoice(it) },
+        onCommand = { voiceGate(it) },
         onAnswer = { id, yes -> confirm.answer(id, yes) },
         toast = ::flash,
         phoneMic = { phoneMic.record() },
         log = { Log.d("LiveFitVoice", it) },
-    ).also { v -> phoneMic = PhoneMic(app, { v }, ::flash) } else FakeVoiceService(scope) { router.dispatchVoice(it) }
+    ).also { v -> phoneMic = PhoneMic(app, { v }, ::flash) } else FakeVoiceService(scope) { voiceGate(it) }
     // ---- end voice binding ----
 
     private val _lastFrame = MutableStateFlow<StateFrame?>(null)

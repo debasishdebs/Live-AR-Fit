@@ -4,6 +4,7 @@ import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.services.ConfirmationOutcome
 import com.debasish.livefit.services.ConfirmationService
@@ -24,6 +25,8 @@ class HubCommandRouter(
     private val deduper: CommandDeduper = CommandDeduper(),
     /** Called just before a StartWorkout is applied, with its origin (null = voice). */
     private val onStartRequested: (DeviceKind?) -> Unit = {},
+    /** Sends a page request to the glasses (lf_page); setting the same page twice is harmless. */
+    private val showGlassesPage: (HudPage) -> Unit = {},
 ) {
     private val _outdated = MutableStateFlow<DeviceKind?>(null)
     val outdated: StateFlow<DeviceKind?> = _outdated
@@ -53,7 +56,7 @@ class HubCommandRouter(
     }
 
     private fun apply(command: Command, origin: DeviceKind?) {
-        if (command is Command.StartWorkout) onStartRequested(origin)
+        if (command is Command.StartWorkout) { onStartRequested(origin); showGlassesPage(HudPage.Workout) } // a start lands on the workout page
         when (command) {
             is Command.StartWorkout -> workout.start(command.type)
             Command.PauseWorkout -> workout.pause()
@@ -69,6 +72,7 @@ class HubCommandRouter(
             is Command.Volume -> music.setVolume((music.volume.value + if (command.up) 0.1f else -0.1f).coerceIn(0f, 1f))
             is Command.SetVolume -> music.setVolume(command.level.coerceIn(0f, 1f))
             is Command.PlayQueueItem -> music.playQueueItem(command.queueId)
+            is Command.ShowGlassesPage -> showGlassesPage(command.page)
             is Command.Answer -> scope.launch { confirm.answer(command.confirmationId, command.yes) }
         }
         describe(command)?.let(toast)
@@ -88,6 +92,7 @@ class HubCommandRouter(
             is Command.Volume -> if (command.up) "Volume up" else "Volume down"
             is Command.SetVolume -> "Volume ${(command.level * 100).toInt().coerceIn(0, 100)}%"
             is Command.PlayQueueItem -> "Playing selected song"
+            is Command.ShowGlassesPage -> "${command.page.name} view"
             is Command.Answer -> null
         }
     }

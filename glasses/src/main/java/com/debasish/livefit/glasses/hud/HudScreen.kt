@@ -59,6 +59,7 @@ import androidx.compose.foundation.text.BasicText
 import com.debasish.livefit.model.Confirmation
 import com.debasish.livefit.model.HeartZones
 import com.debasish.livefit.model.HudItem
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.HudPosition
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.LinkState
@@ -80,8 +81,6 @@ object Hud {
     const val SECONDARY = 0.6f
     const val TERTIARY = 0.35f
 }
-
-enum class HudMode { Full, Glance }
 
 private val HudPosition.alignment: Alignment
     get() = when (this) {
@@ -114,13 +113,12 @@ fun HudScreen(
     frame: StateFrame?,
     settings: HudSettings,
     connection: HudConnection,
-    mode: HudMode,
     glassesBattery: Int?,
     hrHistory: List<Int>,
     overlay: HudOverlay = HudOverlay.None,
     /** Local time (F4), already formatted by [HudClock]. */
     clock: String = "",
-    /** Music screen (M1) instead of the workout HUD; overlays still draw on top. */
+    /** Glance (timer + HR), workout HUD or playlist (music screen, M1); overlays draw on top of each. */
     page: HudPage = HudPage.Workout,
     queue: QueueWindow = QueueWindow(),
     /** Highlighted queue row on the music page; null = none (empty queue or another page). */
@@ -137,9 +135,9 @@ fun HudScreen(
                     connection == HudConnection.Outdated -> Message("Update LiveFit", "on your glasses")
                     frame == null && connection == HudConnection.OpenPhoneApp -> WaitingForPhone()
                     frame == null -> Message("Connecting…", "to your phone")
-                    page == HudPage.Music -> { cornerClock = false; MusicScreen(frame.music, queue, musicHighlight, clock) }
-                    inWorkout && mode == HudMode.Full -> { cornerClock = false; Full(frame, settings, glassesBattery, hrHistory, clock) }
-                    inWorkout -> Glance(frame)
+                    page == HudPage.Playlist -> { cornerClock = false; MusicScreen(frame.music, queue, musicHighlight, clock) }
+                    page == HudPage.Glance && phase != WorkoutPhase.Stopping && phase != WorkoutPhase.Summary -> Glance(frame)
+                    inWorkout -> { cornerClock = false; Full(frame, settings, glassesBattery, hrHistory, clock) }
                     phase == WorkoutPhase.Stopping -> Message("Saving workout…", formatElapsed(frame.workout.elapsedMs))
                     phase == WorkoutPhase.Summary -> SummaryCard(frame)
                     else -> { cornerClock = false; Ready(frame, glassesBattery, clock) }
@@ -311,7 +309,7 @@ private fun Full(frame: StateFrame, settings: HudSettings, battery: Int?, hrHist
     }
 }
 
-/** Glance mode: only timer and heart rate, low in the field of view. */
+/** Glance page: only timer and heart rate, low in the field of view (also before a workout: 00:00 and "--"). */
 @Composable
 private fun Glance(frame: StateFrame) {
     val w = frame.workout

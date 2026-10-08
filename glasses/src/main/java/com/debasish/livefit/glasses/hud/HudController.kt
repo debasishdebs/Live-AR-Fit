@@ -9,6 +9,8 @@ import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettings
 import com.debasish.livefit.model.HudSettingsFrame
+import com.debasish.livefit.model.HudPage
+import com.debasish.livefit.model.PageRequest
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.QueueWindow
@@ -42,6 +44,8 @@ class HudController(
     private val prefs: SharedPreferences,
     /** Pairing (D2): the phone asks to be shown the glasses in its companion picker; called on a bridge thread with seconds. */
     private val onDiscoverable: (Int) -> Unit = {},
+    /** Voice page switch (lf_page, e.g. "playlist view"); called on a bridge thread. */
+    private val onPage: (HudPage) -> Unit = {},
 ) {
     private val clock = Clock { System.currentTimeMillis() }
     private val liveness = LivenessMonitor(clock)
@@ -70,6 +74,9 @@ class HudController(
         bridge.subscribe(GlassesChannels.QUEUE, CXRServiceBridge.MsgCallback { _, caps, _ -> onQueue(caps) })
         bridge.subscribe(GlassesChannels.DISCOVERABLE, CXRServiceBridge.MsgCallback { _, caps, _ ->
             text(caps)?.let(DiscoverableRequest::parse)?.let(onDiscoverable) // an outdated phone's request is ignored
+        })
+        bridge.subscribe(GlassesChannels.PAGE, CXRServiceBridge.MsgCallback { _, caps, _ ->
+            text(caps)?.let(PageRequest::parse)?.let(onPage) // another version's request is ignored (lf_state reports it)
         })
         scope.launch { while (true) { refreshConnection(); delay(1_000) } }
     }

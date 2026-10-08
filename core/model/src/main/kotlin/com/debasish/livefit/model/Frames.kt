@@ -65,3 +65,22 @@ data class DiscoverableRequest(val protocolVersion: Int = PROTOCOL_VERSION, val 
         }
     }
 }
+
+/** Glasses HUD pages, in swipe order (spec §6.3). */
+@Serializable
+enum class HudPage { Glance, Workout, Playlist }
+
+/**
+ * Phone → glasses on lf_page: show [page] (voice "glance view" / "workout view" / "playlist view"). Idempotent: applying
+ * it again leaves the glasses on the same page. Ignored unless `protocolVersion` matches.
+ */
+@Serializable
+data class PageRequest(val protocolVersion: Int = PROTOCOL_VERSION, val page: HudPage) {
+    companion object {
+        /** The requested page, or null unless [text] is a current-version request for a known page. */
+        fun parse(text: String): HudPage? {
+            if (Wire.versionOf(text) != PROTOCOL_VERSION) return null
+            return runCatching { Wire.decode<PageRequest>(text).page }.getOrNull()
+        }
+    }
+}

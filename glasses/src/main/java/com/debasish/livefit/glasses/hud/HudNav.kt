@@ -1,25 +1,25 @@
 package com.debasish.livefit.glasses.hud
 
 import com.debasish.livefit.model.Command
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.QueueWindow
-
-enum class HudPage { Workout, Music }
 
 /** What a tap did outside confirmations: the new [nav], a music [command] to send, or [talk] (push-to-talk). */
 data class TapOutcome(val nav: HudNav, val command: Command? = null, val talk: Boolean = false)
 
 /**
  * Touchpad navigation outside confirmations (spec §6.3). One gesture = one [Swipe] ([SwipeClassifier]). Pages are the
- * ordered list [PAGES]; switching cycles (forward past the last page returns to the first, and back). Double-tap never navigates (it closes the app, see [CloseConfirm]).
- * - Workout page: any swipe = next/previous page; tap = talk. Full/glance ([mode]) is kept across page switches.
- * - Music page: the highlight is always shown, on the current song unless moved; short swipe moves it (no wrap);
+ * ordered list [PAGES] (glance, workout, playlist); the app starts on the workout page. Switching cycles (forward past the
+ * last page returns to the first, and back). Double-tap never navigates (it closes the app, see [CloseConfirm]).
+ * Voice ("playlist view", lf_page) jumps straight to a page with [show].
+ * - Glance and workout pages: any swipe = next/previous page; tap = talk.
+ * - Playlist (music) page: the highlight is always shown, on the current song unless moved; short swipe moves it (no wrap);
  *   long swipe = next/previous page; tap = play/pause when the highlight is on the current song, else play the
  *   highlighted song (talk when the queue is empty). [IDLE_MS] without input puts the highlight back on the current song.
  * The highlight is kept as a queue id so it stays on its song when the window shifts; unknown → the current song.
  */
 data class HudNav(
     val page: HudPage = HudPage.Workout,
-    val mode: HudMode = HudMode.Full,
     /** Song the user moved the highlight to; null = the current song. */
     val highlightId: Long? = null,
     /** Last highlight move (wall clock ms), for the idle timeout. */
@@ -27,15 +27,18 @@ data class HudNav(
 ) {
 
     fun onSwipe(swipe: Swipe, queue: QueueWindow, nowMs: Long): HudNav = when {
-        page == HudPage.Music && !swipe.long -> highlightIndex(queue)?.let { i ->
+        page == HudPage.Playlist && !swipe.long -> highlightIndex(queue)?.let { i ->
             copy(highlightId = queue.items[(i + if (swipe.forward) 1 else -1).coerceIn(0, queue.items.lastIndex)].queueId, lastInputMs = nowMs)
         } ?: this
         else -> PAGES[Math.floorMod(PAGES.indexOf(page) + if (swipe.forward) 1 else -1, PAGES.size)] // cycles both ways (owner)
-            .let { if (it == page) this else resetHighlight().copy(page = it) }
+            .let(::show)
     }
 
+    /** Go to [target]; already there = no change (a repeated request keeps a moved highlight). */
+    fun show(target: HudPage): HudNav = if (target == page) this else resetHighlight().copy(page = target)
+
     fun onTap(queue: QueueWindow, nowMs: Long): TapOutcome {
-        if (page != HudPage.Music) return TapOutcome(this, talk = true)
+        if (page != HudPage.Playlist) return TapOutcome(this, talk = true)
         val i = highlightIndex(queue) ?: return TapOutcome(this, talk = true)
         val command = if (i == queue.currentIndex) Command.PlayPause else Command.PlayQueueItem(queue.items[i].queueId)
         return TapOutcome(resetHighlight(), command = command)
@@ -44,8 +47,8 @@ data class HudNav(
     /** The highlight returns to the current song after [IDLE_MS] without input. */
     fun timedOut(nowMs: Long): HudNav = if (highlightId != null && nowMs - lastInputMs >= IDLE_MS) resetHighlight() else this
 
-    /** Highlighted row to draw: on the music page only, null when the queue is empty. */
-    fun visibleHighlight(queue: QueueWindow): Int? = if (page == HudPage.Music) highlightIndex(queue) else null
+    /** Highlighted row to draw: on the playlist page only, null when the queue is empty. */
+    fun visibleHighlight(queue: QueueWindow): Int? = if (page == HudPage.Playlist) highlightIndex(queue) else null
 
     private fun resetHighlight() = copy(highlightId = null, lastInputMs = 0)
 
@@ -56,7 +59,7 @@ data class HudNav(
 
     companion object {
         /** Page order for swipes; add new pages here. */
-        val PAGES = listOf(HudPage.Workout, HudPage.Music)
+        val PAGES = listOf(HudPage.Glance, HudPage.Workout, HudPage.Playlist)
         const val IDLE_MS = 6_000L
     }
 }

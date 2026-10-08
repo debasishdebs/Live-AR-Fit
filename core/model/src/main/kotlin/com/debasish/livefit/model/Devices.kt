@@ -62,5 +62,7 @@ sealed interface Command {
     @Serializable data class SetVolume(val level: Float) : Command
     /** Glasses music screen: play this entry of the YouTube Music queue (`skipToQueueItem`). */
     @Serializable data class PlayQueueItem(val queueId: Long) : Command
+    /** Voice: show this glasses HUD page (the hub forwards it on lf_page). */
+    @Serializable data class ShowGlassesPage(val page: HudPage) : Command
     @Serializable data class Answer(val confirmationId: String, val yes: Boolean) : Command
 }
