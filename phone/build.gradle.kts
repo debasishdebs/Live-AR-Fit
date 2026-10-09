@@ -1,10 +1,24 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+fun rootProperties(name: String): Map<String, String> = Properties().apply {
+    rootProject.file(name).takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}.entries.associate { (k, v) -> k.toString() to v.toString() }
+
 val liveFitVersion = providers.gradleProperty("livefit.version").get()
+val releaseRequested = ReleaseGate.requested(gradle.startParameter.taskNames, path)
+val signing = ReleaseSigning.resolve(rootProperties("keystore.properties"), System.getenv())
+val tilesKey = TilesKey.resolve(rootProperties("local.properties"), System.getenv())
+if (releaseRequested) {
+    ReleaseSigning.problem(signing, providers.gradleProperty("livefit.requireSigning").orNull == "true")?.let { throw GradleException(it) }
+    if (tilesKey == null) throw GradleException("${TilesKey.NAME} is required for release builds (local.properties or env) — spec §5")
+}
+base.archivesName.set(if (releaseRequested && signing is SigningResolution.Diagnostic) "phone-unsigned-diagnostic" else "phone")
 
 android {
     namespace = "com.debasish.livefit.phone"
@@ -14,14 +28,35 @@ android {
         // Must match :watch so the Wearable Data Layer pairs the two apps (spec §2).
         applicationId = "com.livear.fit"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         versionName = liveFitVersion
         versionCode = LiveFitVersion.code(liveFitVersion, LiveFitVersion.FormFactor.Phone)
-        // Which services are Live (see Bindings in ServiceGraph); later tasks flip these per service.
+        // MapTiler key (spec §5); "" = none: debug builds use the OSM server, release builds never get this far.
+        buildConfigField("String", "TILES_KEY", "\"${tilesKey.orEmpty()}\"")
+        // Compile-time constants (spec §3 "they become constants"): R8 folds the Fake branches away.
         buildConfigField("boolean", "LIVE_WATCH", "true")
         buildConfigField("boolean", "LIVE_GLASSES", "true")
         buildConfigField("boolean", "LIVE_MUSIC", "true")
         buildConfigField("boolean", "LIVE_VOICE", "true")
+    }
+    signingConfigs {
+        create("release") {
+            (signing as? SigningResolution.Release)?.input?.let { s ->
+                storeFile = file(s.storeFile)
+                storePassword = s.storePassword
+                keyAlias = s.keyAlias
+                keyPassword = s.keyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // No keystore: debug-signed, named *-unsigned-diagnostic, never distributed (spec §3).
+            signingConfig = signingConfigs.getByName(if (signing is SigningResolution.Release) "release" else "debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

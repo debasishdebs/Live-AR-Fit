@@ -39,3 +39,8 @@ local.properties
 
 ### Local design reference screenshots (personal data) ###
 design-refs/
+
+### Release signing (spec §3: the keystore lives outside the repo) ###
+keystore.properties
+*.jks
+*.keystore
