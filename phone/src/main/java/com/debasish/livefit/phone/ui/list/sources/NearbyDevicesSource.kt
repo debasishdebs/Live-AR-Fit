@@ -34,7 +34,7 @@ class NearbyDevicesSource(
         val on = settings.startWhenNearby(kind)
         ListItem(
             id = kind.name,
-            title = if (kind == DeviceKind.Glasses) "Rokid glasses" else "Galaxy Watch",
+            title = if (kind == DeviceKind.Glasses) "Rokid glasses" else "Watch",
             subtitle = NearbyPolicy.subtitle(paired, on),
             icon = if (kind == DeviceKind.Glasses) GlassesIcon else Icons.Rounded.Watch,
             status = if (paired) ItemStatus.None else ItemStatus.ActionNeeded,

@@ -46,7 +46,7 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
     private val reachability = WatchReachability(Clock { System.currentTimeMillis() })
     private val nodeId: String? get() = reachability.nodeId
 
-    private val _status = MutableStateFlow(DeviceStatus("Galaxy Watch", LinkState.Connecting))
+    private val _status = MutableStateFlow(DeviceStatus("Watch", LinkState.Connecting))
     override val status: StateFlow<DeviceStatus> = _status
     override val commands = MutableSharedFlow<CommandEnvelope>(extraBufferCapacity = 32)
     override val results = MutableSharedFlow<ExerciseResult>(extraBufferCapacity = 32)
@@ -70,7 +70,7 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
 
     private suspend fun refreshNode() {
         val node = try {
-            Wearable.getNodeClient(app).connectedNodes.await().firstOrNull()
+            watchNodes(app).firstOrNull()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -79,7 +79,7 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
         }
         reachability.onNodeLookup(node?.id)
         _status.update {
-            val named = node?.let { n -> it.copy(name = n.displayName.substringBefore(" (").ifBlank { "Galaxy Watch" }) } ?: it
+            val named = node?.let { n -> it.copy(name = n.displayName.substringBefore(" (").ifBlank { "Watch" }) } ?: it
             if (reachability.link == LinkState.Disconnected) named.copy(link = LinkState.Disconnected, detail = "Not reachable")
             else named.copy(link = reachability.link, detail = null)
         }

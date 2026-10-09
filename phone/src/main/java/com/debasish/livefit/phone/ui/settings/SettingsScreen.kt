@@ -102,7 +102,7 @@ fun SettingsScreen(
         Group {
             ChipRow(GlassesIcon, LiveFitColors.ChipMint, "Rokid glasses", glassesStatus, { onNavigate("linked/glasses") })
             Divider()
-            ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, "Galaxy Watch", watchStatus, { onNavigate("linked/watch") })
+            ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, "Watch", watchStatus, { onNavigate("linked/watch") })
             Divider()
             ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "YouTube Music", musicStatus, { onNavigate("linked/music") })
             Divider()

@@ -12,7 +12,7 @@ class WireTest {
             workout = WorkoutSnapshot(phase = WorkoutPhase.Syncing, type = WorkoutType.Run, sessionId = "s1", elapsedMs = 61_000),
             music = NowPlaying("Song", "Artist", isPlaying = true, volume = 0.4f),
             devices = Devices(watch = DeviceState(LinkState.Connected, 81), glasses = DeviceState(LinkState.Connecting, 100)),
-            confirmation = Confirmation("c1", ConfirmationKind.TakeOverWorkout, "Take over?", "Samsung Health is tracking", expiresAtMs = 99),
+            confirmation = Confirmation("c1", ConfirmationKind.TakeOverWorkout, "Take over?", "Another app is tracking", expiresAtMs = 99),
             toast = "Next song", sentAtMs = 5,
         )
         roundTrip(frame)

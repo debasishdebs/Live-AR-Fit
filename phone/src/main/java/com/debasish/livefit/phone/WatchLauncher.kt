@@ -5,7 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import androidx.wear.remote.interactions.RemoteActivityHelper
-import com.google.android.gms.wearable.Wearable
+import com.debasish.livefit.services.watch.watchNodes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.tasks.await
@@ -19,10 +19,11 @@ class WatchLauncher(context: Context) {
 
     suspend fun open(reason: String) {
         try {
-            val nodes = Wearable.getNodeClient(app).connectedNodes.await()
+            val nodes = watchNodes(app)
             if (nodes.isEmpty()) { Log.i(TAG, "no watch node to open ($reason)"); return }
             val intent = Intent(Intent.ACTION_VIEW).addCategory(Intent.CATEGORY_BROWSABLE).setData(Uri.parse(URI))
-            nodes.forEach { RemoteActivityHelper(app).startRemoteActivity(intent, it.id).await() }
+            // the best node (nearby first) with the livefit_watch capability, not every connected node
+            nodes.take(1).forEach { RemoteActivityHelper(app).startRemoteActivity(intent, it.id).await() }
             Log.i(TAG, "opened watch screen ($reason)")
         } catch (e: CancellationException) {
             throw e

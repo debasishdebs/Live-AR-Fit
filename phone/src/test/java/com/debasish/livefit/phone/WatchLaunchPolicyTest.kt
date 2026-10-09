@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** F2/F6: when the hub brings the LiveFit screen up on the watch (Samsung's media controls cover it otherwise). */
+/** F2/F6: when the hub brings the LiveFit screen up on the watch (a media-controls overlay covers it otherwise). */
 class WatchLaunchPolicyTest {
     private fun c(id: String, kind: ConfirmationKind) = Confirmation(id, kind, "t", "m", expiresAtMs = 0)
 
@@ -23,7 +23,7 @@ class WatchLaunchPolicyTest {
         }
     }
 
-    // On device, Samsung's media controls cover our screen even for a start tapped on the watch.
+    // On device, the media controls overlay covers our screen even for a start tapped on the watch.
     @Test fun startFromTheWatchUiAlsoReopensTheWatchScreen() {
         val p = WatchLaunchPolicy()
         p.onStartRequested(DeviceKind.Watch)

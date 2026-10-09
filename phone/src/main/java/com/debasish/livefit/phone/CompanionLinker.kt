@@ -16,16 +16,16 @@ import java.util.regex.Pattern
 
 /** Associates the glasses / watch with LiveFit so Android wakes the hub when they're nearby (spec §5.2). */
 object CompanionLinker {
-    private val namePatterns = mapOf(
-        DeviceKind.Glasses to Pattern.compile("(?i)(glasses|rokid|rg).*"),
-        DeviceKind.Watch to Pattern.compile("(?i)(galaxy watch|watch).*"),
-    )
+    /** Glasses are matched by name; the watch by the companion WATCH profile (any brand), not by its Bluetooth name. */
+    private val glassesName = Pattern.compile("(?i)(glasses|rokid|rg).*")
 
     fun associate(activity: Activity, kind: DeviceKind, onResult: (Boolean) -> Unit) {
         if (Build.VERSION.SDK_INT < 33) { Log.w(TAG, "companion pairing needs Android 13+"); onResult(false); return }
         val cdm = activity.getSystemService(CompanionDeviceManager::class.java)
+        val filter = BluetoothDeviceFilter.Builder().apply { if (kind == DeviceKind.Glasses) setNamePattern(glassesName) }.build()
         val request = AssociationRequest.Builder()
-            .addDeviceFilter(BluetoothDeviceFilter.Builder().setNamePattern(namePatterns.getValue(kind)).build())
+            .addDeviceFilter(filter)
+            .apply { if (kind == DeviceKind.Watch) setDeviceProfile(AssociationRequest.DEVICE_PROFILE_WATCH) }
             .setSingleDevice(false)
             .build()
         val executor = Executor { activity.runOnUiThread(it) }
@@ -97,7 +97,7 @@ object CompanionLinker {
 
     /**
      * True when the bonded Bluetooth device for [kind] is connected right now (presence is in memory only, so it is
-     * unknown after a process restart). Matches the association's MAC, else the pairing name pattern.
+     * unknown after a process restart). Matches the association's MAC, else the glasses name pattern / a wearable-class device for the watch (no "watch" in the name needed).
      * Uses the hidden BluetoothDevice.isConnected() (greylisted); any failure or missing BLUETOOTH_CONNECT means false.
      */
     @android.annotation.SuppressLint("MissingPermission")
@@ -107,13 +107,18 @@ object CompanionLinker {
         } else null
         val adapter = context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
         val bonded = adapter?.bondedDevices.orEmpty().filter { d ->
-            if (mac != null) d.address.equals(mac, ignoreCase = true) else namePatterns.getValue(kind).matcher(d.name ?: "").matches()
+            if (mac != null) d.address.equals(mac, ignoreCase = true) else matchesKind(kind, d.name, d.bluetoothClass?.majorDeviceClass)
         }
         val isConnected = android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected")
         bonded.any { isConnected.invoke(it) as? Boolean == true }
     } catch (e: Exception) {
         Log.w(TAG, "bonded ${kind.name} connection check failed", e)
         false
+    }
+
+    private fun matchesKind(kind: DeviceKind, name: String?, majorClass: Int?): Boolean = when (kind) {
+        DeviceKind.Glasses -> glassesName.matcher(name ?: "").matches()
+        else -> majorClass == android.bluetooth.BluetoothClass.Device.Major.WEARABLE
     }
 
     fun kindFor(context: Context, associationId: Int): DeviceKind? =

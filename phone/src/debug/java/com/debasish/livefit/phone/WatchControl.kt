@@ -33,7 +33,7 @@ object WatchControl {
     }
 
     private suspend fun watchNode(context: Context): String? {
-        val nodes = runCatching { Wearable.getNodeClient(context).connectedNodes.await() }.getOrElse {
+        val nodes = runCatching { com.debasish.livefit.services.watch.watchNodes(context) }.getOrElse {
             SpikeLog.e("node lookup failed", it); return null
         }
         SpikeLog.i("watch nodes: ${nodes.joinToString { "${it.displayName}/${it.id}" }}")

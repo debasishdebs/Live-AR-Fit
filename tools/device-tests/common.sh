@@ -3,8 +3,13 @@
 set -euo pipefail
 # Wireless-adb serials can contain spaces ("adb-XYZ (2)._adb-tls-connect._tcp"): take everything before " device ".
 serial_for() { adb devices -l | sed -nE "/model:$1/{s/[[:space:]]+device[[:space:]].*//p;q;}"; }
-PHONE=${PHONE:-$(serial_for SM_S93)}
-WATCH=${WATCH:-$(serial_for SM_R9)}
+# Any-brand watch/phone: classify by ro.build.characteristics (contains "watch" => watch); glasses = model RG_glasses.
+all_serials() { adb devices -l | sed -nE '/[[:space:]]device[[:space:]]/{s/[[:space:]]+device[[:space:]].*//p;}'; }
+is_watch() { adb -s "$1" shell getprop ro.build.characteristics </dev/null 2>/dev/null | tr -d '\r' | grep -qi watch; }
+first_watch() { local s; while IFS= read -r s; do [ -n "$s" ] && is_watch "$s" && { echo "$s"; return; }; done < <(all_serials); return 0; }
+first_phone() { local s g; g=$(serial_for RG_glasses); while IFS= read -r s; do [ -n "$s" ] && [ "$s" != "$g" ] && ! is_watch "$s" && { echo "$s"; return; }; done < <(all_serials); return 0; }
+PHONE=${PHONE:-$(first_phone)}
+WATCH=${WATCH:-$(first_watch)}
 GLASSES=${GLASSES:-$(serial_for RG_glasses)}
 
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }

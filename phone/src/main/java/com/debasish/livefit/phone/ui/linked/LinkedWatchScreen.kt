@@ -31,19 +31,25 @@ import com.debasish.livefit.phone.ui.components.SoftCard
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
 
 /**
- * Optional Galaxy Watch tip (setup Watch step and Linked services → Watch): One UI Watch can auto-open
- * Media controls when music starts, which covers LiveFit's workout screen. Never blocks setup.
+ * Optional media-overlay tip (setup Watch step and Linked services → Watch): many watches auto-open Media controls
+ * when music starts, which covers LiveFit's workout screen. Brand-aware by the watch's reported name. Never blocks setup.
  */
-const val WATCH_MEDIA_CONTROLS_TIP =
-    "Optional: on the watch, turn off auto-open for Media controls (for example Settings → Apps → Media controls; " +
-        "the exact menu varies by One UI Watch version) so LiveFit's workout screen stays in front."
+fun watchMediaControlsTip(watchName: String?): String {
+    val n = watchName.orEmpty()
+    val menu = when {
+        n.contains("Galaxy", ignoreCase = true) || n.contains("SM-R", ignoreCase = true) -> "Settings → Apps → Media controls → off"
+        n.contains("Pixel", ignoreCase = true) -> "Watch Settings → Apps → Media controls (Auto-launch media controls) → off"
+        else -> "Turn off auto-launch of media controls in your watch's settings"
+    }
+    return "Optional: so LiveFit's workout screen stays in front when music starts: $menu (exact menu varies by watch and version)."
+}
 
 @Composable
 fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String) -> Unit) {
     val activity = LocalContext.current as Activity
     val st by services.watch.status.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().background(LiveFitColors.SurfaceSoft).verticalScroll(rememberScrollState())) {
-        ScreenHeader("Galaxy Watch", onBack)
+        ScreenHeader("Watch", onBack)
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, st.name, "${st.link.name}${st.batteryPct?.let { " · $it%" } ?: ""}${st.detail?.let { " · $it" } ?: ""}", {}, trailing = {})
         }
@@ -68,7 +74,7 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
         }
         SectionLabel("Tip")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-            ChipRow(Icons.Rounded.MusicNote, LiveFitColors.ChipMint, "Keep the workout screen in front", WATCH_MEDIA_CONTROLS_TIP, {}, trailing = {})
+            ChipRow(Icons.Rounded.MusicNote, LiveFitColors.ChipMint, "Keep the workout screen in front", watchMediaControlsTip(st.name), {}, trailing = {})
         }
     }
 }

@@ -403,13 +403,13 @@ class HubWorkoutRecoveryTest {
         assertEquals(SessionStatus.Complete, inner.summaries[id]!!.status)
     }
 
-    @Test fun takeOverDeclinedShowsSamsungHealthToast() = runTest {
+    @Test fun takeOverDeclinedShowsAnotherAppToast() = runTest {
         val r = Rig(this); runCurrent()
         r.hub.start(WorkoutType.Walk); runCurrent()
         r.gateway.reply(ok = false, error = ExerciseError.OtherAppTracking("WALKING")); runCurrent()
         r.confirm.answer(r.confirm.pending.value!!.id, yes = false); runCurrent()
         assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
-        assertTrue("Samsung Health is still tracking" in r.notices)
+        assertTrue("Another app is still tracking a workout on your watch" in r.notices)
     }
 
     @Test fun stopDuringTakeoverQuestionClearsIt() = runTest {
@@ -428,7 +428,7 @@ class HubWorkoutRecoveryTest {
         r.gateway.reply(ok = false, error = ExerciseError.OtherAppTracking("WALKING")); runCurrent()
         advanceTimeBy(15_001); runCurrent()
         assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
-        assertTrue("Samsung Health is still tracking" in r.notices)
+        assertTrue("Another app is still tracking a workout on your watch" in r.notices)
         assertNull(r.confirm.pending.value)
     }
 }

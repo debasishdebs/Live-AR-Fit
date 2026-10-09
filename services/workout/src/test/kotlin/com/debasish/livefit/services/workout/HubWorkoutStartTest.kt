@@ -91,7 +91,7 @@ class HubWorkoutStartTest {
         r.gateway.reply(ok = false, error = ExerciseError.OtherAppTracking("WALKING")); runCurrent()
         advanceTimeBy(15_001); runCurrent()
         assertEquals(WorkoutPhase.Idle, r.hub.snapshot.value.phase)
-        assertTrue("Samsung Health is still tracking" in r.notices)
+        assertTrue("Another app is still tracking a workout on your watch" in r.notices)
         assertEquals(1, r.gateway.sent.size)
     }
 

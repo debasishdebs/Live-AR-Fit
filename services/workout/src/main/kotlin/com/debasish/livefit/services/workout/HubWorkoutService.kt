@@ -183,7 +183,7 @@ class HubWorkoutService(
                 )
                 if (currentId != id) return
                 if (outcome == ConfirmationOutcome.Yes) runStart(id, type, force = true)
-                else { resetIdle(); notice(if (outcome == ConfirmationOutcome.Superseded) "Cancelled" else "Samsung Health is still tracking") }
+                else { resetIdle(); notice(if (outcome == ConfirmationOutcome.Superseded) "Cancelled" else "Another app is still tracking a workout on your watch") }
             }
             is ExerciseError.PermissionMissing -> { resetIdle(); notice("Watch needs permission: " + e.permissions.joinToString { it.substringAfterLast('.') }) }
             is ExerciseError.WrongSession -> {
