@@ -21,6 +21,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.debasish.livefit.glasses.agent.AgentContext
+import com.debasish.livefit.glasses.agent.AgentEndpoint
+import com.debasish.livefit.glasses.agent.AgentServer
 import com.debasish.livefit.glasses.hud.CloseConfirm
 import com.debasish.livefit.glasses.hud.ConfirmInput
 import com.debasish.livefit.glasses.hud.DoubleTapAction
@@ -68,6 +71,7 @@ class MainActivity : ComponentActivity() {
     private var localToast by mutableStateOf<String?>(null)
     private val doubleTap = DoubleTapDetector()
     private var closeConfirm by mutableStateOf(CloseConfirm())
+    private var agent: AgentServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,6 +92,22 @@ class MainActivity : ComponentActivity() {
         controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } },
             onPage = { p -> runOnUiThread { updateNav(nav.show(p, availablePages())) } }).also { it.start() }
         controller.reportPage(nav.page)
+        // Hi Rokid LiveFit agent (rokid-agent/livefit): loopback-only receiver; commands take the touchpad's lf_cmd path.
+        // Called on its own threads: StateFlow reads and the bridge send are thread-safe (PushToTalk sends off-main too).
+        agent = AgentServer(
+            handle = AgentEndpoint(
+                context = {
+                    AgentContext(
+                        connected = controller.connection.value == HudConnection.Live,
+                        pages = controller.pages.value,
+                        mapEligible = PageSet.mapEligible(controller.frame.value?.workout ?: WorkoutSnapshot()),
+                    )
+                },
+                send = controller::send,
+                log = { Log.i(AGENT_TAG, it) },
+            )::handle,
+            log = { Log.i(AGENT_TAG, it) },
+        ).start()
         ptt = PushToTalk(
             controller::sendRaw,
             hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -308,5 +328,14 @@ class MainActivity : ComponentActivity() {
         super.onStop()
     }
 
-    companion object { const val TAG = "LiveFitGlasses" }
+    override fun onDestroy() {
+        agent?.stop()
+        agent = null
+        super.onDestroy()
+    }
+
+    companion object {
+        const val TAG = "LiveFitGlasses"
+        const val AGENT_TAG = "LiveFitAgent"
+    }
 }

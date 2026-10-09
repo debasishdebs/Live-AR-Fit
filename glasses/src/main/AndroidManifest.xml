@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Hi Rokid LiveFit agent: a loopback-only (127.0.0.1:47123) receiver socket; no internet traffic. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Pairing: ACTION_REQUEST_DISCOVERABLE so the phone's companion picker can list the glasses. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />

@@ -14,6 +14,12 @@ class ManifestPolicyTest {
         assertTrue("android:roundIcon=\"@mipmap/ic_launcher_round\"" in manifest)
     }
 
+    /** Hi Rokid agent receiver (loopback socket) needs INTERNET; the manifest adds nothing else for it. */
+    @Test fun internetIsDeclaredForTheAgentReceiver() {
+        assertTrue("<uses-permission android:name=\"android.permission.INTERNET\" />" in manifest)
+        assertTrue("usesCleartextTraffic" !in manifest && "networkSecurityConfig" !in manifest)
+    }
+
     /** Spec §4: tokens and the workout DB are never copied off the device (cloud backup or device transfer). */
     @Test fun backupIsOff() {
         assertTrue("android:allowBackup=\"false\"" in manifest)

@@ -126,6 +126,18 @@ class HubCommandRouterTest {
         assertEquals("stopWorkout", calls.last())
     }
 
+    /** Hi Rokid agent: the glasses never send Stop from the touchpad, only for the spoken agent, so it is confirmed like voice. */
+    @Test fun glassesStopAsksFirst() = runTest {
+        val r = router()
+        askOutcome = ConfirmationOutcome.No
+        r.dispatch(env("g1", Command.StopWorkout, origin = DeviceKind.Glasses)); runCurrent()
+        assertEquals(listOf("ask:StopWorkoutByVoice"), calls)
+        assertEquals(listOf("Cancelled"), toasts)
+        askOutcome = ConfirmationOutcome.Yes
+        r.dispatch(env("g2", Command.StopWorkout, origin = DeviceKind.Glasses)); runCurrent()
+        assertEquals(listOf("ask:StopWorkoutByVoice", "ask:StopWorkoutByVoice", "stopWorkout"), calls)
+    }
+
     @Test fun markOutdatedFlagsDeviceAndToasts() = runTest {
         val r = router()
         r.markOutdated(DeviceKind.Watch)

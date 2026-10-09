@@ -45,16 +45,24 @@ class HubCommandRouter(
             return
         }
         if (!deduper.firstTime(envelope.id)) return
+        // The glasses have no Stop gesture: a glasses Stop comes from the spoken Hi Rokid agent, so it is confirmed like voice.
+        if (envelope.origin == DeviceKind.Glasses && envelope.command == Command.StopWorkout) {
+            scope.launch { if (confirmStop()) apply(Command.StopWorkout, DeviceKind.Glasses) }
+            return
+        }
         apply(envelope.command, envelope.origin)
     }
 
     /** Voice path: destructive commands are confirmed on all devices first. */
     suspend fun dispatchVoice(command: Command) {
-        if (command == Command.StopWorkout) {
-            val o = confirm.ask(ConfirmationKind.StopWorkoutByVoice, "End workout?", "You said stop. End the workout?", defaultYes = true)
-            if (o != ConfirmationOutcome.Yes) { toast("Cancelled"); return }
-        }
+        if (command == Command.StopWorkout && !confirmStop()) return
         apply(command, origin = null)
+    }
+
+    private suspend fun confirmStop(): Boolean {
+        val o = confirm.ask(ConfirmationKind.StopWorkoutByVoice, "End workout?", "You said stop. End the workout?", defaultYes = true)
+        if (o != ConfirmationOutcome.Yes) toast("Cancelled")
+        return o == ConfirmationOutcome.Yes
     }
 
     private fun apply(command: Command, origin: DeviceKind?) {
