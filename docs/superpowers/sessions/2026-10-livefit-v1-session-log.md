@@ -155,6 +155,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 - **Done:** 25-task TDD plan `docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md` (`630b34b`), 7 parallel lanes after a protocol-v4 first task; 12 rulings on spec gaps listed in the plan (e.g. GPS outdoors applies to all types incl. Walk, Room v2 migration, `lf_map` bytes with Base64 fallback).
 - **Why:** spec approved by invoking the planning skill; plan drafted by an Opus agent with code access, self-reviewed (no placeholders, coverage of time-sync/epochs/route file/pages/gestures/QueueFrame).
 
+### 21. Codex review of the implementation plan (11 P2 + 1 P3)
+- **Done:** accepted all 12 (route durability after ACK, pre-calibration timestamp repair, observed-time recovery, torn route-file append, non-blocking tile rendering, watch tile retry, live-only marker, unknown accuracy, scroll timer ordering, page-report retry, OSM cache validators, Task 12 dependency); review saved to `../reviews/2026-10-09-pages-maps-plan-review.md`; Opus agent revising the plan + adding an early on-device PNG-over-CXR check.
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
