@@ -1,0 +1,204 @@
+package com.debasish.livefit.map
+
+import com.sun.net.httpserver.HttpServer
+import java.io.File
+import java.net.InetSocketAddress
+import java.nio.file.Files
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class TilesTest {
+    private lateinit var server: HttpServer
+    private val requests = AtomicInteger()
+    private val userAgents = CopyOnWriteArrayList<String>()
+    private val ifNoneMatch = CopyOnWriteArrayList<String?>()
+    private val ifModifiedSince = CopyOnWriteArrayList<String?>()
+    @Volatile private var status = 200
+    @Volatile private var cacheControl: String? = "max-age=60"
+    @Volatile private var expires: String? = null
+    @Volatile private var etag: String? = null
+    @Volatile private var lastModified: String? = null
+    private val png = byteArrayOf(-119, 80, 78, 71, 1, 2, 3)
+    private var now = 1_000_000L
+    private val tile = TileId(18, 1, 2)
+    private val day = 24L * 3600 * 1000
+
+    @BeforeTest fun up() {
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { ex ->
+            requests.incrementAndGet()
+            userAgents += ex.requestHeaders.getFirst("User-Agent").orEmpty()
+            ifNoneMatch += ex.requestHeaders.getFirst("If-None-Match")
+            ifModifiedSince += ex.requestHeaders.getFirst("If-Modified-Since")
+            cacheControl?.let { ex.responseHeaders.add("Cache-Control", it) }
+            expires?.let { ex.responseHeaders.add("Expires", it) }
+            etag?.let { ex.responseHeaders.add("ETag", it) }
+            lastModified?.let { ex.responseHeaders.add("Last-Modified", it) }
+            when (status) {
+                200 -> { ex.sendResponseHeaders(200, png.size.toLong()); ex.responseBody.use { it.write(png) } }
+                else -> { ex.sendResponseHeaders(status, -1); ex.close() }
+            }
+        }
+        server.start()
+    }
+
+    @AfterTest fun down() = server.stop(0)
+
+    private val source = object : TileSource {
+        override val userAgent = "RokidLiveFit/test"
+        override val attribution = OSM_ATTRIBUTION
+        override fun url(tile: TileId) = "http://127.0.0.1:${server.address.port}/${tile.z}/${tile.x}/${tile.y}.png"
+    }
+
+    private fun cache(dir: File = Files.createTempDirectory("tiles").toFile()) = TileDiskCache(dir, 1_000_000, { now })
+    private fun fetcher(c: TileDiskCache = cache()) = HttpTileFetcher(source, c, { now })
+    private fun http(ms: Long): String = DateTimeFormatter.RFC_1123_DATE_TIME.format(Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC))
+
+    @Test fun osmSourceUrlAndAttribution() {
+        val osm = OsmTileSource()
+        assertEquals("https://tile.openstreetmap.org/18/1/2.png", osm.url(tile))
+        assertEquals("© OpenStreetMap contributors", osm.attribution)
+        assertTrue(osm.userAgent.startsWith("RokidLiveFit/"), "app-specific User-Agent")
+    }
+
+    @Test fun sendsTheAppUserAgentAndServesRepeatsFromCache() {
+        val f = fetcher()
+        assertContentEquals(png, f.fetch(tile))
+        assertContentEquals(png, f.fetch(tile))
+        assertEquals(1, requests.get())
+        assertEquals(listOf("RokidLiveFit/test"), userAgents.toList())
+        assertNull(ifNoneMatch.single(), "a first download carries no validators")
+    }
+
+    @Test fun honoursMaxAge() {
+        val f = fetcher()
+        f.fetch(tile)
+        now += 59_000; f.fetch(tile)
+        assertEquals(1, requests.get())
+        now += 2_000; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    /** Review #11 / OSM tile policy §3.2: a server lifetime longer than 7 days is honoured, not capped. */
+    @Test fun longMaxAgeIsPreserved() {
+        assertEquals(99_999_999_000L, HttpTileFetcher.lifetimeMs("public, max-age=99999999", null, null, now))
+        cacheControl = "max-age=1209600" // 14 days
+        val f = fetcher()
+        f.fetch(tile)
+        now += 8 * day; f.fetch(tile)
+        assertEquals(1, requests.get(), "still fresh after 8 days")
+        now += 7 * day; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun expiresIsHonouredWhenThereIsNoMaxAge() {
+        assertEquals(7_200_000L, HttpTileFetcher.lifetimeMs(null, http(now + 7_200_000), http(now), now))
+        assertEquals(0L, HttpTileFetcher.lifetimeMs(null, "0", null, now), "an invalid Expires means already expired")
+        assertEquals(30_000L, HttpTileFetcher.lifetimeMs("max-age=30", http(now + 7_200_000), null, now), "max-age wins over Expires")
+        // The test server stamps a real Date header, so this part runs on the real clock (100 s margins either side).
+        now = System.currentTimeMillis()
+        cacheControl = null; expires = http(now + 7_200_000)
+        val f = fetcher()
+        f.fetch(tile)
+        now += 7_100_000; f.fetch(tile)
+        assertEquals(1, requests.get())
+        now += 200_000; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    /** Spec §2.4: 7 days only when the server sends neither max-age nor Expires. */
+    @Test fun headerlessResponseFallsBackToSevenDays() {
+        assertEquals(7 * day, HttpTileFetcher.lifetimeMs(null, null, null, now))
+        assertEquals(7 * day, HttpTileFetcher.lifetimeMs("public", null, null, now))
+        cacheControl = null
+        val f = fetcher()
+        f.fetch(tile)
+        now += 7 * day - 1; f.fetch(tile)
+        assertEquals(1, requests.get())
+        now += 2; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    /** Review #11: an expired entry is revalidated with its ETag and Last-Modified. */
+    @Test fun expiredEntrySendsValidators() {
+        etag = "\"abc\""; lastModified = http(now - day)
+        val f = fetcher()
+        f.fetch(tile)
+        now += 61_000; f.fetch(tile)
+        assertEquals(listOf(null, "\"abc\""), ifNoneMatch.toList())
+        assertEquals(listOf(null, http(now - 61_000 - day)), ifModifiedSince.toList())
+    }
+
+    /** Review #11: 304 keeps the cached bytes and refreshes the lifetime (and validators) from the new headers. */
+    @Test fun notModifiedKeepsTheBytesAndRefreshesMetadata() {
+        etag = "\"abc\""
+        val c = cache()
+        val f = fetcher(c)
+        f.fetch(tile)
+        now += 61_000; status = 304; cacheControl = "max-age=120"; etag = "\"abd\""
+        assertContentEquals(png, f.fetch(tile))
+        assertEquals(2, requests.get())
+        val e = assertNotNull(c.get(tile))
+        assertTrue(e.fresh)
+        assertEquals("\"abd\"", e.meta.etag)
+        assertContentEquals(png, e.bytes)
+        now += 100_000; f.fetch(tile)
+        assertEquals(2, requests.get(), "fresh again for the new 120 s")
+    }
+
+    @Test fun offlineServesTheStaleCopy() {
+        val f = fetcher()
+        f.fetch(tile)
+        now += 61_000; status = 500
+        assertContentEquals(png, f.fetch(tile))
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun failuresBackOffThirtySeconds() {
+        status = 503
+        val f = fetcher()
+        assertNull(f.fetch(tile))
+        assertNull(f.fetch(tile))
+        assertEquals(1, requests.get(), "no retry storm while offline")
+        now += 30_001
+        assertNull(f.fetch(tile))
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun lruEvictsTheLeastRecentlyUsed() {
+        val dir = Files.createTempDirectory("lru").toFile()
+        val overhead = 8 + 2 + 2 // expiry + two empty validator strings
+        val cache = TileDiskCache(dir, maxBytes = 2 * (overhead + 100) + 50L, nowMs = { now })
+        val a = TileId(18, 0, 0); val b = TileId(18, 0, 1); val c = TileId(18, 0, 2)
+        cache.put(a, ByteArray(100), TileMeta(now + 60_000)); now += 10_000
+        cache.put(b, ByteArray(100), TileMeta(now + 60_000)); now += 10_000
+        assertNotNull(cache.get(a)); now += 10_000 // a is now more recent than b
+        cache.put(c, ByteArray(100), TileMeta(now + 60_000))
+        assertNull(cache.get(b), "least recently used evicted")
+        assertNotNull(cache.get(a)); assertNotNull(cache.get(c))
+        assertTrue(cache.sizeBytes() <= 2 * (overhead + 100) + 50L)
+    }
+
+    @Test fun expiredEntryIsMarkedStale() {
+        val cache = TileDiskCache(Files.createTempDirectory("exp").toFile(), 1_000_000, { now })
+        cache.put(tile, png, TileMeta(now + 1_000, etag = "\"e\""))
+        assertTrue(cache.get(tile)!!.fresh)
+        now += 1_001
+        val stale = cache.get(tile)!!
+        assertFalse(stale.fresh)
+        assertEquals("\"e\"", stale.meta.etag)
+        assertFalse(cache.refresh(TileId(18, 9, 9), TileMeta(now + 1_000)), "nothing to refresh")
+    }
+}
