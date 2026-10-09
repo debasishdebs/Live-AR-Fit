@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.services.music.MediaListener
@@ -34,6 +35,7 @@ class PermissionSource(private val context: Context) : ListSource {
     override suspend fun load(filter: JSONObject?): List<ListItem> = listOf(
         row("mic", "Microphone", "Offline voice commands", Icons.Rounded.Mic, granted(Manifest.permission.RECORD_AUDIO)),
         row("bt", "Nearby devices", "Watch and glasses links", Icons.Rounded.Bluetooth, granted(Manifest.permission.BLUETOOTH_CONNECT)),
+        row("location", "Location", "Phone map fallback when the watch has no GPS", Icons.Rounded.MyLocation, granted(Manifest.permission.ACCESS_FINE_LOCATION)),
         row("media", "Music control", "Control YouTube Music", Icons.Rounded.LibraryMusic, mediaAccess()),
         row("battery", "Run in background", "Keep the workout alive", Icons.Rounded.BatteryChargingFull, unrestrictedBattery()),
         row("rokid", "Rokid glasses", "Authorised in Hi Rokid", Icons.Rounded.Visibility, context.getSharedPreferences("rokid", 0).contains("token")),

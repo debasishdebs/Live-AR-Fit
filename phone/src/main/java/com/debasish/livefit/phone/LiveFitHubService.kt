@@ -12,17 +12,21 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.phone.ui.AppActivity
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /** Keeps the hub (ServiceGraph) alive while a linked device is present or a workout runs (spec §5.2). */
 class LiveFitHubService : Service() {
     private var watcher: Job? = null
+    private var lastText = READY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -37,8 +41,9 @@ class LiveFitHubService : Service() {
         val graph = services
         connectGlassesIfNearby(graph)
         watcher = graph.scope.launch {
-            HubNotification.postChanges(graph.workout.snapshot, initial = READY) { text -> nm.notify(ID, notification(text)) }
+            HubNotification.postChanges(graph.workout.snapshot, initial = READY) { text -> lastText = text; nm.notify(ID, notification(text)) }
         }
+        if (promoteOnCreate) { promoteOnCreate = false; promoteLocation() } // started from the visible Activity
     }
 
     /**
@@ -55,9 +60,22 @@ class LiveFitHubService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_PROMOTE_LOCATION) promoteLocation()
+        return START_STICKY
+    }
 
-    override fun onDestroy() { running = false; watcher?.cancel(); super.onDestroy() }
+    /** Spec §2.1: `CONNECTED_DEVICE | LOCATION` while the Activity is visible and fine location is granted; refusal is harmless. */
+    private fun promoteLocation() {
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val types = HubLocationPolicy.fgsTypes(fine, activityVisible = true)
+        if (types and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION == 0) { _locationCapable.value = false; return }
+        runCatching { ServiceCompat.startForeground(this, ID, notification(lastText), types) }
+            .onSuccess { _locationCapable.value = true }
+            .onFailure { Log.w("LiveFitHub", "location FGS refused", it); _locationCapable.value = false }
+    }
+
+    override fun onDestroy() { running = false; watcher?.cancel(); _locationCapable.value = false; super.onDestroy() }
 
     private fun notification(text: String): Notification = Notification.Builder(this, CHANNEL)
         .setContentTitle("Rokid LiveFit")
@@ -73,6 +91,17 @@ class LiveFitHubService : Service() {
         private const val READY = "LiveFit ready"
         /** True while the service is in the foreground (set once startForeground succeeded). */
         @Volatile private var running = false
+        private const val ACTION_PROMOTE_LOCATION = "com.debasish.livefit.PROMOTE_LOCATION"
+        @Volatile private var promoteOnCreate = false
+        private val _locationCapable = MutableStateFlow(false)
+        /** The hub currently holds the `location` FGS type, so the phone fallback can run. */
+        val locationCapable: StateFlow<Boolean> = _locationCapable
+
+        /** Called from the visible Activity (onResume, after a location grant). */
+        fun promoteLocation(context: Context) {
+            if (running) runCatching { context.startService(Intent(context, LiveFitHubService::class.java).setAction(ACTION_PROMOTE_LOCATION)) }
+            else promoteOnCreate = true // ensureRunning() just started it; onCreate promotes
+        }
 
         fun start(context: Context) = runCatching {
             context.startForegroundService(Intent(context, LiveFitHubService::class.java))

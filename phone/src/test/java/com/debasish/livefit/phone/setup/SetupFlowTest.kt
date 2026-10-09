@@ -10,8 +10,15 @@ class SetupFlowTest {
     @Test fun walksAllSteps() {
         val f = SetupFlow()
         val seen = mutableListOf(f.step)
-        repeat(5) { f.next(); seen += f.step }
+        repeat(6) { f.next(); seen += f.step }
         assertEquals(SetupStep.entries.toList(), seen)
+    }
+
+    /** Spec §2.1: "Map fallback" is an optional setup step; skipping it leads on to Voice. */
+    @Test fun mapFallbackStepIsOptional() {
+        val f = SetupFlow(SetupStep.Map); f.skip()
+        assertEquals(SetupStep.Voice, f.step)
+        assertEquals(SetupStep.Map, SetupFlow(SetupStep.Music).also { it.next() }.step)
     }
 
     @Test fun backStopsAtWelcome() {
