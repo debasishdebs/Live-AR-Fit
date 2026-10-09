@@ -41,6 +41,10 @@ interface GlassesLinkService {
     suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
     /** Shows a HUD page on the glasses (lf_page, voice "playlist view"); dropped while not connected. */
     suspend fun pushPage(request: com.debasish.livefit.model.PageRequest) {}
+    /** Map epoch header or image on lf_map (spec §2.5); false when not sent (not connected or the send failed). */
+    suspend fun pushMap(frame: com.debasish.livefit.model.MapFrame, png: ByteArray?): Boolean = false
+    /** lf_page_state from the glasses: the visible page, on every page change and every (re)connect. */
+    val pageStates: Flow<com.debasish.livefit.model.PageState> get() = kotlinx.coroutines.flow.emptyFlow()
 }
 
 sealed interface GlassesEvent {
@@ -58,6 +62,10 @@ interface WatchLinkService {
     /** Asks the watch app to make the watch discoverable for companion pairing; false when it could not be sent. */
     suspend fun requestDiscoverable(): Boolean = false
     suspend fun push(frame: com.debasish.livefit.model.StateFrame)
+    /** Settings → Pages on /lf/settings, on change and on every (re)connect (spec §3.2). */
+    suspend fun pushSettings(frame: com.debasish.livefit.model.WatchSettingsFrame) {}
+    /** Queue window on /lf/queue for the watch Playlist page, on change and on every (re)connect (spec §6). */
+    suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
 }
 
 interface MusicService {
@@ -145,6 +153,19 @@ interface HistoryStore : SessionStore {
      * Open sessions keep their data, and lifecycle tombstones stay so stale traffic is still rejected.
      */
     suspend fun clearFinished()
+}
+
+/**
+ * Durable route rows per session (spec §2.2, route_point). Identity (sessionId, source, deviceTimeMs) never changes;
+ * phoneTimeMs is null until the watch clock is calibrated and is rewritten by [normalizeWatchTimes] (review #2).
+ */
+interface RouteStore {
+    /** Insert-or-ignore by identity; nothing is written for a Discarded (or Cleared) session — its tombstone wins. */
+    suspend fun storeRouteFixes(sessionId: String, fixes: List<com.debasish.livefit.model.RouteFix>)
+    /** phoneTimeMs = deviceTimeMs − [watchOffsetMs] for every Watch row of [sessionId] that is null or mapped with another offset. */
+    suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long)
+    /** Phone-time order, watch first on ties; rows without a phone time last, by device time. */
+    suspend fun routeFixes(sessionId: String): List<com.debasish.livefit.model.RouteFix>
 }
 
 /** Platform speech-to-text, on-device only (spec §5.4). */

@@ -10,16 +10,22 @@ import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.ExerciseResult
 import com.debasish.livefit.model.ExerciseStateReport
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.SessionClaim
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.TimeSyncRequest
+import com.debasish.livefit.model.TimeSyncResponse
+import com.debasish.livefit.model.WatchSettingsFrame
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.WatchExerciseGateway
 import com.debasish.livefit.services.WatchLinkService
+import com.debasish.livefit.sync.WatchClockSync
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,6 +35,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.random.Random
 
 /** Phone ↔ watch over the Wearable Data Layer: gateway for the hub + frames + battery. */
 class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : WatchLinkService, WatchExerciseGateway {
@@ -48,10 +56,16 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
     private val _outdated = MutableSharedFlow<Int?>(extraBufferCapacity = 4)
     val outdated: SharedFlow<Int?> = _outdated
 
+    /** Watch clock calibration (spec §2.1), in memory only: a new phone process starts uncalibrated. */
+    val clockSync = WatchClockSync(Clock { System.currentTimeMillis() })
+    /** Touched only on [scope] (Main). */
+    private val pendingSync = HashMap<Long, CompletableDeferred<TimeSyncResponse>>()
+
     init {
         instance = this
         scope.launch { while (true) { refreshNode(); delay(5_000) } }
         scope.launch { while (true) { requestBattery(); delay(60_000) } }
+        scope.launch { calibrationLoop() }
     }
 
     private suspend fun refreshNode() {
@@ -68,6 +82,35 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
             val named = node?.let { n -> it.copy(name = n.displayName.substringBefore(" (").ifBlank { "Galaxy Watch" }) } ?: it
             if (reachability.link == LinkState.Disconnected) named.copy(link = LinkState.Disconnected, detail = "Not reachable")
             else named.copy(link = reachability.link, detail = null)
+        }
+    }
+
+    /** On every Connected transition and every 5 min (every 30 s while never calibrated): up to 5 pings with RTT ≤ 1 s. */
+    private suspend fun calibrationLoop() {
+        var wasConnected = false
+        var nextAtMs = 0L
+        while (true) {
+            val connected = _status.value.link == LinkState.Connected
+            if (connected && (!wasConnected || System.currentTimeMillis() >= nextAtMs)) {
+                val ok = clockSync.calibrate(::ping)
+                Log.i(TAG, "time sync ok=$ok offset=${clockSync.offsetMs.value}")
+                nextAtMs = System.currentTimeMillis() + if (clockSync.calibrated) WatchClockSync.PERIOD_MS else WatchClockSync.RETRY_UNCALIBRATED_MS
+            }
+            wasConnected = connected
+            delay(1_000)
+        }
+    }
+
+    /** One ping: the watch answers on /lf/time_res with its clock; null after 1 s (calibrate() would reject it anyway). */
+    private suspend fun ping(t0: Long): Long? {
+        val id = Random.nextLong()
+        val reply = CompletableDeferred<TimeSyncResponse>()
+        pendingSync[id] = reply
+        try {
+            if (!sendRaw(WatchPaths.TIME_REQ, Wire.encode(TimeSyncRequest(id = id, t0 = t0)).toByteArray())) return null
+            return withTimeoutOrNull(1_000) { reply.await() }?.tw
+        } finally {
+            pendingSync.remove(id)
         }
     }
 
@@ -97,6 +140,14 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
         if (_status.value.link == LinkState.Connected) { sendRaw(WatchPaths.STATE, Wire.encode(frame).toByteArray()) }
     }
 
+    override suspend fun pushSettings(frame: WatchSettingsFrame) {
+        if (_status.value.link == LinkState.Connected) sendRaw(WatchPaths.SETTINGS, Wire.encode(frame).toByteArray())
+    }
+
+    override suspend fun pushQueue(frame: QueueFrame) {
+        if (_status.value.link == LinkState.Connected) sendRaw(WatchPaths.QUEUE, Wire.encode(frame).toByteArray())
+    }
+
     /** Called (on [scope]) from the phone's WearableListenerService for every /lf message: any of them means Connected (F3). */
     fun onMessage(path: String, bytes: ByteArray, sourceNodeId: String) {
         reachability.onMessage(sourceNodeId)
@@ -107,6 +158,7 @@ class DataLayerWatchLink(context: Context, private val scope: CoroutineScope) : 
             is WatchInbound.State -> stateReports.tryEmit(m.report)
             is WatchInbound.Claim -> claims.tryEmit(m.claim)
             is WatchInbound.Cmd -> commands.tryEmit(m.envelope)
+            is WatchInbound.TimeRes -> pendingSync.remove(m.response.id)?.complete(m.response)
             is WatchInbound.Battery -> _status.update { it.copy(batteryPct = m.pct) }
             is WatchInbound.Outdated -> _outdated.tryEmit(m.version)
             null -> Log.w(TAG, "ignored $path")

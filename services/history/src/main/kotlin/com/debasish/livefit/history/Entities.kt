@@ -31,3 +31,21 @@ data class SampleEntity(
     val speedKmh: Double?,
     val provenance: String,
 )
+
+/**
+ * One route row (spec §2.2). [fixTimeMs] is the measuring device's own clock — the replay-safe identity, never changed;
+ * [phoneTimeMs] is the calibrated phone time used for ordering, null until the watch clock is calibrated.
+ */
+@Entity(tableName = "route_point", primaryKeys = ["sessionId", "source", "fixTimeMs"], indices = [Index("sessionId")])
+data class RoutePointEntity(
+    val sessionId: String,
+    val source: String,
+    val fixTimeMs: Long,
+    val phoneTimeMs: Long?,
+    /** Phone time the fix was first received; never rewritten (review r2 #2). */
+    val receivedAtMs: Long,
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Float,
+    val bearingDeg: Float?,
+)

@@ -8,6 +8,8 @@ import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.HudSettingsFrame
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.MapFrame
+import com.debasish.livefit.model.PageState
 import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.Wire
@@ -37,6 +39,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Base64
 
 /**
  * Live glasses link over Rokid CXR-L via the Hi Rokid app (spec §2.1, §5.3).
@@ -64,6 +67,8 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
     override val status: StateFlow<DeviceStatus> = _status
     private val _events = MutableSharedFlow<GlassesEvent>(extraBufferCapacity = 256) // audio arrives as ~10 chunks/s
     override val events: SharedFlow<GlassesEvent> = _events
+    private val _pageStates = MutableSharedFlow<PageState>(extraBufferCapacity = 16)
+    override val pageStates: SharedFlow<PageState> = _pageStates
     private val _authResults = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
     override val authResults: SharedFlow<Boolean> = _authResults
 
@@ -228,6 +233,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
             Log.w(TAG, "bad payload on $cmd", e); null
         }
         if (text.isNullOrEmpty()) return
+        inbound.pageState(cmd, text)?.let { _pageStates.tryEmit(it); return }
         inbound.onMessage(cmd, text).forEach { _events.tryEmit(it) }
     }
 
@@ -250,11 +256,17 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         send(GlassesChannels.PAGE, Wire.encode(request)) // not replayed on reconnect: a page request is a one-off
     }
 
-    private fun send(channel: String, json: String): Boolean {
+    /** PNG in the CXR bytes argument (spec §2.5); [MAP_AS_BASE64] puts it in the JSON instead if the device test needs it. */
+    override suspend fun pushMap(frame: MapFrame, png: ByteArray?): Boolean {
+        if (MAP_AS_BASE64 && png != null) return send(GlassesChannels.MAP, Wire.encode(frame.copy(pngBase64 = Base64.getEncoder().encodeToString(png))))
+        return send(GlassesChannels.MAP, Wire.encode(frame), png ?: ByteArray(0))
+    }
+
+    private fun send(channel: String, json: String, bytes: ByteArray = ByteArray(0)): Boolean {
         if (_status.value.link != LinkState.Connected) return false
         val s = session ?: return false
         return try {
-            val r = s.sendCustomCmd(channel, Caps().apply { write(json) }, ByteArray(0))
+            val r = s.sendCustomCmd(channel, Caps().apply { write(json) }, bytes)
             if (!r.isSuccess) Log.w(TAG, "send $channel failed ${r.code}")
             r.isSuccess
         } catch (e: CancellationException) {
@@ -303,6 +315,8 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         const val TAG = "LiveFitGlassesLink"
         const val GLASSES_PKG = "com.debasish.livefit.glasses"
         const val CONNECT_TIMEOUT_MS = 15_000L
+        /** Device-test switch (plan decision): false = PNG in the CXR bytes argument; true = Base64 inside the MapFrame JSON. */
+        const val MAP_AS_BASE64 = false
         internal const val PREFS = "rokid"
         internal const val KEY_TOKEN = "token"
         @Volatile var instance: CxrGlassesLink? = null
