@@ -170,7 +170,11 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 25. Codex review of plan revision 3 (1 P2)
 - **Done:** tile finding confirmed closed; accepted the remaining one — a replay after a failed route write could replace the original receipt time and let a future-rejected point back into history. Sent to the plan agent as Revision 4 (keep the earliest receipt through retries and the delta transaction, with the 600,000 / 605,000 regression test).
 
+### 26. Plan revision 4 committed
+- **Done:** `b426df5` — RouteHub merges replays/retries keeping the earliest receipt; Room keeps `min(receivedAtMs)` on existing rows for both the route-write and delta paths; tests `aReplayAfterAFailedWriteKeepsTheEarliestReceipt` (Task 14) and extended `receiptTimeIsKeptFromTheFirstInsert` (Task 13).
+
 ## Open items
+- Execute `docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md` (rev 4, `b426df5`) in a fresh chat with `/superpowers:subagent-driven-development`.
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
 - Disabled voice command → "turned off" toast (not tried on device).
