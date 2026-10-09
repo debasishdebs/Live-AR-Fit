@@ -161,6 +161,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 22. Plan revision 2 committed
 - **Done:** `e46e0b8` — all 12 findings resolved (route rows written in the delta transaction + rebuild on load; nullable phone time re-normalized on calibration; arrival-timed recovery; torn-tail truncation; non-blocking TileLoader with retries; live-only watch marker; `accuracyM: Float?` with one shared predicate; IdleGate; PageReporter retry; OSM validators/304; `:core:map` exposure moved to Task 2) + early device check D1 (raw PNG vs Base64 over CXR) in Task 22.
 
+### 23. Codex review of plan revision 2 (2 P2, both reproduced by probes)
+- **Done:** accepted both — obsolete queued tile loads after the map closes / viewport changes (and async renders re-showing tiles), and future-rejected fixes reappearing in history/rebuilds. Review saved to `../reviews/2026-10-09-pages-maps-plan-review-r2.md`; plan agent revising (Revision 3).
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
