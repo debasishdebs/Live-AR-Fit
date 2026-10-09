@@ -16,7 +16,11 @@ class MapImageGate {
     /** True when [frame] is an image to show while the glasses' workout is [sessionId]. */
     @Synchronized
     fun accept(frame: MapFrame, sessionId: String?): Boolean = when (frame.kind) {
-        MapFrameKind.Epoch -> { epoch = frame.renderEpoch; lastSeq = 0; false }
+        MapFrameKind.Epoch -> {
+            // A repeated header (re-announced for a lost/early one) keeps lastSeq so older images can't be replayed.
+            if (epoch != frame.renderEpoch) { epoch = frame.renderEpoch; lastSeq = 0 }
+            false
+        }
         MapFrameKind.Image -> {
             val ok = epoch == frame.renderEpoch && sessionId != null && frame.sessionId == sessionId && frame.renderSeq > lastSeq
             if (ok) lastSeq = frame.renderSeq

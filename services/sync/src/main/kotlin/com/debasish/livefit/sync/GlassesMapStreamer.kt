@@ -60,7 +60,10 @@ class GlassesMapStreamer(
         if (seq <= lastPageSeq) return
         lastPageSeq = seq
         val v = page == HudPage.Map
-        if (v && !visible) cadence.reset() // arriving on the Map page renders at once
+        if (v && !visible) {
+            cadence.reset() // arriving on the Map page renders at once
+            announced = false // re-send the epoch header first: the glasses may have missed or not yet subscribed to it
+        }
         visible = v
     }
 

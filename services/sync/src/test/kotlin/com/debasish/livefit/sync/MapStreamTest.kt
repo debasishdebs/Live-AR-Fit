@@ -110,6 +110,26 @@ class MapStreamTest {
         assertEquals(2, r.images.size)
     }
 
+    /** Review I-1: a lost/early epoch header is repaired by re-announcing whenever the glasses arrive on Map. */
+    @Test fun reEnteringMapReAnnouncesTheEpochBeforeTheNextImage() = runTest {
+        val r = Rig(this); onMap(r)
+        advanceTimeBy(300); runCurrent()
+        r.streamer.onPageState(HudPage.Workout, 2); runCurrent()
+        r.streamer.onPageState(HudPage.Map, 3)
+        advanceTimeBy(300); runCurrent()
+        assertEquals(listOf(2L, 2L), r.epochs, "same epoch, announced again")
+        val kinds = r.sent.map { it.first.kind }
+        assertEquals(listOf(MapFrameKind.Epoch, MapFrameKind.Image, MapFrameKind.Epoch, MapFrameKind.Image), kinds)
+    }
+
+    @Test fun mapToMapReportDoesNotReAnnounce() = runTest {
+        val r = Rig(this); onMap(r)
+        advanceTimeBy(300); runCurrent()
+        r.streamer.onPageState(HudPage.Map, 2)
+        advanceTimeBy(300); runCurrent()
+        assertEquals(1, r.epochs.size)
+    }
+
     @Test fun olderPageStateIsIgnored() = runTest {
         val r = Rig(this); onMap(r, seq = 5)
         r.streamer.onPageState(HudPage.Workout, 4)
@@ -170,6 +190,17 @@ class MapStreamTest {
     }
 
     @Test fun imageBeforeAnyEpochIsRejected() = assertFalse(MapImageGate().accept(image(1, 1), "s"))
+
+    /** Review I-1: a duplicated header of the same epoch must not allow replaying older images. */
+    @Test fun repeatedHeaderOfTheSameEpochKeepsTheSequence() {
+        val g = MapImageGate().apply { accept(epoch(1), "s") }
+        assertTrue(g.accept(image(1, 5), "s"))
+        g.accept(epoch(1), "s")
+        assertFalse(g.accept(image(1, 4), "s"), "older seq still rejected")
+        assertTrue(g.accept(image(1, 6), "s"))
+        g.accept(epoch(2), "s")
+        assertTrue(g.accept(image(2, 1), "s"), "a new epoch still resets")
+    }
 
     /** Review Focus #3: a restarted phone's new epoch starts again at seq 1 although the old one reached 50. */
     @Test fun restartedPhoneNewEpochResetsSequence() {
