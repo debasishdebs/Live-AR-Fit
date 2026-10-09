@@ -1,6 +1,8 @@
 package com.debasish.livefit.services.watch
 
 import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import com.debasish.livefit.model.CAPABILITY_WATCH
 import com.debasish.livefit.model.NodeCandidate
 import com.debasish.livefit.model.chooseNodes
@@ -14,7 +16,11 @@ suspend fun watchNodes(context: Context): List<NodeCandidate> {
     val advertised = runCatching {
         Wearable.getCapabilityClient(app).getCapability(CAPABILITY_WATCH, CapabilityClient.FILTER_REACHABLE).await().nodes
             .map { NodeCandidate(it.id, it.displayName, it.isNearby) }
-    }.getOrDefault(emptyList())
+    }.getOrElse { e ->
+        if (e is CancellationException) throw e
+        Log.w("LiveFitWatchLink", "capability lookup failed", e)
+        emptyList()
+    }
     val chosen = chooseNodes(advertised)
     if (chosen.isNotEmpty()) return chosen
     return chooseNodes(Wearable.getNodeClient(app).connectedNodes.await().map { NodeCandidate(it.id, it.displayName, it.isNearby) })

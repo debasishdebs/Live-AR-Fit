@@ -107,7 +107,7 @@ object CompanionLinker {
         } else null
         val adapter = context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter
         val bonded = adapter?.bondedDevices.orEmpty().filter { d ->
-            if (mac != null) d.address.equals(mac, ignoreCase = true) else matchesKind(kind, d.name, d.bluetoothClass?.majorDeviceClass)
+            if (mac != null) d.address.equals(mac, ignoreCase = true) else matchesKind(kind, d.name, d.bluetoothClass?.deviceClass)
         }
         val isConnected = android.bluetooth.BluetoothDevice::class.java.getMethod("isConnected")
         bonded.any { isConnected.invoke(it) as? Boolean == true }
@@ -116,9 +116,10 @@ object CompanionLinker {
         false
     }
 
-    private fun matchesKind(kind: DeviceKind, name: String?, majorClass: Int?): Boolean = when (kind) {
+    private fun matchesKind(kind: DeviceKind, name: String?, deviceClass: Int?): Boolean = when (kind) {
         DeviceKind.Glasses -> glassesName.matcher(name ?: "").matches()
-        else -> majorClass == android.bluetooth.BluetoothClass.Device.Major.WEARABLE
+        DeviceKind.Watch -> deviceClass == android.bluetooth.BluetoothClass.Device.WEARABLE_WRIST_WATCH
+        else -> false
     }
 
     fun kindFor(context: Context, associationId: Int): DeviceKind? =

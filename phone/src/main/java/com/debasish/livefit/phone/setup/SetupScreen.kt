@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Watch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.phone.ui.linked.watchMediaControlsTip
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -66,6 +67,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     var progress by remember { mutableStateOf<Float?>(null) }
     var downloading by remember { mutableStateOf(false) }
     var voiceNote by remember { mutableStateOf<String?>(null) }
+    val watchStatus by services.watch.status.collectAsStateWithLifecycle()
     var pairNote by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -159,7 +161,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
             Text(it, style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
         }
         if (step == SetupStep.Watch) {
-            Text(watchMediaControlsTip(services.watch.status.value.name), style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp))
+            Text(watchMediaControlsTip(watchStatus.name), style = MaterialTheme.typography.bodySmall, color = LiveFitColors.InkSoft, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp))
         }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
