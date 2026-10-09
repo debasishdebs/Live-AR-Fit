@@ -44,3 +44,6 @@ design-refs/
 keystore.properties
 *.jks
 *.keystore
+
+### Python (tools/release unittest runs) ###
+__pycache__/

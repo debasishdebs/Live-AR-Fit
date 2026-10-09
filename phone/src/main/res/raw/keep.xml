@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only Play services reads android_wear_capabilities (by name), so the resource shrinker would delete it from release
+     builds and silently turn off capability routing and the spec §4 sender gate. Checked by tools/release/check_wear_caps.py. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@array/android_wear_capabilities" />
