@@ -27,18 +27,31 @@ const TIMEOUT_MS = 2000;
 const CLOSE_MS = 1500;
 const NOT_OPEN = 'Open Live AR Fit on your glasses first';
 
-function withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
-  ]);
+// One deadline for the whole request. AbortController (when the runtime has it) also cancels the fetch itself;
+// the race is the fallback and the backstop.
+function withTimeout(promise, ms, controller) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      if (controller) { try { controller.abort(); } catch (e) { /* ignore */ } }
+      reject(new Error('timeout'));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).then(
+    (v) => { clearTimeout(timer); return v; },
+    (e) => { clearTimeout(timer); throw e; },
+  );
 }
 
 // Any reply from the app carries {ok, say}, also for 400/503; no reply means the app isn't running.
 async function send(cmd) {
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const url = `${ENDPOINT}?cmd=${encodeURIComponent(cmd)}&v=1`;
   try {
-    const res = await withTimeout(fetch(`${ENDPOINT}?cmd=${encodeURIComponent(cmd)}&v=1`), TIMEOUT_MS);
-    const body = JSON.parse(await withTimeout(res.text(), TIMEOUT_MS));
+    const body = await withTimeout((async () => {
+      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      return JSON.parse(await res.text());
+    })(), TIMEOUT_MS, controller);
     return { ok: body.ok === true, say: typeof body.say === 'string' && body.say ? body.say : NOT_OPEN };
   } catch (e) {
     console.error(`[LiveFit] ${cmd} failed: ${e && e.message}`);

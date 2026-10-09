@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
+import com.debasish.livefit.model.CommandVia
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.DiscoverableRequest
 import com.debasish.livefit.model.GestureRules
@@ -171,8 +172,9 @@ class HudController(
         _connection.value = connectionFor(everReceived, liveness.isOnline(), outdated, clock.nowMs() - startedAt)
     }
 
-    fun send(command: Command) =
-        sendRaw(GlassesChannels.COMMAND, Wire.encode(CommandEnvelope(id = UUID.randomUUID().toString(), origin = DeviceKind.Glasses, command = command)))
+    /** [via] = [CommandVia.Agent] for Hi Rokid agent commands, which the hub treats as voice. */
+    fun send(command: Command, via: CommandVia = CommandVia.Direct) =
+        sendRaw(GlassesChannels.COMMAND, Wire.encode(CommandEnvelope(id = UUID.randomUUID().toString(), origin = DeviceKind.Glasses, command = command, via = via)))
 
     /** True when the bridge accepted the message (CXR-S `sendMessage`: 0 = sent, -1 parameter error, -3 internal error). */
     fun sendRaw(channel: String, text: String): Boolean = bridge.sendMessage(channel, Caps().apply { write(text) }) == 0

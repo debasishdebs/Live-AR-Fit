@@ -84,10 +84,27 @@ class AgentServer(
         socket = null
     }
 
+    /** Binds, retrying with backoff (the port can still be held briefly, e.g. by a previous activity's server); null = gave up. */
+    private fun bindWithRetry(): ServerSocket? {
+        var delayMs = BIND_FIRST_DELAY_MS
+        repeat(BIND_ATTEMPTS) { attempt ->
+            if (!running) return null
+            val ss = ServerSocket()
+            try {
+                ss.reuseAddress = true
+                ss.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), BACKLOG)
+                return ss
+            } catch (e: Exception) {
+                runCatching { ss.close() }
+                log("bind failed (attempt ${attempt + 1}/$BIND_ATTEMPTS): ${e.javaClass.simpleName}")
+            }
+            if (attempt < BIND_ATTEMPTS - 1) { Thread.sleep(delayMs); delayMs *= 2 }
+        }
+        return null
+    }
+
     private fun acceptLoop() {
-        val ss = runCatching {
-            ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), BACKLOG) }
-        }.getOrElse { log("bind failed: ${it.javaClass.simpleName}"); running = false; bound.countDown(); return }
+        val ss = bindWithRetry() ?: run { running = false; bound.countDown(); return }
         socket = ss
         boundAddress = ss.inetAddress
         localPort = ss.localPort
@@ -98,7 +115,7 @@ class AgentServer(
             val client = try { ss.accept() } catch (e: Exception) { if (running) log("accept failed: ${e.javaClass.simpleName}"); break }
             if (!slots.tryAcquire(SLOT_WAIT_MS, TimeUnit.MILLISECONDS)) {
                 log("busy")
-                respond(client, HttpReply(503, AgentJson.reply(false, "LiveFit is busy, try again")), drainMs = 100)
+                respond(client, HttpReply(503, AgentJson.reply(false, "LiveFit is busy, try again")), drainMs = 0) // never block accepting
                 continue
             }
             runCatching {
@@ -147,7 +164,10 @@ class AgentServer(
         }
     }
 
-    /** Writes the reply, then drains what the client still sends so closing doesn't reset the connection first. */
+    /**
+     * Writes the reply, then drains what the client still sends (for at most [drainMs] in total, 0 = no drain) so closing
+     * doesn't reset the connection before the client has read the reply.
+     */
     private fun respond(client: Socket, reply: HttpReply, drainMs: Int) {
         runCatching {
             val body = reply.body.toByteArray(Charsets.UTF_8)
@@ -159,11 +179,18 @@ class AgentServer(
                 "Connection: close\r\n\r\n"
             client.getOutputStream().apply { write(head.toByteArray(Charsets.ISO_8859_1)); write(body); flush() }
             client.shutdownOutput()
-            client.soTimeout = drainMs
+            val deadline = System.nanoTime() + drainMs * 1_000_000L
             val input = client.getInputStream()
             val sink = ByteArray(512)
             var total = 0
-            while (total < DRAIN_BYTES) { val n = input.read(sink); if (n < 0) break; total += n }
+            while (total < DRAIN_BYTES) {
+                val left = ((deadline - System.nanoTime()) / 1_000_000L).toInt()
+                if (left <= 0) break
+                client.soTimeout = left
+                val n = input.read(sink)
+                if (n < 0) break
+                total += n
+            }
         }
         runCatching { client.close() }
     }
@@ -179,5 +206,7 @@ class AgentServer(
         private const val BACKLOG = 8
         private const val SLOT_WAIT_MS = 200L
         private const val DRAIN_BYTES = 8_192
+        private const val BIND_ATTEMPTS = 5
+        private const val BIND_FIRST_DELAY_MS = 100L // then 200, 400, 800: about 1.5 s in all
     }
 }

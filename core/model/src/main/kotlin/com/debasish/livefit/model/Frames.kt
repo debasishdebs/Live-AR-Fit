@@ -54,7 +54,13 @@ data class CommandEnvelope(
     val id: String,
     val origin: DeviceKind,
     val command: Command,
+    /** How the command was issued; an older peer omits it (Direct) or ignores it (ignoreUnknownKeys). */
+    val via: CommandVia = CommandVia.Direct,
 )
+
+/** [Direct] = touch / UI; [Agent] = spoken to the Hi Rokid LiveFit agent, so the hub treats it as voice (gate + confirmations). */
+@Serializable
+enum class CommandVia { Direct, Agent }
 
 /**
  * Phone → watch / glasses when the user taps Pair: the companion picker only lists discoverable devices,

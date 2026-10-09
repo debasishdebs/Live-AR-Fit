@@ -35,6 +35,7 @@ import com.debasish.livefit.glasses.hud.HudNav
 import com.debasish.livefit.glasses.hud.IdleGate
 import com.debasish.livefit.glasses.hud.NavContext
 import com.debasish.livefit.glasses.hud.gesture
+import com.debasish.livefit.model.CommandVia
 import com.debasish.livefit.model.Gesture
 import com.debasish.livefit.model.GestureMode
 import com.debasish.livefit.model.GestureSettings
@@ -97,13 +98,16 @@ class MainActivity : ComponentActivity() {
         agent = AgentServer(
             handle = AgentEndpoint(
                 context = {
+                    val frame = controller.frame.value
                     AgentContext(
                         connected = controller.connection.value == HudConnection.Live,
                         pages = controller.pages.value,
-                        mapEligible = PageSet.mapEligible(controller.frame.value?.workout ?: WorkoutSnapshot()),
+                        mapEligible = PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()),
+                        outdated = controller.connection.value == HudConnection.Outdated,
+                        musicPlaying = frame?.music?.isPlaying == true,
                     )
                 },
-                send = controller::send,
+                send = { controller.send(it, CommandVia.Agent) }, // the hub treats it as voice (Settings → Voice, Stop confirm)
                 log = { Log.i(AGENT_TAG, it) },
             )::handle,
             log = { Log.i(AGENT_TAG, it) },

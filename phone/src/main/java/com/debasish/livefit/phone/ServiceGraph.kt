@@ -107,11 +107,12 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast
     private val watchLaunch = WatchLaunchPolicy()
-    val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested,
+    val router: HubCommandRouter = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested,
         showGlassesPage = { page -> scope.launch { glasses.pushPage(PageRequest(page = page)) } },
-        pageEnabled = { settings.pages.value.isEnabled(it) })
+        pageEnabled = { settings.pages.value.isEnabled(it) },
+        onAgentCommand = { voiceGate(it) }) // Hi Rokid agent commands are spoken: same gate and confirmations as voice
     /** Voice commands pass Settings → Voice → Voice commands first (P3). */
-    private val voiceGate = VoiceCommandGate(disabled = { settings.disabledVoiceGroups.value }, toast = ::flash, dispatch = router::dispatchVoice)
+    private val voiceGate: VoiceCommandGate = VoiceCommandGate(disabled = { settings.disabledVoiceGroups.value }, toast = ::flash, dispatch = router::dispatchVoice)
 
     // ---- Voice binding (after the router, which it feeds) ----
     private val stt: AndroidOnDeviceStt? = if (bindings.liveVoice) AndroidOnDeviceStt(app) else null

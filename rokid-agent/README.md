@@ -9,16 +9,29 @@ How it works:
 2. The page runs on the glasses (inside the Rokid assistant). It calls `fetch("http://127.0.0.1:47123/lf?cmd=<command>&v=1")`
    with a 2 s timeout.
 3. The Live AR Fit glasses app answers on loopback only (`glasses/.../agent/AgentServer.kt`). It is running whenever the
-   app process is alive. It sends the command to the phone hub over the same CXR `lf_cmd` path the touchpad uses and
-   replies `{"ok": true|false, "say": "<short ack>"}`.
+   app process is alive. It sends the command to the phone hub over the same CXR `lf_cmd` path the touchpad uses,
+   marked `via: "Agent"`, and replies `{"ok": true|false, "say": "<short ack>"}`.
 4. The page shows `say` on a small card (or "Open Live AR Fit on your glasses first" when nothing answers) and closes
    itself after 1.5 s.
 
 Commands: `start pause resume stop play_pause next previous stats map music playlist glance workout`.
 
-- Stop is confirmed on the glasses: the hub shows its "End workout?" prompt, the same one voice uses.
-- Page views follow the hub's page gate. A page turned off in Settings is toasted and not shown. Map only appears
+The hub treats agent commands as voice:
+
+- **Settings → Voice → Voice commands applies.** A turned-off group is refused, with the usual "'…' is turned off in
+  Settings" toast on the HUD.
+- **Stop asks first.** The hub shows its "End workout?" prompt, the same one voice uses.
+- **`play_pause` becomes "play music" or "pause music"**, depending on what the HUD shows is playing.
+- **Page views follow the hub's page gate.** A page turned off in Settings is toasted and not shown. Map only appears
   during a GPS workout.
+
+Because the hub can still refuse a command, the card only confirms delivery, for example "Sent to LiveFit: pause
+workout". Problems the glasses already know about are said directly:
+
+- phone not connected;
+- "Update LiveFit on your phone";
+- page turned off;
+- map without a GPS workout.
 
 ## Pack and inspect (no device needed)
 
