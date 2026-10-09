@@ -1,0 +1,1 @@
+Open Live AR Fit on your glasses, then just say what you need: "Hi Rokid, tell LiveFit to pause", "LiveFit next song" or "show the map in LiveFit".

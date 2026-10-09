@@ -1,0 +1,6 @@
+Network: Talks to the Live AR Fit app on the same glasses at 127.0.0.1 (local loopback) to pass on your command, for example pause or next song. No internet; no data leaves the glasses through this agent.
+
+Camera: not used.
+Microphone: not used by this agent (Hi Rokid handles the voice request).
+Speaker: not used.
+Rokid account / personal information: not used.
