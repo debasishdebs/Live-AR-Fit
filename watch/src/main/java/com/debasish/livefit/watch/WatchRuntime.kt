@@ -48,7 +48,10 @@ object WatchRuntime {
         if (initialized) return
         app = context.applicationContext
         CrashLog(File(app.filesDir, CrashLog.FILE_NAME), BuildConfig.VERSION_NAME).install()
-        if (BuildConfig.DEBUG) android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
+        // init() can run on a binder/listener thread; the policy belongs on the main thread.
+        if (BuildConfig.DEBUG) android.os.Handler(android.os.Looper.getMainLooper()).postAtFrontOfQueue {
+            android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
+        }
         // The one-time crash-recovery scan (sweep + buffer replay) is the documented main-thread disk read.
         val policy = android.os.StrictMode.allowThreadDiskReads()
         try {

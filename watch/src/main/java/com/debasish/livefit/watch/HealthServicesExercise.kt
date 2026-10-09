@@ -29,6 +29,7 @@ import com.debasish.livefit.sync.batchSamples
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.guava.await
 import java.time.Instant
 import android.util.Log
@@ -93,7 +94,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         // (step totals still arrive), so the phone and HUD showed a stale heart rate until the watch woke.
         val batching = batchingOverrides(caps.supportedBatchingModeOverrides)
         Log.i(TAG, "batching overrides supported=${caps.supportedBatchingModeOverrides} using=$batching")
-        client.setUpdateCallback(callback)
+        client.setUpdateCallback(callbackExecutor, callback)
         runCatching { client.prepareExerciseAsync(WarmUpConfig(exerciseType, setOf(DataType.HEART_RATE_BPM))).await() }
         fun config(overrides: Set<BatchingMode>) =
             ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(overrides).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && locationGranted()).build()
@@ -121,7 +122,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         // Totals only arrive when they change; seed them so the next reading doesn't report 0 steps.
         steps = last?.stepsTotal ?: 0; km = last?.distanceKmTotal ?: 0.0; kcal = last?.kcalTotal ?: 0.0; speed = last?.speedKmh
         lastPaused = null; startedAfter = null // the first update after registering reports the actual phase
-        client.setUpdateCallback(callback)
+        client.setUpdateCallback(callbackExecutor, callback)
         true
     }.getOrNull()
 
@@ -130,6 +131,9 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
      * (HEART_RATE_5_SECONDS today, and any location override a newer Health Services adds). The list is logged at start.
      */
     private fun batchingOverrides(supported: Set<BatchingMode>): Set<BatchingMode> = supported
+
+    /** Updates run on WatchRuntime's serial scope, the same thread that start()/reattach() reset the totals on. */
+    private val callbackExecutor = java.util.concurrent.Executor { r -> WatchRuntime.scope.launch { r.run() } }
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {

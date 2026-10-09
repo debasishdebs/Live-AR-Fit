@@ -65,7 +65,7 @@ sealed interface BackendUpdate {
 
 /** Watch executor for hub requests; scoped to one session at a time (spec §4.8). */
 class WatchExerciseController(
-    scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val backend: ExerciseBackend,
     private val recorder: WatchSessionRecorder,
     private val clock: Clock,
@@ -155,9 +155,12 @@ class WatchExerciseController(
 
     /** After a permission prompt (result or app resume): clears or narrows a PermissionMissing error. */
     fun recheckPermissions() {
-        if (_lastError.value !is ExerciseError.PermissionMissing) return
-        val missing = backend.missingPermissions()
-        _lastError.value = if (missing.isEmpty()) null else ExerciseError.PermissionMissing(missing)
+        // Callers are on Main; handle() writes _lastError on the controller's (serial) scope, so the check runs there too.
+        scope.launch {
+            if (_lastError.value !is ExerciseError.PermissionMissing) return@launch
+            val missing = backend.missingPermissions()
+            _lastError.value = if (missing.isEmpty()) null else ExerciseError.PermissionMissing(missing)
+        }
     }
 
     suspend fun handle(req: ExerciseRequest) {

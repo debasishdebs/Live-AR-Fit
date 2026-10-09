@@ -432,10 +432,10 @@ class WatchExerciseControllerTest {
         val (_, c) = rig(backend); runCurrent()
         assertIs<ExerciseError.PermissionMissing>(c.localStart(WorkoutType.Walk))
         backend.missing = listOf("android.permission.ACTIVITY_RECOGNITION")
-        c.recheckPermissions()
+        c.recheckPermissions(); runCurrent()
         assertEquals(ExerciseError.PermissionMissing(listOf("android.permission.ACTIVITY_RECOGNITION")), c.lastError.value)
         backend.missing = emptyList()
-        c.recheckPermissions()
+        c.recheckPermissions(); runCurrent()
         assertNull(c.lastError.value)
         assertNull(c.localStart(WorkoutType.Walk))
     }

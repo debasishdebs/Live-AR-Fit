@@ -66,8 +66,8 @@ object WatchClient {
     private var lastFrame: StateFrame? = null
     private var wasOnline = false
     private var started = false
-    private var lastVolumeSentMs = 0L
-    private var volumeJob: Job? = null
+    private val lastVolumeSentMs = java.util.concurrent.atomic.AtomicLong(0L) // written from Main (setVolume) and the IO scope
+    @Volatile private var volumeJob: Job? = null
     /** Takeover question asked on the watch itself while the phone is offline. */
     private var localConfirm: Pair<Confirmation, WorkoutType>? = null
     /** Offline sessions whose Summary the user dismissed (in memory; the data stays held for sync). */
@@ -251,14 +251,14 @@ object WatchClient {
         val v = level.coerceIn(0f, 1f)
         volumeJob?.cancel()
         volumeJob = null
-        val wait = lastVolumeSentMs + VOLUME_WINDOW_MS - System.currentTimeMillis()
+        val wait = lastVolumeSentMs.get() + VOLUME_WINDOW_MS - System.currentTimeMillis()
         if (wait <= 0) {
-            lastVolumeSentMs = System.currentTimeMillis()
+            lastVolumeSentMs.set(System.currentTimeMillis())
             command(Command.SetVolume(v))
         } else {
             volumeJob = WatchRuntime.scope.launch {
                 delay(wait)
-                lastVolumeSentMs = System.currentTimeMillis()
+                lastVolumeSentMs.set(System.currentTimeMillis())
                 command(Command.SetVolume(v))
             }
         }
