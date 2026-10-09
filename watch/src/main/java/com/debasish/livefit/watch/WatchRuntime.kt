@@ -8,6 +8,7 @@ import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.sync.GpsPreferences
 import com.debasish.livefit.sync.WatchExerciseController
+import com.debasish.livefit.sync.WatchRouteFile
 import com.debasish.livefit.sync.WatchSessionRecorder
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
@@ -28,16 +29,19 @@ object WatchRuntime {
     lateinit var app: Context; private set
     lateinit var recorder: WatchSessionRecorder; private set
     lateinit var controller: WatchExerciseController; private set
+    lateinit var routes: WatchRouteFile; private set
     private var initialized = false
 
     @Synchronized
     fun init(context: Context) {
         if (initialized) return
         app = context.applicationContext
+        routes = WatchRouteFile(File(app.filesDir, "routes")).also { it.sweep() }
         recorder = WatchSessionRecorder(
             File(app.filesDir, "lf-buffer"), Provenance.Live("galaxy-watch/health-services"), scope,
             send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
             sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
+            onFinalAcked = { id -> routes.markAcked(id) },
         )
         controller = WatchExerciseController(
             scope, HealthServicesExercise(app), recorder, Clock { System.currentTimeMillis() },
@@ -47,7 +51,9 @@ object WatchRuntime {
             },
             sendState = { s -> send(WatchPaths.EXERCISE_STATE, Wire.encode(s).toByteArray()) },
             gpsPrefs = GpsPreferences(File(app.filesDir, "gps.json")),
+            routes = routes,
         )
+        recorder.sessionId?.let(routes::open) // route + start marker survive process death (spec §2.6)
         initialized = true
         // Every entry point (phone message, sticky service restart, activity) gets the same recovery and sync loop.
         ensureExerciseService() // before recover(), which may retry for a long time

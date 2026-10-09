@@ -15,6 +15,11 @@ import kotlin.coroutines.cancellation.CancellationException
 /** Wakes the watch app for phone messages, even after process death (verified in spikes). */
 class PhoneCommandListener : WearableListenerService() {
     override fun onMessageReceived(event: MessageEvent) {
+        if (event.path == WatchPaths.TIME_REQ) {
+            TimeSyncResponder.reply(String(event.data), System.currentTimeMillis())
+                ?.let { Wearable.getMessageClient(this).sendMessage(event.sourceNodeId, WatchPaths.TIME_RES, it) }
+            return
+        }
         WatchRuntime.init(this)
         val text = String(event.data)
         when (event.path) {
@@ -35,6 +40,8 @@ class PhoneCommandListener : WearableListenerService() {
                     }
                     WatchPaths.ACK -> WatchRuntime.recorder.onAck(Wire.decode<DeltaAck>(text))
                     WatchPaths.STATE -> WatchClient.onFrame(text)
+                    WatchPaths.SETTINGS -> WatchClient.onSettings(text)
+                    WatchPaths.QUEUE -> WatchClient.onQueue(text)
                     WatchPaths.DISCOVERABLE -> DiscoverableActivity.start(this@PhoneCommandListener, text)
                 }
             } catch (e: CancellationException) {

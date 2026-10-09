@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     /** Also covers permissions granted in system Settings. */
     override fun onResume() {
         super.onResume()
+        WatchRuntime.ensureExerciseService()
         WatchFront.onVisible(this, true)
         WatchRuntime.controller.recheckPermissions()
     }

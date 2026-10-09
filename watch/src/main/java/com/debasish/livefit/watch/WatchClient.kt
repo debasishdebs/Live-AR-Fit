@@ -9,9 +9,14 @@ import com.debasish.livefit.model.ExerciseError
 import com.debasish.livefit.model.ExerciseState
 import com.debasish.livefit.model.ExerciseStateReport
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.NowPlaying
+import com.debasish.livefit.model.PageSettings
+import com.debasish.livefit.model.QueueFrame
+import com.debasish.livefit.model.QueueWindow
 import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WatchPaths
+import com.debasish.livefit.model.WatchSettingsFrame
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
@@ -23,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -38,6 +44,12 @@ data class WatchUiState(
     val needsPermissions: List<String> = emptyList(),
     val outdated: Boolean = false,
     val toast: String? = null,
+    /** Settings → Pages from the phone (spec §3.2). */
+    val pages: PageSettings = PageSettings(),
+    /** YouTube Music queue window for the Playlist page (spec §6). */
+    val queue: QueueWindow = QueueWindow(),
+    /** This session's own route from route.bin (spec §2.6: the watch map never uses phone fixes). */
+    val route: List<LocationFix> = emptyList(),
 )
 
 /** Renders hub frames, falls back to the local session while the phone is offline, re-claims on reconnect. */
@@ -58,10 +70,15 @@ object WatchClient {
     private var dismissedLocal: String? = null
     private var lastResendMs = 0L
     private var localToast: Pair<String, Long>? = null
+    private val pagesFile by lazy { PageSettingsFile(File(WatchRuntime.app.filesDir, "pages.json")) }
+    private var pages = PageSettings()
+    private var queue = QueueWindow()
 
     fun start() {
         if (started) return
         started = true
+        pages = pagesFile.load()
+        WatchRuntime.scope.launch { WatchRuntime.routes.route.collect { refresh() } }
         WatchRuntime.scope.launch {
             while (true) {
                 try { tick() } catch (e: CancellationException) { throw e } catch (e: Exception) { WatchRuntime.log("tick failed: $e") }
@@ -73,6 +90,8 @@ object WatchClient {
 
     fun onFrame(json: String) {
         val frame = runCatching { Wire.decode<StateFrame>(json) }.getOrNull() ?: return
+        lastFrame?.workout?.takeIf { it.phase == WorkoutPhase.Summary && frame.workout.phase != WorkoutPhase.Summary }
+            ?.sessionId?.let(WatchRuntime.routes::markDismissed)
         lastFrame = frame
         liveness.onFrame()
         if (!wasOnline) WatchRuntime.scope.launch { onReconnected() }
@@ -80,6 +99,21 @@ object WatchClient {
         refresh()
         WatchFront.onConfirmation(WatchRuntime.app, frame.confirmation?.id)
     }
+
+    fun onSettings(json: String) {
+        val f = runCatching { Wire.decode<WatchSettingsFrame>(json) }.getOrNull() ?: return
+        pages = f.pages
+        pagesFile.save(f.pages)
+        refresh()
+    }
+
+    fun onQueue(json: String) {
+        queue = runCatching { Wire.decode<QueueFrame>(json).window }.getOrNull() ?: return
+        refresh()
+    }
+
+    private fun routeFor(sessionId: String?): List<LocationFix> =
+        WatchRuntime.routes.route.value?.takeIf { it.sessionId == sessionId }?.fixes ?: emptyList()
 
     fun onOutdated() { _ui.value = _ui.value.copy(outdated = true) }
 
@@ -139,6 +173,7 @@ object WatchClient {
                 hrHistory = if (dismissed) emptyList() else local.hrHistory(60),
                 needsPermissions = missing, outdated = outdated, toast = toastLocal,
                 confirmation = localConfirm?.first,
+                pages = pages, queue = QueueWindow(), route = routeFor(snap.sessionId),
             )
         } else WatchUiState(
             snapshot = f?.workout ?: WorkoutSnapshot(),
@@ -150,6 +185,7 @@ object WatchClient {
             needsPermissions = missing,
             outdated = outdated,
             toast = toastLocal ?: f?.toast,
+            pages = pages, queue = queue, route = routeFor(f?.workout?.sessionId),
         )
     }
 
@@ -172,6 +208,7 @@ object WatchClient {
     fun command(c: Command) {
         WatchRuntime.scope.launch {
             try {
+                if (c == Command.DismissSummary) _ui.value.snapshot.sessionId?.let(WatchRuntime.routes::markDismissed)
                 if (!liveness.isOnline()) {
                     // Offline: only workout controls work, applied locally and recorded as events.
                     when (c) {

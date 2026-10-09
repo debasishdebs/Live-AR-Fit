@@ -17,8 +17,10 @@ import androidx.health.services.client.data.ExerciseState
 import androidx.health.services.client.data.ExerciseTrackedStatus
 import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
+import androidx.health.services.client.data.LocationAccuracy
 import androidx.health.services.client.data.WarmUpConfig
 import com.debasish.livefit.model.EndReason
+import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.sync.BackendUpdate
@@ -50,6 +52,9 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
     override fun missingPermissions(): List<String> =
         required.filter { ContextCompat.checkSelfPermission(app, it) != PackageManager.PERMISSION_GRANTED }
 
+    override fun locationGranted(): Boolean =
+        ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
     override suspend fun otherAppTracking(): String? {
         val info = client.getCurrentExerciseInfoAsync().await()
         return if (info.exerciseTrackedStatus == ExerciseTrackedStatus.OTHER_APP_IN_PROGRESS) info.exerciseType.name else null
@@ -67,7 +72,9 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         val exerciseType = hsType(type)
         val caps = client.getCapabilitiesAsync().await()
         val supported = caps.getExerciseTypeCapabilities(exerciseType).supportedDataTypes
-        val wanted = setOf(DataType.HEART_RATE_BPM, DataType.STEPS_TOTAL, DataType.DISTANCE_TOTAL, DataType.CALORIES_TOTAL, DataType.SPEED)
+        // useGps already includes the permission check (WatchExerciseController): LOCATION only for GPS workouts.
+        val wanted: Set<DataType<*, *>> = setOf<DataType<*, *>>(DataType.HEART_RATE_BPM, DataType.STEPS_TOTAL, DataType.DISTANCE_TOTAL, DataType.CALORIES_TOTAL, DataType.SPEED) +
+            listOfNotNull<DataType<*, *>>(DataType.LOCATION.takeIf { useGps })
         // Some watches only offer the per-interval STEPS/DISTANCE types for an exercise: fall back to summing them.
         val fallback = listOfNotNull(
             DataType.STEPS.takeIf { DataType.STEPS_TOTAL !in supported },
@@ -76,6 +83,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         val types = (wanted.filter { it in supported } + fallback.filter { it in supported }).toSet()
         sumSteps = DataType.STEPS in types; sumDistance = DataType.DISTANCE in types
         Log.d(TAG, "exercise $exerciseType supported=${supported.map { it.name }} requested=${types.map { it.name }}")
+        Log.i(TAG, "gps=$useGps location supported=${DataType.LOCATION in supported}")
         // B1: by default Health Services holds heart rate back in large batches while the screen is off / ambient
         // (step totals still arrive), so the phone and HUD showed a stale heart rate until the watch woke.
         val batching = batchingOverrides(caps.supportedBatchingModeOverrides)
@@ -83,7 +91,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         client.setUpdateCallback(callback)
         runCatching { client.prepareExerciseAsync(WarmUpConfig(exerciseType, setOf(DataType.HEART_RATE_BPM))).await() }
         client.startExerciseAsync(
-            ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(batching).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED).build(),
+            ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(batching).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && locationGranted()).build(),
         ).await()
         true
     }.getOrDefault(false)
@@ -103,9 +111,11 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         true
     }.getOrNull()
 
-    /** HR every ~5 s while not interactive, where the watch supports it; otherwise Health Services' default batching. */
-    private fun batchingOverrides(supported: Set<BatchingMode>): Set<BatchingMode> =
-        setOfNotNull(BatchingMode.HEART_RATE_5_SECONDS.takeIf { it in supported })
+    /**
+     * Spec §2.1: Health Services may batch location while the screen is off; request every override this watch supports
+     * (HEART_RATE_5_SECONDS today, and any location override a newer Health Services adds). The list is logged at start.
+     */
+    private fun batchingOverrides(supported: Set<BatchingMode>): Set<BatchingMode> = supported
 
     private val callback = object : ExerciseUpdateCallback {
         override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
@@ -122,6 +132,15 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
             val boot = Instant.ofEpochMilli(now - SystemClock.elapsedRealtime())
             val hr = m.getData(DataType.HEART_RATE_BPM).map { it.getTimeInstant(boot).toEpochMilli() to it.value.toInt() }
             batchSamples(hr, now, steps, km, kcal, speed).takeIf { it.isNotEmpty() }?.let { queue.trySend(BackendUpdate.Reading(it)) } // one delta per batch
+            // Location points, each at its own time (screen-off batches arrive late, spec §2.1).
+            val fixes = m.getData(DataType.LOCATION).map { dp ->
+                val v = dp.value
+                // No accuracy = unknown (null, review #8): kept in the delta and route.bin, never routed or live (FixQuality).
+                val acc = (dp.accuracy as? LocationAccuracy)?.horizontalPositionErrorMeters?.toFloat()
+                    .also { if (it == null) Log.w(TAG, "location point without accuracy (unknown)") }
+                LocationFix(v.latitude, v.longitude, acc, v.bearing.takeIf { it.isFinite() && it >= 0 }?.toFloat(), dp.getTimeInstant(boot).toEpochMilli().coerceAtMost(now))
+            }
+            if (fixes.isNotEmpty()) queue.trySend(BackendUpdate.Locations(fixes))
             val st = update.exerciseStateInfo
             val paused = when {
                 st.state == ExerciseState.ACTIVE -> false
