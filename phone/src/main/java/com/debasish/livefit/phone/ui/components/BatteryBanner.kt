@@ -1,6 +1,5 @@
 package com.debasish.livefit.phone.ui.components
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -65,7 +64,8 @@ fun openBatterySettings(context: Context) {
     for (spec in BatteryAdvice.SETTINGS_ACTIONS) {
         val intent = Intent(spec.action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         if (spec.withPackageUri) intent.data = Uri.parse("package:${context.packageName}")
-        try { context.startActivity(intent); return } catch (_: ActivityNotFoundException) { }
+        // Any failure (not found, or an OEM screen's SecurityException) moves on to the next fallback.
+        try { context.startActivity(intent); return } catch (_: Exception) { }
     }
 }
 

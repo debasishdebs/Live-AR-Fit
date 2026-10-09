@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,7 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.Icon
+import kotlinx.coroutines.launch
 import androidx.wear.compose.material.Text
 import com.debasish.livefit.model.Confirmation
 import kotlin.math.atan2
@@ -123,15 +128,23 @@ fun PermissionCard(perms: List<String>, onGrant: () -> Unit) {
     }
 }
 
-/** Spec §4: prominent disclosure before the watch's location prompt. */
+/** Spec §4: prominent disclosure before the watch's location prompt. Scrolls (touch or crown) so small round screens don't clip it. */
 @Composable
 fun LocationDisclosureCard(onAnswer: (Boolean) -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(rememberInsets().x(22))) {
-            Text(com.debasish.livefit.model.Disclosures.LOCATION_TITLE, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(4.dp))
-            Text(com.debasish.livefit.model.Disclosures.WATCH_LOCATION, fontSize = 11.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center)
-            Spacer(Modifier.height(10.dp))
+    val listState = rememberScalingLazyListState(initialCenterItemIndex = 0)
+    val focus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    ScalingLazyColumn(
+        Modifier.fillMaxSize().background(Color.Black)
+            .onRotaryScrollEvent { e -> scope.launch { listState.scrollBy(e.verticalScrollPixels) }; true }
+            .focusRequester(focus).focusable(),
+        state = listState,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        item { Text(com.debasish.livefit.model.Disclosures.LOCATION_TITLE, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
+        item { Text(com.debasish.livefit.model.Disclosures.WATCH_LOCATION, fontSize = 11.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center) }
+        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Not now", fontSize = 14.sp, color = Color.White, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF202327)).clickable { onAnswer(false) }.padding(horizontal = 14.dp, vertical = 8.dp))
                 Text("Continue", fontSize = 14.sp, color = Color.Black, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF14C3A2)).clickable { onAnswer(true) }.padding(horizontal = 14.dp, vertical = 8.dp))

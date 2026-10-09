@@ -28,7 +28,9 @@ class DisclosureActivity : ComponentActivity() {
         LiveFitHubService.promoteLocation(this) // granted: the visible app re-promotes the hub with `location`
         val fine = Manifest.permission.ACCESS_FINE_LOCATION
         // "Don't ask again": the prompt was skipped, so the user would otherwise land nowhere.
-        if (needsAppSettings(checkSelfPermission(fine) == PackageManager.PERMISSION_GRANTED, shouldShowRequestPermissionRationale(fine))) openAppSettings()
+        val coarse = Manifest.permission.ACCESS_COARSE_LOCATION
+        val granted = { p: String -> checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED }
+        if (needsAppSettings(granted(fine), granted(coarse), shouldShowRequestPermissionRationale(fine))) openAppSettings()
         finish()
     }
 
@@ -66,8 +68,12 @@ class DisclosureActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_KIND = "kind"
 
-        /** Denied and the system won't ask again (no rationale): only the app's settings page can grant it now. */
-        internal fun needsAppSettings(granted: Boolean, showRationale: Boolean): Boolean = !granted && !showRationale
+        /**
+         * Denied and the system won't ask again (no rationale): only the app's settings page can grant it now. An
+         * approximate-only grant (COARSE without FINE) is the user's choice, not a dead end, so it stays put.
+         */
+        internal fun needsAppSettings(fineGranted: Boolean, coarseGranted: Boolean, showRationale: Boolean): Boolean =
+            !fineGranted && !coarseGranted && !showRationale
 
         fun intent(context: Context, kind: DisclosureKind): Intent =
             Intent(context, DisclosureActivity::class.java).putExtra(EXTRA_KIND, kind.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

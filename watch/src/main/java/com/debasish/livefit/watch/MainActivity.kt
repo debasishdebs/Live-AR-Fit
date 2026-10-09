@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -49,11 +50,20 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent.data?.let { d -> WatchRuntime.log("opened by ${LaunchEntry.of(d.scheme, d.host, d.path, null)}") } // UI only (spec §4)
+        logOpenedBy(intent)
+    }
+
+    /**
+     * UI only (spec §4). Task 12 acceptance marker: Log.w, so release builds (which strip Log.i) keep it; logged on cold
+     * launch and on a new intent. Only the parsed entry kind is logged, never the URI.
+     */
+    private fun logOpenedBy(intent: Intent?) {
+        intent?.data?.let { d -> Log.w(WatchRuntime.TAG, "opened by ${LaunchEntry.of(d.scheme, d.host, d.path, null)}") }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        logOpenedBy(intent)
         lifecycle.addObserver(ambient)
         WatchRuntime.init(this) // also starts WatchClient's sync loop
         permissionRequest.launch(healthPerms)

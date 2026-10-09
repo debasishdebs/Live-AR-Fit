@@ -25,8 +25,13 @@ class DisclosureKindTest {
 
     /** After "Don't ask again" the system prompt returns denied at once; only app settings can still grant it. */
     @Test fun appSettingsOnlyWhenDeniedWithoutRationale() {
-        assertTrue(DisclosureActivity.needsAppSettings(granted = false, showRationale = false))
-        assertFalse(DisclosureActivity.needsAppSettings(granted = false, showRationale = true))
-        assertFalse(DisclosureActivity.needsAppSettings(granted = true, showRationale = false))
+        assertTrue(DisclosureActivity.needsAppSettings(fineGranted = false, coarseGranted = false, showRationale = false))
+        assertFalse(DisclosureActivity.needsAppSettings(fineGranted = false, coarseGranted = false, showRationale = true))
+        assertFalse(DisclosureActivity.needsAppSettings(fineGranted = true, coarseGranted = true, showRationale = false))
+    }
+
+    /** Task 6 deferred: the user chose "Approximate" — a real choice, so don't bounce them to app settings. */
+    @Test fun approximateOnlyGrantDoesNotOpenAppSettings() {
+        assertFalse(DisclosureActivity.needsAppSettings(fineGranted = false, coarseGranted = true, showRationale = false))
     }
 }
