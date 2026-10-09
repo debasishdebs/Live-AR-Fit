@@ -3,8 +3,8 @@
 
     <uses-feature android:name="android.hardware.type.watch" />
 
-    <uses-permission android:name="android.permission.BODY_SENSORS" />
-    <!-- Wear OS 6 / Android 16 granular replacement for BODY_SENSORS. -->
+    <!-- Spec §4 (review P1-1): BODY_SENSORS up to API 35; the granular permission from API 36 (Wear OS 6). -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" android:maxSdkVersion="35" />
     <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -16,8 +16,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- A3: optional full-screen intent to raise the workout screen; checked with canUseFullScreenIntent() (Android 14+). -->
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Pairing: ACTION_REQUEST_DISCOVERABLE so the phone's companion picker can list the watch. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />

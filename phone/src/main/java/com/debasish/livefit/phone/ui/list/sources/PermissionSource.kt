@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.services.music.MediaListener
+import com.debasish.livefit.phone.ui.components.openBatterySettings
 import com.debasish.livefit.phone.ui.list.ActionResult
 import com.debasish.livefit.phone.ui.list.ItemAction
 import com.debasish.livefit.phone.ui.list.ItemStatus
@@ -43,9 +44,9 @@ class PermissionSource(private val context: Context) : ListSource {
 
     override fun actionFor(item: ListItem): ItemAction? {
         if (item.status != ItemStatus.ActionNeeded) return null
+        if (item.id == "battery") return ItemAction { openBatterySettings(context); ActionResult.Silent } // guarded fallback chain
         val intent = when (item.id) {
             "media" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-            "battery" -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
         }
         return ItemAction { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); ActionResult.Silent }

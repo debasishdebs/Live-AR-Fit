@@ -19,4 +19,9 @@ class ManifestPolicyTest {
         assertTrue("android:allowBackup=\"false\"" in manifest)
         assertTrue("android:dataExtractionRules=\"@xml/data_extraction_rules\"" in manifest)
     }
+
+    /** Spec §4: restricted permission removed; the banner uses the permission-free settings list. */
+    @Test fun noBatteryExemptionRequest() = assertTrue("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" !in manifest)
+
+    @Test fun noBackgroundLocation() = assertTrue("ACCESS_BACKGROUND_LOCATION" !in manifest)
 }

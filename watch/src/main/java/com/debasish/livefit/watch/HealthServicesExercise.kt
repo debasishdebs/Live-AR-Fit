@@ -49,7 +49,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
     /** Updates of an exercise that started before our latest start() are a previous one's stragglers. */
     private var startedAfter: Instant? = null
 
-    private val required = listOf(Manifest.permission.BODY_SENSORS, "android.permission.health.READ_HEART_RATE", Manifest.permission.ACTIVITY_RECOGNITION)
+    private val required = HealthPermissions.requiredHealthPermissions(android.os.Build.VERSION.SDK_INT)
 
     override fun missingPermissions(): List<String> =
         required.filter { ContextCompat.checkSelfPermission(app, it) != PackageManager.PERMISSION_GRANTED }

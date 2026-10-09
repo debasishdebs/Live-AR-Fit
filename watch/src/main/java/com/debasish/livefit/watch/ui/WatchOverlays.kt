@@ -122,3 +122,20 @@ fun PermissionCard(perms: List<String>, onGrant: () -> Unit) {
         }
     }
 }
+
+/** Spec §4: prominent disclosure before the watch's location prompt. */
+@Composable
+fun LocationDisclosureCard(onAnswer: (Boolean) -> Unit) {
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(rememberInsets().x(22))) {
+            Text("Location for your route", fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(4.dp))
+            Text(com.debasish.livefit.model.Disclosures.WATCH_LOCATION, fontSize = 11.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Not now", fontSize = 14.sp, color = Color.White, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF202327)).clickable { onAnswer(false) }.padding(horizontal = 14.dp, vertical = 8.dp))
+                Text("Continue", fontSize = 14.sp, color = Color.Black, modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF14C3A2)).clickable { onAnswer(true) }.padding(horizontal = 14.dp, vertical = 8.dp))
+            }
+        }
+    }
+}

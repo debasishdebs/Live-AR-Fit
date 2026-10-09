@@ -52,8 +52,13 @@ class DiscoverableActivity : ComponentActivity() {
             return true
         }
 
-        private fun requestedSeconds(intent: Intent): Int? =
-            (intent.getStringExtra(EXTRA_REQUEST) ?: intent.data?.getQueryParameter(EXTRA_REQUEST))?.let(DiscoverableRequest::parse)
+        private fun requestedSeconds(intent: Intent): Int? {
+            intent.data?.let { d ->
+                val req = runCatching { d.getQueryParameter(EXTRA_REQUEST) }.getOrNull() // an opaque URI throws
+                return (LaunchEntry.of(d.scheme, d.host, d.path, req) as? LaunchEntry.ShowDiscoverablePrompt)?.seconds
+            }
+            return intent.getStringExtra(EXTRA_REQUEST)?.takeIf { it.length <= LaunchEntry.MAX_REQUEST_CHARS }?.let(DiscoverableRequest::parse)
+        }
 
         /** From the Data Layer listener; [json] is the phone's (already version-checked) request. */
         fun start(context: Context, json: String) {
