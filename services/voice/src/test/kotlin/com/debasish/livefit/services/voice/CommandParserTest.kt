@@ -111,8 +111,24 @@ class CommandParserTest {
 
     @Test fun playlistView() = assertParses(
         Command.ShowGlassesPage(HudPage.Playlist),
-        "playlist view", "Playlist view.", "show playlist", "open playlist", "music view", "show music", "open the playlist",
-        "show queue", "songs view", "go to playlist", "playlist", "switch to music view",
+        "playlist view", "Playlist view.", "show playlist", "open playlist", "open the playlist",
+        "show queue", "songs view", "go to playlist", "playlist", "show the songs",
+    )
+
+    /** Spec §5: "music view" moved from Playlist to Music controls. */
+    @Test fun musicControlsView() = assertParses(
+        Command.ShowGlassesPage(HudPage.MusicControls),
+        "music view", "Music view.", "player view", "music controls", "show music", "switch to music view", "open the player", "show music controls",
+    )
+
+    @Test fun mapView() = assertParses(
+        Command.ShowGlassesPage(HudPage.Map),
+        "map view", "Map view.", "show map", "map", "open the map", "map screen", "switch to map view",
+    )
+
+    @Test fun statsView() = assertParses(
+        Command.ShowGlassesPage(HudPage.Stats),
+        "stats view", "Stats view.", "show stats", "stats page", "statistics view", "go to stats",
     )
 
     /** View words never steal real commands. */
@@ -122,6 +138,9 @@ class CommandParserTest {
         assertParses(Command.StartWorkout(WorkoutType.Walk), "start workout", "start workout mode")
         assertParses(Command.StopWorkout, "stop workout")
         assertParses(Command.NextTrack, "next song")
+        assertParses(Command.PauseMusic, "pause the player")
+        assertParses(Command.NextTrack, "next song on the player")
+        assertParses(Command.PlayMusic, "play music")
     }
 
     // --- Disambiguation ----------------------------------------------------------------
