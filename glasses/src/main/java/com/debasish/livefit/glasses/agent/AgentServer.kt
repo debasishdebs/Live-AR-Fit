@@ -21,11 +21,14 @@ class AgentEndpoint(
     /** Sends on the glasses → phone command path; false (or a throw) = not delivered. */
     private val send: (Command) -> Boolean,
     private val log: (String) -> Unit = {},
+    /** The receiver's port, for the `Host` check. */
+    private val port: () -> Int = { AgentServer.PORT },
 ) {
     fun handle(head: String): HttpReply {
-        val req = AgentRequestParser.parse(head)
+        val req = AgentRequestParser.parse(head, port())
         if (req !is AgentRequest.Run) {
             val status = when (req) {
+                AgentRequest.BadHost -> 403
                 AgentRequest.NotFound -> 404
                 AgentRequest.BadMethod -> 405
                 AgentRequest.TooLarge -> 431
@@ -174,8 +177,7 @@ class AgentServer(
             val head = "HTTP/1.1 ${reply.status} ${reason(reply.status)}\r\n" +
                 "Content-Type: application/json; charset=utf-8\r\n" +
                 "Content-Length: ${body.size}\r\n" +
-                "Cache-Control: no-store\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
+                "Cache-Control: no-store\r\n" + // no Access-Control-Allow-Origin: other web content can't read replies
                 "Connection: close\r\n\r\n"
             client.getOutputStream().apply { write(head.toByteArray(Charsets.ISO_8859_1)); write(body); flush() }
             client.shutdownOutput()
@@ -196,7 +198,7 @@ class AgentServer(
     }
 
     private fun reason(status: Int) = when (status) {
-        200 -> "OK"; 400 -> "Bad Request"; 404 -> "Not Found"; 405 -> "Method Not Allowed"; 408 -> "Request Timeout"
+        200 -> "OK"; 400 -> "Bad Request"; 403 -> "Forbidden"; 404 -> "Not Found"; 405 -> "Method Not Allowed"; 408 -> "Request Timeout"
         431 -> "Request Header Fields Too Large"; 503 -> "Service Unavailable"; else -> "Internal Server Error"
     }
 

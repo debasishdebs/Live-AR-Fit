@@ -20,11 +20,12 @@ class AgentServerTest {
     private val sent = Collections.synchronizedList(mutableListOf<Command>())
     @Volatile private var connected = true
     @Volatile private var outdated = false
-    private val endpoint = AgentEndpoint(
+    private val endpoint: AgentEndpoint = AgentEndpoint(
         context = { AgentContext(connected = connected, mapEligible = true, outdated = outdated) },
         send = { sent += it; true },
+        port = { server.localPort },
     )
-    private val server = AgentServer(port = 0, handle = endpoint::handle, readTimeoutMs = 500, maxConnections = 2)
+    private val server: AgentServer = AgentServer(port = 0, handle = endpoint::handle, readTimeoutMs = 500, maxConnections = 2)
 
     private fun started(): Int { assertTrue(server.start().awaitBound(2_000), "server bound"); return server.localPort }
 
@@ -36,6 +37,7 @@ class AgentServerTest {
         val code = c.responseCode
         val body = (if (code < 400) c.inputStream else c.errorStream).bufferedReader().readText()
         assertEquals("application/json; charset=utf-8", c.getHeaderField("Content-Type"))
+        assertEquals(null, c.getHeaderField("Access-Control-Allow-Origin"), "no CORS grant to web content")
         c.disconnect()
         return code to body
     }
@@ -60,7 +62,7 @@ class AgentServerTest {
     @Test fun outdatedPhoneIs503WithUpdateHint() {
         started()
         connected = false; outdated = true
-        assertEquals(503 to """{"ok":false,"say":"Update LiveFit on your phone"}""", http("/lf?cmd=next"))
+        assertEquals(503 to """{"ok":false,"say":"Update LiveFit on your phone and glasses so versions match"}""", http("/lf?cmd=next"))
         assertTrue(sent.isEmpty())
     }
 
@@ -94,6 +96,14 @@ class AgentServerTest {
             assertTrue(s.awaitBound(5_000), "bound after the port was freed")
             assertEquals(port, s.localPort)
         } finally { s.stop(); blocker.close() }
+    }
+
+    /** Final review Minor 4: a DNS-rebound page (foreign Host) gets 403 and nothing is sent. */
+    @Test fun foreignHostIs403AndSendsNothing() {
+        val port = started()
+        val reply = raw(port, "GET /lf?cmd=pause HTTP/1.1\r\nHost: rebind.example:$port\r\n\r\n".toByteArray())
+        assertTrue(reply.startsWith("HTTP/1.1 403"), reply)
+        assertTrue(sent.isEmpty())
     }
 
     @Test fun unknownCommandIs400() {

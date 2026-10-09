@@ -53,6 +53,19 @@ class AgentCommandTest {
         assertEquals(AgentRequest.Malformed, AgentRequestParser.parse("\u0000\u0001\u0002 garbage"))
     }
 
+    /** Final review Minor 4 (DNS rebinding): a browser request for another host name is refused. */
+    @Test fun aForeignHostIsRefused() {
+        val withHost = { host: String -> "GET /lf?cmd=pause HTTP/1.1\r\nHost: $host\r\n\r\n" }
+        assertEquals(AgentRequest.Run(AgentCommand.Pause), AgentRequestParser.parse(withHost("127.0.0.1:47123")))
+        assertEquals(AgentRequest.Run(AgentCommand.Pause), AgentRequestParser.parse(withHost("localhost:47123")))
+        assertEquals(AgentRequest.Run(AgentCommand.Pause), AgentRequestParser.parse("GET /lf?cmd=pause HTTP/1.1\r\nhost:  LocalHost:47123 \r\n\r\n"))
+        assertEquals(AgentRequest.BadHost, AgentRequestParser.parse(withHost("evil.example:47123")))
+        assertEquals(AgentRequest.BadHost, AgentRequestParser.parse(withHost("127.0.0.1")))
+        assertEquals(AgentRequest.BadHost, AgentRequestParser.parse(withHost("127.0.0.1:8080")))
+        assertEquals(AgentRequest.BadHost, AgentRequestParser.parse(withHost("")))
+        assertEquals(AgentRequest.Run(AgentCommand.Pause), AgentRequestParser.parse(withHost("127.0.0.1:5555"), port = 5555))
+    }
+
     @Test fun oversizeIsTooLarge() {
         val big = get("/lf?cmd=pause&pad=" + "x".repeat(AgentRequestParser.MAX_REQUEST_BYTES))
         assertEquals(AgentRequest.TooLarge, AgentRequestParser.parse(big))
@@ -115,7 +128,7 @@ class AgentCommandTest {
             val r = AgentReplies.plan(it, live.copy(connected = false, outdated = true))
             assertFalse(r.ok)
             assertNull(r.send)
-            assertEquals("Update LiveFit on your phone", r.say)
+            assertEquals("Update LiveFit on your phone and glasses so versions match", r.say)
         }
     }
 

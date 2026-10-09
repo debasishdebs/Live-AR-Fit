@@ -50,16 +50,27 @@ sealed interface AgentRequest {
     data object BadMethod : AgentRequest
     data object Malformed : AgentRequest
     data object TooLarge : AgentRequest
+    /** A `Host` other than this loopback port (a DNS-rebound web page). */
+    data object BadHost : AgentRequest
 }
 
 object AgentRequestParser {
     /** Cap on the whole request head (request line + headers). */
     const val MAX_REQUEST_BYTES = 2_048
 
-    fun parse(head: String): AgentRequest {
+    /**
+     * [port] is the receiver's port: a `Host` header must name `127.0.0.1:<port>` or `localhost:<port>`, so a web page
+     * that rebinds its own host name to 127.0.0.1 can't drive LiveFit. A head without `Host` (HTTP/1.0) is accepted: a
+     * browser always sends one, and other local callers could send any value anyway.
+     */
+    fun parse(head: String, port: Int = AgentServer.PORT): AgentRequest {
         if (head.length > MAX_REQUEST_BYTES) return AgentRequest.TooLarge
-        val parts = head.substringBefore('\n').trimEnd('\r').split(' ')
+        val lines = head.split('\n').map { it.trimEnd('\r') }
+        val parts = lines.first().split(' ')
         if (parts.size != 3 || !parts[2].startsWith("HTTP/") || !parts[1].startsWith("/")) return AgentRequest.Malformed
+        val host = lines.drop(1).firstOrNull { it.substringBefore(':').trim().equals("host", ignoreCase = true) && ':' in it }
+            ?.substringAfter(':')?.trim()?.lowercase()
+        if (host != null && host != "127.0.0.1:$port" && host != "localhost:$port") return AgentRequest.BadHost
         if (parts[0] != "GET") return if (parts[0].matches(Regex("[A-Z]{3,10}"))) AgentRequest.BadMethod else AgentRequest.Malformed
         val target = parts[1]
         if (target.substringBefore('?') != "/lf") return AgentRequest.NotFound
@@ -86,7 +97,8 @@ data class AgentReply(val ok: Boolean, val say: String, val send: Command?)
 object AgentReplies {
     const val CANT = "I can't do that in LiveFit yet"
     const val NOT_CONNECTED = "Your phone isn't connected"
-    const val OUTDATED = "Update LiveFit on your phone"
+    /** Either side can be the older one, so the hint names both. */
+    const val OUTDATED = "Update LiveFit on your phone and glasses so versions match"
 
     fun plan(c: AgentCommand, ctx: AgentContext): AgentReply {
         if (ctx.outdated) return AgentReply(false, OUTDATED, null)
