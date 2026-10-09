@@ -26,6 +26,16 @@ import com.debasish.livefit.glasses.hud.HudClock
 import com.debasish.livefit.glasses.hud.HudConnection
 import com.debasish.livefit.glasses.hud.HudController
 import com.debasish.livefit.glasses.hud.HudNav
+import com.debasish.livefit.glasses.hud.IdleGate
+import com.debasish.livefit.glasses.hud.NavContext
+import com.debasish.livefit.glasses.hud.gesture
+import com.debasish.livefit.model.Gesture
+import com.debasish.livefit.model.GestureMode
+import com.debasish.livefit.model.GestureSettings
+import com.debasish.livefit.model.HudPage
+import com.debasish.livefit.model.PageSet
+import com.debasish.livefit.model.PageSettings
+import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.glasses.hud.Swipe
 import com.debasish.livefit.glasses.hud.SwipeClassifier
 import com.debasish.livefit.glasses.hud.SwipeKey
@@ -69,7 +79,7 @@ class MainActivity : ComponentActivity() {
             override fun onAudioNoise(p0: Float) {}
         })
         controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } },
-            onPage = { p -> runOnUiThread { nav = nav.show(p) } }).also { it.start() }
+            onPage = { p -> runOnUiThread { updateNav(nav.show(p, availablePages())) } }).also { it.start() }
         ptt = PushToTalk(
             controller::sendRaw,
             hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -109,9 +119,24 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.LaunchedEffect(closeConfirm.shownAtMs) {
                 if (closeConfirm.shown) { kotlinx.coroutines.delay(CloseConfirm.TIMEOUT_MS); closeConfirm = closeConfirm.timedOut(System.currentTimeMillis()) }
             }
-            androidx.compose.runtime.LaunchedEffect(nav.highlightId, nav.lastInputMs) {
-                if (nav.highlightId != null) { kotlinx.coroutines.delay(HudNav.IDLE_MS); nav = nav.timedOut(System.currentTimeMillis()) }
+            // Scroll-mode idle timeout (spec §4.2/§3.3), one ordered path (review #9): an overlay change updates the gate
+            // (a dismissal restarts the timer) before the timer effect — keyed on the gate, the input time and the
+            // timeout — computes its deadline. Task 22 makes idleMs collected state, so a new timeout re-keys the effect.
+            val overlayUp = frame?.confirmation != null || closeConfirm.shown
+            val idleMs = gestures().idleTimeoutS * 1_000L
+            androidx.compose.runtime.LaunchedEffect(overlayUp) {
+                val (gate, resumed) = idleGate.onOverlay(overlayUp, nav, System.currentTimeMillis())
+                idleGate = gate
+                updateNav(resumed)
             }
+            androidx.compose.runtime.LaunchedEffect(nav.mode, nav.lastInputMs, idleGate, idleMs) {
+                val deadline = idleGate.deadlineMs(nav, idleMs) ?: return@LaunchedEffect
+                kotlinx.coroutines.delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
+                updateNav(idleGate.tick(nav, idleMs, System.currentTimeMillis()))
+            }
+            // The visible page disappears (disabled, GPS workout ended) → Workout at once (spec §3.3).
+            val available = PageSet.available(pageSettings(), PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()))
+            androidx.compose.runtime.LaunchedEffect(available) { updateNav(nav.reconcile(available)) }
             androidx.compose.runtime.LaunchedEffect(localToast) {
                 // While a confirmation is shown the error stays inside it; the id effect clears it.
                 if (localToast != null && frame?.confirmation == null) { kotlinx.coroutines.delay(3_000); localToast = null }
@@ -126,7 +151,7 @@ class MainActivity : ComponentActivity() {
                 else -> HudOverlay.None
             }
             HudScreen(frame, settings, connection, battery, history, overlay = overlay, clock = clock,
-                page = nav.page, queue = queue, musicHighlight = nav.visibleHighlight(queue))
+                page = nav.page, queue = queue, musicHighlight = nav.highlightRow(queue))
         }
     }
 
@@ -192,34 +217,50 @@ class MainActivity : ComponentActivity() {
         swipes.deadlineMs?.let { swipeTimer.postAtTime(closeSwipe, it) } // eventTime and postAtTime share the uptime clock
     }
 
-    /** One logical swipe: the pending confirmation, then our close prompt, then page/highlight navigation. */
-    private fun onSwipe(swipe: Swipe) {
-        Log.d(TAG, "swipe $swipe")
+    private fun gestures(): GestureSettings = GestureSettings()
+    private fun pageSettings(): PageSettings = PageSettings()
+    /** Scroll idle timer pause state (review #9); changed only through IdleGate.onOverlay. */
+    private var idleGate by mutableStateOf(IdleGate())
+    private fun availablePages(): List<HudPage> =
+        PageSet.available(pageSettings(), PageSet.mapEligible(controller.frame.value?.workout ?: WorkoutSnapshot()))
+    private fun navContext() = NavContext(controller.queue.value, gestures(), availablePages())
+    private fun updateNav(next: HudNav) { nav = next }
+
+    /** Priority (spec §4.2): hub confirmation, then our close prompt, then the configurable table. */
+    private fun onGesture(g: Gesture) {
+        Log.d(TAG, "gesture $g")
+        val now = System.currentTimeMillis()
         val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
         when {
-            pending -> { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
-            closeConfirm.shown -> closeConfirm = closeConfirm.onSwipe()
-            else -> nav = nav.onSwipe(swipe, controller.queue.value, System.currentTimeMillis())
+            pending -> when (g) {
+                Gesture.Tap -> confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
+                Gesture.DoubleTap -> confirmInput.onBack()?.let { controller.send(it); ptt.stop() }
+                else -> { confirmInput.onSwipe(); highlightYes = confirmInput.highlightYes }
+            }
+            closeConfirm.shown -> when (g) {
+                Gesture.Tap -> closeConfirm.onTap().let { (c, close) -> closeConfirm = c; if (close == true) closeApp() }
+                Gesture.DoubleTap -> closeConfirm = CloseConfirm() // double-tap = stay
+                else -> closeConfirm = closeConfirm.onSwipe()
+            }
+            else -> {
+                val out = nav.onGesture(g, navContext(), now)
+                updateNav(out.nav)
+                out.command?.let(controller::send)
+                if (out.talk && controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
+                if (out.close) {
+                    val (c, action) = closeConfirm.onClose(controller.frame.value?.workout?.phase, gestures().askBeforeClose, now)
+                    closeConfirm = c
+                    if (action == DoubleTapAction.Leave) closeApp()
+                }
+            }
         }
     }
 
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        val pending = confirmInput.onConfirmation(controller.frame.value?.confirmation).let { confirmInput.hasPending }
-        val now = System.currentTimeMillis()
-        when (keyCode) {
-            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> when {
-                pending -> confirmInput.onTap()?.let { controller.send(it); ptt.stop() }
-                closeConfirm.shown -> closeConfirm.onTap().let { (c, close) -> closeConfirm = c; if (close == true) closeApp() }
-                else -> {
-                    val tap = nav.onTap(controller.queue.value, now)
-                    nav = tap.nav
-                    tap.command?.let(controller::send) // music page: play/pause or play the highlighted song
-                    if (tap.talk && controller.connection.value != HudConnection.Outdated) ptt.toggle() // the hub ignores voice from a mismatched app
-                }
-            }
-            else -> return super.onKeyUp(keyCode, event)
-        }
-        return true
+    private fun onSwipe(swipe: Swipe) = onGesture(swipe.gesture())
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { onGesture(Gesture.Tap); true }
+        else -> super.onKeyUp(keyCode, event)
     }
 
     /** BACK is a double-tap on some firmware: same rules as the key-83 pair, never page navigation. */
@@ -228,24 +269,14 @@ class MainActivity : ComponentActivity() {
         if (doubleTap.onBack(System.currentTimeMillis())) onDoubleTap()
     }
 
-    /** Double-tap: hub prompt → No; our close prompt → stay; recording workout → ask; otherwise close the app. */
-    private fun onDoubleTap() {
-        confirmInput.onConfirmation(controller.frame.value?.confirmation)
-        val (c, action) = closeConfirm.onDoubleTap(confirmInput.hasPending, controller.frame.value?.workout?.phase, System.currentTimeMillis())
-        Log.d(TAG, "double-tap -> $action")
-        closeConfirm = c
-        when (action) {
-            DoubleTapAction.AnswerNo -> confirmInput.onBack()?.let { controller.send(it); ptt.stop() }
-            DoubleTapAction.Leave -> closeApp()
-            DoubleTapAction.AskClose, DoubleTapAction.Stay -> {}
-        }
-    }
+    /** Double-tap (two key-83 presses or BACK) is a configurable gesture like any other (spec §4.4). */
+    private fun onDoubleTap() = onGesture(Gesture.DoubleTap)
 
     /** The workout itself lives on the phone/watch; the glasses app just goes away. */
     private fun closeApp() {
         ptt.stop()
         closeConfirm = CloseConfirm()
-        nav = HudNav()
+        updateNav(HudNav())
         swipeTimer.removeCallbacks(closeSwipe)
         moveTaskToBack(true)
     }
