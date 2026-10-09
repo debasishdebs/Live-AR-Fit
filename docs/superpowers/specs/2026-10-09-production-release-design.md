@@ -1,6 +1,6 @@
 # Live AR Fit — production release (sub-project B) — design
 
-Status: revision 2 (addresses review `reviews/2026-10-09-production-release-design-review.md`, 4 P1 + 4 P2) · 2026-10-09 · Owner decisions are in memory `release-plan` and the session log, entries 52–54.
+Status: revision 3 (16 KB is a hard gate; Google cloud relay disclosed) · revision 2 addressed review `reviews/2026-10-09-production-release-design-review.md`, 4 P1 + 4 P2) · 2026-10-09 · Owner decisions are in memory `release-plan` and the session log, entries 52–54.
 
 ## 1. Goal
 
@@ -66,7 +66,10 @@ Success means:
   - Remediation if the check fails:
     - Bump `graphics-path` (a newer AndroidX release is 16 KB clean), or pin a Compose version that brings it.
     - Ask Rokid for 16 KB-aligned CXR builds; we can't relink vendor prebuilts.
-    - Until Rokid ships them, record the exception and its runtime result in the release notes. A runtime crash on 16 KB blocks release; a documented, compatible-at-runtime RELRO misalignment doesn't block it.
+  - **This is a hard gate, with no exceptions.** v1.0.0 is not uploaded to Play or tagged until every native library in the phone and watch AABs and the glasses APK passes both the static check (LOAD alignment and RELRO end) and the 16 KB runtime smoke test. Play requires 16 KB support for apps that target Android 15+.
+    - A "documented misalignment" is not an acceptable outcome.
+    - If Rokid can't supply aligned CXR libraries, the release is blocked. The owner then decides whether to escalate with Rokid or drop or replace the dependency.
+  - Because the vendor fix is outside our control, we contact Rokid about 16 KB-aligned `cxr-service-bridge` builds at the start of B, not at the end.
 - **Target SDK:** phone and watch move to `targetSdk = 36`. Play's 2026 rule for new apps is the API level released within the last year. This brings behaviour changes, so the smoke test re-checks foreground services, notifications and Bluetooth. The glasses app stays on its current target, since the Rokid OS is fixed.
 - **Removals:**
   - the unused `USE_FAKE_SERVICES` flag
@@ -79,7 +82,14 @@ Success means:
 |---|---|
 | `USE_FULL_SCREEN_INTENT` (watch) | **Removed.** When a workout starts from the phone, the watch posts its foreground-service notification as a Wear **Ongoing Activity**, which shows the system "return to workout" chip on every Wear OS 3+ watch. A tap on the notification opens LiveFit. The existing `startActivity` raise stays where it's allowed; it is a best effort. |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (phone) | **Removed.** Replaced by `Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`, which needs no permission. While the app is not exempt, every app open shows a **bold banner**: "Battery optimisation is on — LiveFit may stop tracking or lose the glasses/watch link when the screen is off." It has an **Open settings** button. Samsung gets extra steps ("Settings → Battery → Background usage limits → Never sleeping apps → add Live AR Fit") with a screenshot-style illustration. Other OEMs get generic text. |
-| Notification listener (YouTube Music control) | A **prominent disclosure** screen comes before sending the user to the system settings (review P2-7). It covers what is read: the active media session's title, artist, playback state and up-next queue. It explains that this metadata is **sent to your paired watch and glasses** to show and control music, that it is **never uploaded to any server**, and why access is needed. Decline = music features off, everything else works. The same wording appears in the privacy policy and the Data safety answers. |
+| Notification listener (YouTube Music control) | A **prominent disclosure** screen comes before sending the user to the system settings (review P2-7). It covers what is read: the active media session's title, artist, playback state and up-next queue. It explains that this metadata is **sent to your paired watch and glasses** to show and control music, and why access is needed.
+
+  How it travels (review r2 P2):
+  - **To the glasses:** the Rokid CXR Bluetooth link.
+  - **To the watch:** the Wear OS Data Layer, which is Bluetooth when nearby. When Bluetooth isn't available, Google Play services may relay the message through **Google's cloud, encrypted**.
+  - Live AR Fit has no server of its own and never uploads this data to one.
+
+  The same wording, including the Data Layer cloud relay, applies to all phone↔watch data: workout, heart rate, location fixes, settings and music. It goes into the privacy policy. Data safety answers "data is encrypted in transit". Whether Play counts the Google relay as "shared" is checked against current Data safety guidance while drafting `docs/play/`, and the answer follows that guidance. Decline = music features off, everything else works. The same wording appears in the privacy policy and the Data safety answers. |
 | Location (phone and watch) | A prominent disclosure before the runtime prompt: GPS is only used during workouts with "Use GPS outdoors" on, never in the background when no workout is running. No `ACCESS_BACKGROUND_LOCATION` (already true). |
 | Microphone (phone and glasses voice) | An in-context rationale before the first use. **Speech recognition stays on-device only** (already decided by the owner: `AndroidOnDeviceStt` uses `createOnDeviceSpeechRecognizer`, refuses missing language packs and has no cloud fallback). Audio is never uploaded. The privacy policy states this; it must not change to allow cloud recognition. |
 | Body sensors / heart rate / activity recognition (watch) | **OS-dependent permissions (review P1-1).** Declare `BODY_SENSORS` with `android:maxSdkVersion="35"` and `android.permission.health.READ_HEART_RATE` for API 36+. One shared helper (`requiredHealthPermissions(sdkInt)`) drives both the runtime request (`MainActivity`) and the backend's missing-permission check (`HealthServicesExercise`). Today the watch requires both permissions on every OS, so watches below API 36 can never start a workout. No background-health permissions. The rationale copy gets a review, and the **Health apps declaration** is filled in (§7). Acceptance: grant the permission and start a workout on an API ≤ 35 watch (Galaxy Watch 4/6 on Wear OS 4/5) and on API 36. |
