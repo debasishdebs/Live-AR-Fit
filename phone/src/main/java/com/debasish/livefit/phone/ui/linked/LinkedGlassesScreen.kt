@@ -68,7 +68,7 @@ fun LinkedGlassesScreen(services: ServiceGraph, onBack: () -> Unit, onDisplay: (
     if (confirmUnpair) AlertDialog(
         onDismissRequest = { confirmUnpair = false },
         title = { Text("Unpair glasses?") },
-        text = { Text("Android will stop waking LiveFit when the glasses are near. You can pair again at any time.") },
+        text = { Text("Android will stop waking Live AR Fit when the glasses are near. You can pair again at any time.") },
         confirmButton = {
             TextButton(onClick = {
                 confirmUnpair = false

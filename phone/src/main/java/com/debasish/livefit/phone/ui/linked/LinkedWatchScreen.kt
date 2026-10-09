@@ -41,7 +41,7 @@ fun watchMediaControlsTip(watchName: String?): String {
         n.contains("Pixel", ignoreCase = true) -> "Watch Settings → Apps → Media controls (Auto-launch media controls) → off"
         else -> "Turn off auto-launch of media controls in your watch's settings"
     }
-    return "Optional: so LiveFit's workout screen stays in front when music starts: $menu (exact menu varies by watch and version)."
+    return "Optional: so Live AR Fit's workout screen stays in front when music starts: $menu (exact menu varies by watch and version)."
 }
 
 @Composable

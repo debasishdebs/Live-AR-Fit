@@ -52,3 +52,22 @@ class SetupFlowTest {
         assertContentEquals(arrayOf("android.permission.RECORD_AUDIO"), setupPermissions(30))
     }
 }
+
+class AutoAdvanceTest {
+    @Test fun grantedAdvances() {
+        assertTrue(shouldAutoAdvance(StepOutcome.Granted, disclosureRequired = false, disclosureShown = false))
+        assertTrue(shouldAutoAdvance(StepOutcome.Granted, disclosureRequired = true, disclosureShown = true))
+    }
+    @Test fun deniedOrFailedNeverAdvance() {
+        for (o in listOf(StepOutcome.Denied, StepOutcome.Failed))
+            for (req in listOf(false, true)) for (shown in listOf(false, true)) assertFalse(shouldAutoAdvance(o, req, shown))
+    }
+    @Test fun alreadySatisfiedAdvances() {
+        assertTrue(shouldAutoAdvance(StepOutcome.AlreadySatisfied, disclosureRequired = false, disclosureShown = false))
+        assertTrue(shouldAutoAdvance(StepOutcome.AlreadySatisfied, disclosureRequired = true, disclosureShown = true))
+    }
+    @Test fun disclosureRequiredNotYetShownNeverAdvances() {
+        assertFalse(shouldAutoAdvance(StepOutcome.AlreadySatisfied, disclosureRequired = true, disclosureShown = false))
+        assertFalse(shouldAutoAdvance(StepOutcome.Granted, disclosureRequired = true, disclosureShown = false))
+    }
+}

@@ -33,3 +33,20 @@ fun setupPermissions(sdk: Int): Array<String> = buildList {
     if (sdk >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
     if (sdk >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
 }.toTypedArray()
+
+/** How a setup step ended: the user granted/completed it, was refused, failed, or it was already done on entry. */
+enum class StepOutcome { Granted, Denied, Failed, AlreadySatisfied }
+
+/**
+ * Whether Setup shows the green tick and moves on by itself. Denied/failed never advance (the existing message stays).
+ * A step with a Play-policy disclosure never advances until that disclosure has been shown at least once, even if the
+ * permission is already held.
+ */
+fun shouldAutoAdvance(outcome: StepOutcome, disclosureRequired: Boolean, disclosureShown: Boolean): Boolean = when (outcome) {
+    StepOutcome.Denied, StepOutcome.Failed -> false
+    StepOutcome.Granted, StepOutcome.AlreadySatisfied -> !disclosureRequired || disclosureShown
+}
+
+/** Tick animation + the pause before advancing (spec: ~700-900 ms in total). */
+const val TICK_DRAW_MS = 500
+const val TICK_ADVANCE_MS = 800L
