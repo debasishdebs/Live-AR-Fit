@@ -147,6 +147,19 @@ interface HistoryStore : SessionStore {
     suspend fun clearFinished()
 }
 
+/**
+ * Durable route rows per session (spec §2.2, route_point). Identity (sessionId, source, deviceTimeMs) never changes;
+ * phoneTimeMs is null until the watch clock is calibrated and is rewritten by [normalizeWatchTimes] (review #2).
+ */
+interface RouteStore {
+    /** Insert-or-ignore by identity; nothing is written for a Discarded (or Cleared) session — its tombstone wins. */
+    suspend fun storeRouteFixes(sessionId: String, fixes: List<com.debasish.livefit.model.RouteFix>)
+    /** phoneTimeMs = deviceTimeMs − [watchOffsetMs] for every Watch row of [sessionId] that is null or mapped with another offset. */
+    suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long)
+    /** Phone-time order, watch first on ties; rows without a phone time last, by device time. */
+    suspend fun routeFixes(sessionId: String): List<com.debasish.livefit.model.RouteFix>
+}
+
 /** Platform speech-to-text, on-device only (spec §5.4). */
 interface SpeechToText {
     /** True when the on-device pack for [locale] is installed. */
