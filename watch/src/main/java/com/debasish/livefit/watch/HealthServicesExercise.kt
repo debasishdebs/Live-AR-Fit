@@ -69,7 +69,7 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
 
     override suspend fun unsupportedReason(type: WorkoutType): String? = runCatching {
         ExerciseSupport.unsupportedReason(type, hsType(type), client.getCapabilitiesAsync().await().supportedExerciseTypes)
-    }.getOrNull() // can't tell: let start() try and report its own failure
+    }.onFailure { if (it is CancellationException) throw it }.getOrNull() // can't tell: let start() try and report its own failure
 
     override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean = runCatching {
         steps = 0; km = 0.0; kcal = 0.0; speed = null; lastPaused = null

@@ -92,8 +92,8 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
             }
         }
         // Watches without a bezel/crown: small on-screen zoom buttons at the middle edges (clear of a round screen's corners).
-        ZoomButton("+", Modifier.align(Alignment.CenterEnd).padding(end = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, +1) }
-        ZoomButton("−", Modifier.align(Alignment.CenterStart).padding(start = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, -1) }
+        ZoomButton("+", ins.x(32), Modifier.align(Alignment.CenterEnd).padding(end = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, +1) }
+        ZoomButton("−", ins.x(32), Modifier.align(Alignment.CenterStart).padding(start = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, -1) }
         Column(Modifier.fillMaxSize().padding(top = ins.y(26), bottom = ins.y(14)), horizontalAlignment = Alignment.CenterHorizontally) {
             val caption = listOfNotNull(scene.caption, MapSceneBuilder.NO_TILES_CAPTION.takeIf { scene.viewport != null && !anyTile }).joinToString(" · ")
             if (caption.isNotEmpty()) Text(caption, fontSize = 12.sp, color = W.Amber, textAlign = TextAlign.Center)
@@ -105,9 +105,9 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
 }
 
 @Composable
-private fun ZoomButton(label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun ZoomButton(label: String, size: androidx.compose.ui.unit.Dp, modifier: Modifier, onClick: () -> Unit) {
     Box(
-        modifier.size(32.dp).clip(CircleShape).background(Color(0x99000000)).clickable(onClick = onClick),
+        modifier.size(size).clip(CircleShape).background(Color(0x99000000)).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, fontSize = 18.sp, color = Color.White) }
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Text
@@ -44,7 +45,7 @@ internal fun AmbientLive(s: WorkoutSnapshot, style: AmbientStyle = AmbientStyle.
     val grey = if (style.monochrome) Color.White else Color(0xFFBDBDBD)
     val white = Color.White
     val (dx, dy) = style.shift(tick)
-    val outline = if (style.outline) TextStyle(drawStyle = Stroke(width = 1.5f)) else TextStyle.Default
+    val outline = if (style.outline) TextStyle(drawStyle = Stroke(width = with(LocalDensity.current) { 1.dp.toPx() })) else TextStyle.Default
     Column(Modifier.fillMaxSize().offset(dx.dp, dy.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Text(s.displayType.label + if (s.phase == WorkoutPhase.Paused) " · paused" else "", fontSize = 14.sp, color = grey, style = outline)
         Text(ambientElapsed(s.elapsedMs), fontSize = 30.sp, color = white, style = outline)

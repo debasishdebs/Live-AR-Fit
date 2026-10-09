@@ -87,7 +87,7 @@ object WatchRuntime {
         val cap = runCatching {
             Wearable.getCapabilityClient(app).getCapability(PhoneNodes.CAPABILITY, CapabilityClient.FILTER_REACHABLE).await().nodes
                 .map { NodeCandidate(it.id, it.displayName, it.isNearby) }
-        }.getOrDefault(emptyList())
+        }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }.getOrDefault(emptyList())
         if (cap.isNotEmpty()) return PhoneNodes.targets(cap, emptyList())
         return PhoneNodes.targets(emptyList(), Wearable.getNodeClient(app).connectedNodes.await().map { it.id })
     }

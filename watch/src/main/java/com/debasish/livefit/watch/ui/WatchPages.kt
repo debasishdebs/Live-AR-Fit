@@ -68,7 +68,7 @@ internal fun GlancePage(s: WorkoutSnapshot) {
 @Composable
 internal fun PlaylistPage(queue: QueueWindow, onCommand: (Command) -> Unit) {
     if (queue.items.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(rememberInsets().x(28)), contentAlignment = Alignment.Center) {
             Text("Nothing queued — start music on the phone", fontSize = 14.sp, color = W.Dim, textAlign = TextAlign.Center)
         }
         return

@@ -205,7 +205,7 @@ private fun Live(s: WorkoutSnapshot, state: WatchUiState, onCommand: (Command) -
                         override val pageCount get() = pages.size
                     }
                 },
-                modifier = Modifier.padding(bottom = 6.dp),
+                modifier = Modifier.padding(bottom = rememberInsets().y(6)),
             )
         }
     }
@@ -220,7 +220,7 @@ private fun HeartPage(s: WorkoutSnapshot, history: List<Int>, onCommand: (Comman
     val zone = HeartZones.zoneFor(s.metrics.heartRate)
     val color = zoneColor(zone)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize().padding(6.dp)) {
+        Canvas(Modifier.fillMaxSize().padding(rememberInsets().x(6))) {
             val stroke = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round)
             drawArc(Color(0xFF26292D), 120f, 300f, false, style = stroke)
             drawArc(color, 120f, 300f * ((s.metrics.heartRate ?: 0) / 190f).coerceIn(0f, 1f), false, style = stroke)
@@ -270,7 +270,7 @@ private fun HeartPage(s: WorkoutSnapshot, history: List<Int>, onCommand: (Comman
 /** Page 2: compact stat pills. Calories is a headline metric, so it gets the big pill. */
 @Composable
 private fun StatsPage(s: WorkoutSnapshot) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 28.dp), verticalArrangement = Arrangement.Center) {
+    Column(Modifier.fillMaxSize().padding(horizontal = rememberInsets().x(28)), verticalArrangement = Arrangement.Center) {
         Pill(Icons.Rounded.LocalFireDepartment, W.Amber, "${s.metrics.calories}", "kcal", big = true)
         Spacer(Modifier.height(4.dp))
         Pill(Icons.AutoMirrored.Rounded.DirectionsWalk, W.Mint, "%,d".format(s.metrics.steps), "steps")
@@ -300,7 +300,7 @@ private fun Pill(icon: ImageVector, tint: Color, value: String, unit: String, bi
 private fun MusicPage(np: NowPlaying?, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         VolumeArc(level = np?.volume ?: 0.5f, onChange = onVolume)
-        Column(Modifier.fillMaxSize().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Column(Modifier.fillMaxSize().padding(horizontal = rememberInsets().x(26)), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Text(np?.title ?: "Nothing playing", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, textAlign = TextAlign.Center)
             Text(np?.artist.orEmpty(), fontSize = 13.sp, color = W.Dim, maxLines = 1)
             if (np != null && np.durationMs > 0) {
@@ -331,7 +331,7 @@ private fun MusicPage(np: NowPlaying?, onCommand: (Command) -> Unit, onVolume: (
 
 @Composable
 private fun Summary(s: WorkoutSnapshot, onDone: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 30.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    Column(Modifier.fillMaxSize().padding(horizontal = rememberInsets().x(30)), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Icon(s.displayType.icon, contentDescription = null, tint = W.Mint, modifier = Modifier.size(28.dp))
         Text("${s.displayType.label} done", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
