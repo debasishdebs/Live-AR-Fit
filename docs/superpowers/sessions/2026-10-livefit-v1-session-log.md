@@ -278,6 +278,27 @@ Format: **In** = owner's message (paraphrased, key words quoted) · **Out** = wh
 ### 49. "one agent per task with review per workflow/task? in parallel all independent right"
 - **Out:** confirmed: a fresh implementer plus a reviewer per task; Task 1 first; lanes in parallel; tasks inside a lane sequential; cross-lane dependencies merged before the dependent task.
 
+### 50. Final review + fix wave, Task 25 indoor acceptance
+- **Out:** the Opus whole-branch review said "ready with fixes". I-1: a lost epoch header left the glasses map dark, so the phone now re-announces the epoch on entering Map and the gate keeps lastSeq on a repeated epoch. Also added a watch batching-override retry. Both re-reviewed clean. On the phone and glasses: rows 12 (glasses half), 14 (partial) and 15 passed. Custom gesture Glance Tap→Next song was applied live; Double tap→Talk was refused with "Glance needs a gesture for Close app".
+- **Commits:** `9fce4fa`, `9d47091`, `2164d70` (acceptance record + map-cadence.sh).
+
+### 51. "can we add drive mode?? … in 30min" + "Stats don't hide but 0s; how tough is destination/turn-by-turn?"
+- **Out:** explained that Android Auto/CarPlay can't expose speed limit or ETA. Turn-by-turn = days of work; recommended reading Google Maps' nav notification next (~2–3 h). Built a time-boxed drive mode on `feat/drive-mode` (`d0b4938`, Opus, no task review): phone-only, nothing saved, glasses land on Map at zoom 16 with big km/h, Workout page = DRIVE dashboard.
+- **Verified:** installed on the phone and glasses; drive start → Map "Waiting for GPS" + 0 km/h, lf_map images shown. Phone location permission was still not granted.
+
+### 52. "keep a note to remind me… make production ready, Play Store, generic Wear OS, repos, Hi Rokid agents"
+- **Out:** memory `pending-device-tests` saved. Three read-only audits: Samsung coupling (no Samsung SDKs; 3 must-fix), Play readiness (no release config/icons/privacy policy, restricted permissions), Hi Rokid (games are on-glasses `.aix` JS agents run by `com.rokid.os.sprite.assistserver`; built with public `@yodaos-pkg/aix-cli`; CXR can't register voice commands; Google Assistant shut down Sept 2026 → Gemini; App Actions documented for START/STOP/PAUSE/RESUME_EXERCISE). Proposed sub-projects A (Wear OS) → B (production) with C (Hi Rokid) in parallel, D (App Actions) last.
+
+### 53. Owner decisions: name "Live AR Fit", package com.livear.fit, v0.1.0-beta / v0.2.0-beta / v1.0.0 (+Hi Rokid), one LiveFit agent, author gmail (no rewrite, no GPG), drop full-screen intent, battery-opt via settings + bold warning, tile provider with key
+- **Out:** repo git config set to Debasish Kanhar <d.kanhar@gmail.com>; memory `release-plan` saved. Fossil Gen 6 needs the Wear OS 3 update (Health Services). Health Services can't name the other tracking app.
+
+### 54. "yes go ahead with A" (generic Wear OS)
+- **Out:** two parallel Sonnet lanes plus Opus reviews and one fix round each.
+  - Phone lane (`8e5c197`, `ce17644`): capability `livefit_watch`/`livefit_phone` node choice with a connectedNodes fallback, CDM DEVICE_PROFILE_WATCH, brand-aware media-controls tip, generic copy, takeover text "Another app is still tracking a workout on your watch", scripts detect any watch by `ro.build.characteristics`.
+  - Watch lane (`b2b1873`, `3498a0a`): advertises the capability, refuses unsupported exercise types ("This watch can't track …"), map +/− zoom, screen-scaled insets, burn-in-safe AOD, provenance `wear-os/health-services`. The first review caught insets not applied and committed `-E` sed backup files (fixed).
+  - Merged `36c8b22`.
+- **Verified:** full JVM sweep 0 failures; all three APKs build. Installed on the glasses only (phone and watch were off wireless adb).
+
 ## Resume here (handoff for the next chat)
 - **Branch:** `design/livefit-v1-v2` (no remote). Plan rev 4 at `b426df5`; session-log commits after it.
 - **Installed on devices:** the r8 build (glance/workout/playlist pages, view voice commands, Nearby devices, voice-command toggles) + phone label fix `bd5634c`.
