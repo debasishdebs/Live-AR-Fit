@@ -7,9 +7,11 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.debasish.livefit.map.HttpTileFetcher
 import com.debasish.livefit.map.HudPalette
-import com.debasish.livefit.map.OsmTileSource
+import com.debasish.livefit.map.MapAttribution
 import com.debasish.livefit.map.TileDiskCache
 import com.debasish.livefit.map.TileId
+import com.debasish.livefit.map.TileSources
+import com.debasish.livefit.watch.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
@@ -23,7 +25,10 @@ import java.io.File
  * in when the network returns (review #6).
  */
 class WatchTiles(context: Context, scope: CoroutineScope, private val tint: Int = 0x14C3A2) {
-    private val fetcher = HttpTileFetcher(OsmTileSource(), TileDiskCache(File(context.cacheDir, "tiles"), TileDiskCache.WATCH_MAX_BYTES))
+    private val source = TileSources.select(BuildConfig.TILES_KEY, BuildConfig.DEBUG, BuildConfig.VERSION_NAME)
+    /** What the Map page must show for these tiles (spec §5). */
+    val attribution: MapAttribution get() = source.attribution
+    private val fetcher = HttpTileFetcher(source, TileDiskCache(File(context.cacheDir, "tiles"), TileDiskCache.WATCH_MAX_BYTES))
     private val loader = WatchTilePolicy.loader(scope) { t -> withContext(Dispatchers.IO) { fetcher.fetch(t)?.let(::decode) } }
         .also { it.start() }
     val bitmaps: StateFlow<Map<TileId, ImageBitmap>> = loader.tiles

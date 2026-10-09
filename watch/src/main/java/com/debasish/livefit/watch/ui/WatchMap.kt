@@ -19,6 +19,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,6 +53,7 @@ import kotlinx.coroutines.delay
 /** Watch Map page (spec §2.6): own fixes over tiles, bezel/crown or on-screen +/− = zoom 14–18, offline = route only on black. */
 @Composable
 internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, tiles: WatchTiles) {
+    var sheet by remember { mutableStateOf(false) }
     var zoom by remember(type) { mutableIntStateOf(Viewport.zoomFor(type)) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val focus = remember { FocusRequester() }
@@ -99,8 +101,9 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
             if (caption.isNotEmpty()) Text(caption, fontSize = 12.sp, color = W.Amber, textAlign = TextAlign.Center)
             Box(Modifier.weight(1f))
             scene.scale?.let { Text(it.label, fontSize = 10.sp, color = W.Dim) }
-            Text(scene.attribution, fontSize = 9.sp, color = W.Dim) // always visible (spec §2.4)
+            MapAttributionBadge(tiles.attribution) { sheet = true }
         }
+        if (sheet) MapAttributionSheet(tiles.attribution) { sheet = false }
     }
 }
 

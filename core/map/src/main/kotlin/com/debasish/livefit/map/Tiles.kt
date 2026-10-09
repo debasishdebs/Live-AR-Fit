@@ -9,20 +9,53 @@ import java.net.URL
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 
-/** Where tiles come from (spec §2.4): a constant URL behind an interface so the provider can be swapped. */
+/** A tappable attribution link (spec §5: maptiler.com/copyright, openstreetmap.org/copyright). */
+data class AttributionLink(val label: String, val url: String)
+
+/** What every map display must show for the tiles it draws (spec §5, review P2-6). */
+data class MapAttribution(val text: String, val mapTilerLogo: Boolean, val links: List<AttributionLink>)
+
+object Attributions {
+    val OSM_LINK = AttributionLink("OpenStreetMap", "https://www.openstreetmap.org/copyright")
+    val MAPTILER_LINK = AttributionLink("MapTiler", "https://www.maptiler.com/copyright/")
+    val OSM = MapAttribution(OSM_ATTRIBUTION, mapTilerLogo = false, links = listOf(OSM_LINK))
+    val MAPTILER = MapAttribution("© MapTiler © OpenStreetMap contributors", mapTilerLogo = true, links = listOf(MAPTILER_LINK, OSM_LINK))
+}
+
+/** Where tiles come from (spec §2.4, §5): behind an interface so the provider can be swapped. */
 interface TileSource {
     val userAgent: String
-    val attribution: String
+    val attribution: MapAttribution
     fun url(tile: TileId): String
 }
 
-class OsmTileSource(override val userAgent: String = USER_AGENT) : TileSource {
-    override val attribution: String = OSM_ATTRIBUTION
+/** Debug/personal fallback only (spec §5): the OSM server is not for public-scale use. */
+class OsmTileSource(override val userAgent: String = TileSources.userAgent("dev")) : TileSource {
+    override val attribution: MapAttribution = Attributions.OSM
     override fun url(tile: TileId): String = "https://tile.openstreetmap.org/${tile.z}/${tile.x}/${tile.y}.png"
+}
 
-    companion object {
-        /** OSM tile policy: an app-specific User-Agent. */
-        const val USER_AGENT = "RokidLiveFit/0.1 (com.debasish.livefit; personal fitness HUD)"
+/** Production tiles (spec §5): MapTiler raster "streets-v2", 256 px PNG, Free plan. The key never leaves the URL. */
+class MapTilerTileSource(private val key: String, override val userAgent: String) : TileSource {
+    init { require(key.isNotBlank()) { "MapTiler key is blank" } }
+    override val attribution: MapAttribution = Attributions.MAPTILER
+    override fun url(tile: TileId): String = "https://api.maptiler.com/maps/streets-v2/256/${tile.z}/${tile.x}/${tile.y}.png?key=$key"
+    override fun toString(): String = "MapTilerTileSource(streets-v2/256)"
+}
+
+object TileSources {
+    const val CONTACT = "d.kanhar@gmail.com"
+
+    fun userAgent(version: String): String = "LiveARFit/$version (com.livear.fit; contact: $CONTACT)"
+
+    /**
+     * The build's tile source: MapTiler with a key; without one, debug builds use the OSM server and release builds
+     * never get here (the Gradle build fails without LIVEAR_TILES_KEY) — so a keyless release is a programming error.
+     */
+    fun select(key: String, debug: Boolean, version: String): TileSource = when {
+        key.isNotBlank() -> MapTilerTileSource(key, userAgent(version))
+        debug -> OsmTileSource(userAgent(version))
+        else -> throw IllegalStateException("release build without LIVEAR_TILES_KEY")
     }
 }
 
