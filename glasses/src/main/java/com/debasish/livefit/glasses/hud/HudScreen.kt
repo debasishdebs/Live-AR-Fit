@@ -217,7 +217,7 @@ private fun Ready(frame: StateFrame, battery: Int?, clock: String) {
         }
         Spacer(Modifier.height(28.dp))
         Glyph(Icons.Outlined.FavoriteBorder, 56.dp, Hud.SECONDARY)
-        Label("LiveFit ready", 34.sp, Hud.PRIMARY, FontWeight.Bold)
+        Label("Live AR Fit ready", 34.sp, Hud.PRIMARY, FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Glyph(Icons.Outlined.Mic, 28.dp, Hud.SECONDARY)

@@ -23,5 +23,6 @@ for pair in "glasses:$GLASSES" "watch:$WATCH" "phone:$PHONE"; do
   extra=""; [ "$name" = "phone" ] && extra="--user 0"
   adb -s "$serial" install -r $extra "$name/build/outputs/apk/debug/$name-debug.apk" >/dev/null && echo "OK   $name ($serial)"
   if [ "$name" = "glasses" ]; then adb -s "$serial" shell pm grant com.livear.fit.glasses android.permission.RECORD_AUDIO
-    adb -s "$serial" shell pm grant com.livear.fit.glasses android.permission.BLUETOOTH_ADVERTISE || true; fi
+    adb -s "$serial" shell pm grant com.livear.fit.glasses android.permission.BLUETOOTH_ADVERTISE || true
+    adb -s "$serial" shell pm grant com.livear.fit.glasses android.permission.BLUETOOTH_CONNECT || true; fi
 done

@@ -200,7 +200,9 @@ class MainActivity : ComponentActivity() {
     // ---- Pairing (D2): the system prompt takes us out of the foreground; the phone reconnects the session afterwards. ----
     private var discoverableSeconds = 120
     private var lastDiscoverableMs = 0L
-    private val advertisePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) promptDiscoverable() }
+    private val pairingPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) promptDiscoverable() else Log.w(TAG, "pairing permission denied $granted; not discoverable")
+    }
     private val discoverable = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { Log.i(TAG, "discoverable result ${it.resultCode}") }
 
     private fun requestDiscoverable(seconds: Int) {
@@ -208,9 +210,12 @@ class MainActivity : ComponentActivity() {
         if (now - lastDiscoverableMs < 10_000) return // a resent request must not stack prompts
         lastDiscoverableMs = now
         discoverableSeconds = seconds
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(android.Manifest.permission.BLUETOOTH_ADVERTISE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            advertisePermission.launch(android.Manifest.permission.BLUETOOTH_ADVERTISE)
-        } else promptDiscoverable()
+        // Android 12+: the discoverable intent needs BLUETOOTH_CONNECT as well as BLUETOOTH_ADVERTISE.
+        val missing = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(android.Manifest.permission.BLUETOOTH_ADVERTISE, android.Manifest.permission.BLUETOOTH_CONNECT)
+                .filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
+        } else emptyList()
+        if (missing.isNotEmpty()) pairingPermissions.launch(missing.toTypedArray()) else promptDiscoverable()
     }
 
     private fun promptDiscoverable() {

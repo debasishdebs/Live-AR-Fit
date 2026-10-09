@@ -20,6 +20,11 @@ class ManifestPolicyTest {
         assertTrue("usesCleartextTraffic" !in manifest && "networkSecurityConfig" !in manifest)
     }
 
+    /** ACTION_REQUEST_DISCOVERABLE throws SecurityException on Android 12+ without BLUETOOTH_CONNECT. */
+    @Test fun bluetoothConnectIsDeclaredForPairing() {
+        assertTrue("<uses-permission android:name=\"android.permission.BLUETOOTH_CONNECT\" />" in manifest)
+    }
+
     /** Spec §4: tokens and the workout DB are never copied off the device (cloud backup or device transfer). */
     @Test fun backupIsOff() {
         assertTrue("android:allowBackup=\"false\"" in manifest)
