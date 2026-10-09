@@ -24,4 +24,7 @@ class ManifestPolicyTest {
     @Test fun noBatteryExemptionRequest() = assertTrue("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" !in manifest)
 
     @Test fun noBackgroundLocation() = assertTrue("ACCESS_BACKGROUND_LOCATION" !in manifest)
+
+    @Test fun disclosureScreenIsInternal() =
+        assertTrue(Regex("""android:name="\.ui\.DisclosureActivity"\s+android:exported="false"""").containsMatchIn(manifest))
 }

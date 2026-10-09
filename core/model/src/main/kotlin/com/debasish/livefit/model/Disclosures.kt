@@ -43,5 +43,5 @@ object Disclosures {
     const val WATCH_SUMMARY =
         "No account, no ads, no analytics. Workout, heart-rate and route data stay on your phone and watch; music details " +
             "are sent only to your watch and glasses. Voice is recognised on the phone, on-device. Map tiles come from MapTiler. " +
-            "Delete everything with Clear history on the phone, or uninstall. Contact: $CONTACT_EMAIL"
+            "Delete your workout history with Clear history; uninstall to remove everything. Contact: $CONTACT_EMAIL"
 }

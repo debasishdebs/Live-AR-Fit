@@ -128,7 +128,7 @@ fun PermissionCard(perms: List<String>, onGrant: () -> Unit) {
 fun LocationDisclosureCard(onAnswer: (Boolean) -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(rememberInsets().x(22))) {
-            Text("Location for your route", fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text(com.debasish.livefit.model.Disclosures.LOCATION_TITLE, fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
             Text(com.debasish.livefit.model.Disclosures.WATCH_LOCATION, fontSize = 11.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center)
             Spacer(Modifier.height(10.dp))

@@ -44,6 +44,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Spec §4: prominent disclosure before notification access / the location prompt. -->
+        <activity
+            android:name=".ui.DisclosureActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".LiveFitHubService"
             android:exported="false"

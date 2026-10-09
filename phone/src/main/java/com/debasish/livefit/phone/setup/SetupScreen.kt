@@ -1,10 +1,7 @@
 package com.debasish.livefit.phone.setup
 
-import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.os.Build
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -48,9 +45,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.Disclosures
 import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.PeerPairing
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.DisclosureActivity
+import com.debasish.livefit.phone.ui.DisclosureKind
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.IconChip
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
@@ -71,9 +71,6 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     val scope = rememberCoroutineScope()
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         LiveFitHubService.ensureRunning(activity) // Bluetooth now granted: the connectedDevice hub can start
-    }
-    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        LiveFitHubService.promoteLocation(activity) // granted: the visible app re-promotes the hub with `location`
     }
     fun go(skip: Boolean = false) {
         if (skip) flow.skip() else flow.next()
@@ -107,7 +104,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         val (icon, title, body) = when (step) {
-            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Live AR Fit", "Allow microphone, nearby devices and notifications so the hub can run during workouts.")
+            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Live AR Fit", "Allow microphone, nearby devices and notifications so the hub can run during workouts.\n\n${Disclosures.MIC}")
             SetupStep.Glasses -> Triple(GlassesIcon, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else " Tap Allow on your glasses when asked.")
             SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Wear OS watch", (if (Build.VERSION.SDK_INT < 33) "Pair the watch" else "Pair the watch (tap Allow on your watch when asked)") +
@@ -132,8 +129,8 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
                 Button(onClick = { pair(DeviceKind.Glasses, "Hi Rokid") }) { Text("Pair") }
             }
             SetupStep.Watch -> Button(onClick = { pair(DeviceKind.Watch, "your watch's companion app (Galaxy Wearable, Pixel Watch, Wear OS…)") }) { Text("Pair watch") }
-            SetupStep.Music -> Button(onClick = { activity.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Open notification access") }
-            SetupStep.Map -> Button(onClick = { locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("Allow location") }
+            SetupStep.Music -> Button(onClick = { activity.startActivity(DisclosureActivity.intent(activity, DisclosureKind.Music)) }) { Text("Open notification access") }
+            SetupStep.Map -> Button(onClick = { activity.startActivity(DisclosureActivity.intent(activity, DisclosureKind.Location)) }) { Text("Allow location") }
             SetupStep.Voice -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Button(enabled = !downloading, onClick = {
                     downloading = true; voiceNote = null

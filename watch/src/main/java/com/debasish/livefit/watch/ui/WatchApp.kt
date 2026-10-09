@@ -115,12 +115,13 @@ private val AMBIENT_PHASES = setOf(WorkoutPhase.Starting, WorkoutPhase.Active, W
 @Composable
 fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, tiles: WatchTiles, ambient: Boolean = false, ambientStyle: AmbientStyle = AmbientStyle.Default, ambientTick: Long = 0, locationDisclosure: Boolean = false, onLocationDisclosure: (Boolean) -> Unit = {}) {
     val s = state.snapshot
+    var about by remember { mutableStateOf(false) }
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // AOD: a low-power workout screen; the interactive one (with seconds and controls) returns on wake.
             if (ambient && s.phase in AMBIENT_PHASES) { AmbientLive(s, ambientStyle, ambientTick); return@Box }
             when (s.phase) {
-                WorkoutPhase.Idle -> Ready(state.phoneOnline, state.glassesOnline) { onCommand(Command.StartWorkout(it)) }
+                WorkoutPhase.Idle -> if (about) AboutPage { about = false } else Ready(state.phoneOnline, state.glassesOnline, onAbout = { about = true }) { onCommand(Command.StartWorkout(it)) }
                 WorkoutPhase.Summary -> Summary(s) { onCommand(Command.DismissSummary) }
                 WorkoutPhase.Stopping -> Saving(s)
                 else -> Live(s, state, onCommand, onVolume, tiles)
@@ -143,7 +144,7 @@ private fun Saving(s: WorkoutSnapshot) {
 }
 
 @Composable
-private fun Ready(phoneOnline: Boolean, glassesOnline: Boolean, onStart: (WorkoutType) -> Unit) {
+private fun Ready(phoneOnline: Boolean, glassesOnline: Boolean, onAbout: () -> Unit, onStart: (WorkoutType) -> Unit) {
     var typeIndex by remember { mutableIntStateOf(0) }
     val type = WorkoutType.entries[typeIndex]
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -165,6 +166,8 @@ private fun Ready(phoneOnline: Boolean, glassesOnline: Boolean, onStart: (Workou
             Icon(type.icon, contentDescription = null, tint = W.Mint, modifier = Modifier.size(20.dp))
             Text("  ${type.label}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         }
+        Spacer(Modifier.height(6.dp))
+        Text("ⓘ About", fontSize = 12.sp, color = W.Dim, modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onAbout).padding(horizontal = 12.dp, vertical = 8.dp))
     }
 }
 

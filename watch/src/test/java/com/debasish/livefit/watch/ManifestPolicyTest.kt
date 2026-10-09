@@ -32,4 +32,9 @@ class ManifestPolicyTest {
     @Test fun noBackgroundLocationOrBackgroundHealth() {
         for (p in listOf("ACCESS_BACKGROUND_LOCATION", "BODY_SENSORS_BACKGROUND", "READ_HEALTH_DATA_IN_BACKGROUND")) assertTrue(p !in manifest, p)
     }
+
+    /** Spec §4: the watch never asks for notification access; :services:music's listener is stripped from its merge. */
+    @Test fun noNotificationListener() = assertTrue(
+        Regex("""android:name="com\.debasish\.livefit\.services\.music\.MediaListener"\s+tools:node="remove"""").containsMatchIn(manifest),
+    )
 }

@@ -1,7 +1,5 @@
 package com.debasish.livefit.phone.ui.linked
 
-import android.content.Intent
-import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +31,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.DisclosureActivity
+import com.debasish.livefit.phone.ui.DisclosureKind
 import com.debasish.livefit.phone.ui.components.ChipRow
 import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.components.SectionLabel
@@ -54,7 +54,7 @@ fun LinkedMusicScreen(services: ServiceGraph, onBack: () -> Unit) {
         ScreenHeader("YouTube Music", onBack)
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
             ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "Music control", musicStatusLabel(connected, hasMusicAccess(context)),
-                { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
+                { context.startActivity(DisclosureActivity.intent(context, DisclosureKind.Music)) })
         }
         SectionLabel("When a workout starts")
         SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {

@@ -26,6 +26,6 @@ class DisclosuresTest {
 
     @Test fun policyIsPublishedAndHasAContact() {
         assertTrue(Disclosures.PRIVACY_POLICY_URL.startsWith("https://"))
-        Disclosures.WATCH_SUMMARY.says("Clear history", Disclosures.CONTACT_EMAIL, "MapTiler")
+        Disclosures.WATCH_SUMMARY.says("Delete your workout history with Clear history", "uninstall to remove everything", Disclosures.CONTACT_EMAIL, "MapTiler")
     }
 }
