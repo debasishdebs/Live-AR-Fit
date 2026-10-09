@@ -299,6 +299,24 @@ Format: **In** = owner's message (paraphrased, key words quoted) · **Out** = wh
   - Merged `36c8b22`.
 - **Verified:** full JVM sweep 0 failures; all three APKs build. Installed on the glasses only (phone and watch were off wireless adb).
 
+### 55. "Continue with B and C", GitHub repo URL, Fossil on Wear OS 3, "v0.2.0-beta includes map: yes"
+- **Out:** device serials and BT MAC scrubbed from all history (filter-branch on 3 docs; backup ref kept locally). Pushed to github.com/debasishdebs/Live-AR-Fit `main`; tags v0.1.0-beta and v0.2.0-beta, both GitHub pre-releases with debug APKs and SHA256SUMS. Generic Wear OS installed on phone and watch; clock sync OK.
+
+### 56. B spec reviews (Codex: 4 P1 + 4 P2, then 2 more) and the 16 KB question
+- **Out:** spec rev 2–4: OS-dependent HR permission; remote-launch filters kept with an entry guard; glasses package vs activity split; 16 KB gate; owner-signed releases; MapTiler Free attribution; music disclosure; in-app privacy policy; on-device STT; Google Data Layer cloud relay disclosed. Owner decided RELRO is a warning only, because Play doesn't enforce it and Google's own graphics-path fails it. Gate = LOAD + zip alignment + Play check + a 16 KB device run.
+
+### 57. Hi Rokid spike on device
+- **Out:** owner ran set-dev and installed the probe. The agent got params; a loopback fetch reaches a glasses-local listener, not the phone. Voice: draft agents (CLI and AIUI Studio Global "Update glasses resource package") are not voice-routed, and Rokid's AI says "I can't start Live Fit". Rokid also won't open third-party glasses apps by name. Discord threads suggest drafts aren't registered in the cloud. Probe imported in AIUI Studio via a slash-free branch (`hi-rokid-probe`).
+
+### 58. B execution (plan e194253, 12 tasks, lanes A/U/M/R/D)
+- **Out:**
+  - Tasks 1 (identity com.livear.fit), 2 (release build; gate fixed to fail closed), 3 (16 KB checker), 4 (watch HR permissions), 5 (battery banner; fallback chain), 6 (disclosures + privacy policy; dead-end fix), 7 (URI guard + sender gate), 8 (MapTiler + attribution; per-source cache), 9 (robustness; StrictMode on main; races), 10 (docs; accuracy fixes) and 11 (CI) are reviewed and merged.
+  - First GitHub CI run passed.
+- **Verified:** full unit sweep and all three debug builds pass on each merge.
+
+### 59. C approved and built
+- **Out:** glasses loopback receiver on 127.0.0.1:47123; LiveFit agent in `rokid-agent/livefit/` with review drafts. Agent commands carry `via=Agent` and go through the Settings → Voice gate (Stop asks first). Reviewed (one fix round) and merged.
+
 ## Resume here (handoff for the next chat)
 - **Branch:** `design/livefit-v1-v2` (no remote). Plan rev 4 at `b426df5`; session-log commits after it.
 - **Installed on devices:** the r8 build (glance/workout/playlist pages, view voice commands, Nearby devices, voice-command toggles) + phone label fix `bd5634c`.
