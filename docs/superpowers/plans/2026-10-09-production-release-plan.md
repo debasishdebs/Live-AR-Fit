@@ -22,7 +22,7 @@ Copied from the spec; every task's requirements implicitly include these.
 - **Signing:** keystore outside the repo, referenced from an untracked `keystore.properties` or the env vars `LIVEAR_KEYSTORE`, `LIVEAR_KEY_ALIAS`, `LIVEAR_STORE_PASSWORD`, `LIVEAR_KEY_PASSWORD`. Phone, watch and glasses use the same upload key. "Without a keystore, a local release build is debug-signed and clearly named `*-unsigned-diagnostic`. It is never distributed." "The tag release job fails if the release credentials are missing." The glasses APK certificate "is checked against the expected upload-key fingerprint, stored as a CI variable."
 - **R8:** "`isMinifyEnabled = true` and `isShrinkResources = true` for the phone, watch and glasses release builds"; keep rules in `proguard-rules.pro` for kotlinx.serialization, Room, `com.rokid.cxr.**`, and the reflective `com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper`; Health Services/Wearable/Media rules "only where the release smoke test shows breakage".
 - **Logging:** "release builds strip `Log.v/d/i` via `-assumenosideeffects`. They keep `w/e`. User data stays out of `w/e` messages: no coordinates, no track titles."
-- **16 KB (hard gate, no exceptions):** every `.so` in the phone and watch AABs and the glasses APK: "LOAD `p_align ≥ 0x4000`, and `(PT_GNU_RELRO.p_vaddr + p_memsz) % 0x4000 == 0`", with a pass/fail table; plus the runtime smoke test where "`adb shell getconf PAGE_SIZE` = 16384". "A 'documented misalignment' is not an acceptable outcome." "If Rokid can't supply aligned CXR libraries, the release is blocked."
+- **16 KB (spec rev 4):** **hard gate** = every 64-bit `.so` in the phone and watch AABs and the glasses APK has "every LOAD `p_align ≥ 0x4000`"; uncompressed native libraries "zip-aligned to 16 KB (`zipalign -c -P 16 -v 4`, or the AGP/bundletool equivalent)"; "Play Console shows the uploaded release as 16 KB compatible"; a runtime smoke test "on a real 16 KB device (a Pixel 8 or newer with the 16 KB developer option; `adb shell getconf PAGE_SIZE` = 16384): the phone pairs with the glasses through CXR, the HUD renders, and a workout starts and stops". **Warning only** ("reported, never fails the build"): a RELRO end with `(PT_GNU_RELRO.p_vaddr + p_memsz) % 0x4000 != 0`, "listed in the release notes and reported to Rokid".
 - **Target SDK:** "phone and watch move to `targetSdk = 36`"; "The glasses app stays on its current target."
 - **Removals:** "the unused `USE_FAKE_SERVICES` flag"; "the `LIVE_*` debug flags in release builds (they become constants)"; "`phone/src/debug` is already excluded from release".
 - **Permissions:** `USE_FULL_SCREEN_INTENT` (watch) removed → Ongoing Activity; `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (phone) removed → `Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`; banner text **"Battery optimisation is on — LiveFit may stop tracking or lose the glasses/watch link when the screen is off."** with **Open settings**; Samsung: "Settings → Battery → Background usage limits → Never sleeping apps → add Live AR Fit"; `BODY_SENSORS` with `android:maxSdkVersion="35"` and `android.permission.health.READ_HEART_RATE` for API 36+ via one helper `requiredHealthPermissions(sdkInt)`; "No background-health permissions"; no `ACCESS_BACKGROUND_LOCATION`.
@@ -53,7 +53,7 @@ Five conditions the spec implies but does not test, most likely to bite first; e
 - `CxrGlassesLink.kt:198` builds the activity as `"$GLASSES_PKG.MainActivity"` and `GlassAppWatcher.kt:30` uses `GLASSES_PKG` — both change in Task 1. `<queries>` (phone manifest :23-26) lists only Hi Rokid and YouTube Music — nothing to rename there. Deep links (`livefit://`) and Data Layer paths (`/lf/*`) are package-independent.
 - `adb shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver` (DebugReceiver.kt:16, :33) — after the rename the `.phone.X` shorthand would expand to `com.livear.fit.phone.X`, which doesn't exist; the component must be written fully: `com.livear.fit/com.debasish.livefit.phone.DebugReceiver`.
 - `client-l:1.1.2` (latest stable; newer only `1.2.X-SNAPSHOT`) depends on `cxr-service-bridge:1.0-20260715.121510-107` — a **SNAPSHOT**. Task 2 pins the phone to the release `1.5`. `cxr-service-bridge` ships classes in `com.rokid.cxr` **and `com.rokid.cxrservice`**, and its AAR has an empty `proguard.txt`, so both packages need keep rules.
-- The checker below, run on the vendor AARs: `cxr-service-bridge` 1.4 and the SNAPSHOT fail the RELRO-end check on all 5 arm64 libraries; **1.5 still fails 4 of 5** (`libcaps`, `libflora-cli`, `libmutils`, `libcxr-bridge-jni`; `libcxr-sock-proto-jni` passes). `androidx.graphics:graphics-path` **1.0.1 and 1.1.0 (newest stable) both fail** the RELRO-end check (LOAD alignment passes). So the gate is expected to block v1.0.0 until Rokid ships aligned libraries and the RELRO question for graphics-path is settled by the owner (see Task 3).
+- The checker below, run on the vendor AARs: every arm64 library of `cxr-service-bridge` 1.4/1.5/SNAPSHOT and `androidx.graphics:graphics-path` 1.0.1/1.1.0 has 16 KB LOAD alignment (passes the hard gate). The RELRO end is unaligned in `libcaps`, `libflora-cli`, `libmutils`, `libcxr-bridge-jni` (1.5; `libcxr-sock-proto-jni` is clean from 1.5) and `libandroidx.graphics.path` — under spec rev 4 these are **warnings** for the release notes and the Rokid report, not blockers.
 - `WatchRuntime.scope` is `Dispatchers.Main.immediate` and runs the recorder/controller, so every `FileDeltaBuffer` write and ack happens on the main thread; `GpsPreferences` reads its file in the constructor; `WatchClient.start()` loads `pages.json` on the caller's (main) thread; the glasses decode the map PNG inside `remember` on the main thread (MainActivity.kt:119-121).
 - `HistoryDatabase` v1 → v2 (`MIGRATION_1_2`) exists; `exportSchema = false`. v1 had `session`, `delta`, `sample` (commit b1f1131); v2 adds `route_point`.
 - The phone history thumbnail is route-only (no tiles, `RouteThumbnail`), but the spec requires the attribution there too; Task 8 adds it as specified.
@@ -64,7 +64,7 @@ Five conditions the spec implies but does not test, most likely to bite first; e
 - **Release detection** is per project (`ReleaseGate.requested(taskNames, projectPath)`): unqualified `assembleRelease`/`assemble`/`bundle`/`build`/`check16kb` count for every app; `:glasses:assembleRelease` does not make the phone script demand a tile key. Gradle task-name abbreviations (`aR`) are not recognised — spell release tasks out.
 - **Diagnostic naming** uses `base.archivesName` (`phone-unsigned-diagnostic-release.aab`), set only when a release task is requested without any keystore, so debug output names (used by `tools/install-all.sh`) never change.
 - **Tag job** passes `-Plivefit.requireSigning=true`, which turns "no keystore" from a diagnostic build into an error.
-- **32-bit libraries** are reported `SKIP` by the 16 KB checker (16 KB pages exist only on 64-bit devices); every 64-bit library must pass.
+- **32-bit libraries** are reported `SKIP` by the 16 KB checker (16 KB pages exist only on 64-bit devices); no 64-bit library may FAIL (RELRO-end WARN rows are allowed, spec rev 4).
 - **Watch thread model:** `WatchRuntime.scope` becomes a serial background dispatcher (`Dispatchers.IO.limitedParallelism(1)`), keeping the "single-threaded caller" assumption of recorder and controller while moving their file I/O off the main thread; a separate `uiScope` (Main) serves the Map page's tile loader. The one-time crash-recovery scan in `WatchSessionRecorder`'s constructor stays synchronous in `WatchRuntime.init` (every entry point needs the recovered state immediately); it is wrapped in `StrictMode.allowThreadDiskReads()` so it is the only, explicit exception.
 - **SharedPreferences:** `apply()` writes are already asynchronous; `LiveFitApp.onCreate` calls `getSharedPreferences` for `settings`, `companion` and `rokid` first, which starts their background load before any main-thread read.
 - **Disclosure UI:** one `DisclosureActivity` (dialog) serves Setup, Linked music and the Permissions list, so every route to notification access or the location prompt passes the disclosure. The watch shows its own short location disclosure before its location prompt.
@@ -978,7 +978,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: release output directories from Task 2.
-- Produces: `python3 tools/release/check_16kb.py <aab|apk|so|dir>...` → table of `PASS`/`FAIL`/`SKIP` rows + `"<n> libraries, <m> failing"`; exit 0 all pass, 1 any FAIL, 2 usage/I/O error or no artifact; Gradle task `:check16kb` (used by Task 11 and Task 12).
+- Produces: `python3 tools/release/check_16kb.py <aab|apk|so|dir>...` → table of `PASS`/`WARN`/`FAIL`/`SKIP` rows + `"<n> libraries, <f> failing, <w> warnings"`; FAIL = LOAD `p_align < 0x4000` or an uncompressed `.so` in an APK whose zip data offset isn't 16 KB aligned; WARN = RELRO end only; exit 0 no FAIL (warnings allowed), 1 any FAIL, 2 usage/I/O error or no artifact; Gradle task `:check16kb` (used by Task 11 and Task 12).
 
 - [ ] **Step 1: Write the failing test** — `tools/release/test_check_16kb.py`:
 
@@ -1010,7 +1010,21 @@ def elf64(segments):
 # Known-good and known-bad fixtures (spec §9): synthesized so the repo carries no vendor binaries.
 GOOD = elf64([(PT_LOAD, 0, 0x5000, 0x4000), (PT_LOAD, 0x8000, 0x2000, 0x4000), (PT_GNU_RELRO, 0x8000, 0x4000, 1)])
 BAD_LOAD = elf64([(PT_LOAD, 0, 0x5000, 0x1000)])
-BAD_RELRO = elf64([(PT_LOAD, 0, 0x5000, 0x4000), (PT_GNU_RELRO, 0x8000, 0x1a00, 1)])
+RELRO_ONLY = elf64([(PT_LOAD, 0, 0x5000, 0x4000), (PT_GNU_RELRO, 0x8000, 0x1a00, 1)])
+
+
+def write_apk(path, entries):
+    """entries: (name, data, aligned). Stored entries; aligned ones get a zipalign-style extra field (0xD935) padding."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        for name, data, aligned in entries:
+            info = zipfile.ZipInfo(name)
+            if aligned:
+                start = z.fp.tell() + 30 + len(name.encode())
+                pad = (-start) % 0x4000
+                if pad < 4:
+                    pad += 0x4000
+                info.extra = struct.pack("<HH", 0xD935, pad - 4) + bytes(pad - 4)
+            z.writestr(info, data)
 
 
 def run(*args):
@@ -1026,9 +1040,10 @@ class Check16kbTest(unittest.TestCase):
         self.assertEqual("FAIL", status)
         self.assertIn("p_align", detail)
 
-    def test_unaligned_relro_end_fails_even_with_16k_loads(self):
-        status, detail = check_16kb.check_elf(BAD_RELRO)
-        self.assertEqual("FAIL", status)
+    def test_unaligned_relro_end_is_only_a_warning(self):
+        """Spec rev 4: Play doesn't enforce the RELRO end (graphics-path and the Rokid prebuilts fail it)."""
+        status, detail = check_16kb.check_elf(RELRO_ONLY)
+        self.assertEqual("WARN", status)
         self.assertIn("RELRO", detail)
 
     def test_32bit_is_skipped_and_garbage_fails(self):
@@ -1036,22 +1051,39 @@ class Check16kbTest(unittest.TestCase):
         self.assertEqual("FAIL", check_16kb.check_elf(b"not an elf")[0])
         self.assertEqual("FAIL", check_16kb.check_elf(GOOD[:80])[0], "truncated headers")
 
-    def test_archive_exit_codes(self):
+    def test_exit_codes_load_fails_relro_warns(self):
         with tempfile.TemporaryDirectory() as d:
-            good, bad = os.path.join(d, "good.apk"), os.path.join(d, "bad.aab")
-            with zipfile.ZipFile(good, "w") as z:
-                z.writestr("lib/arm64-v8a/libgood.so", GOOD)
-                z.writestr("classes.dex", b"dex")
-            with zipfile.ZipFile(bad, "w") as z:
+            warn, bad = os.path.join(d, "warn.aab"), os.path.join(d, "bad.aab")
+            with zipfile.ZipFile(warn, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("base/lib/arm64-v8a/libgood.so", GOOD)
-                z.writestr("base/lib/arm64-v8a/libbad.so", BAD_RELRO)
-            ok = run(good)
+                z.writestr("base/lib/arm64-v8a/librelro.so", RELRO_ONLY)
+            with zipfile.ZipFile(bad, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("base/lib/arm64-v8a/libbad.so", BAD_LOAD)
+            ok = run(warn)
             self.assertEqual(0, ok.returncode, ok.stdout)
-            ko = run(good, bad)
+            self.assertIn("WARN  " + warn + "!base/lib/arm64-v8a/librelro.so", ok.stdout)
+            self.assertIn("2 libraries, 0 failing, 1 warnings", ok.stdout)
+            ko = run(warn, bad)
             self.assertEqual(1, ko.returncode)
             self.assertIn("FAIL  " + bad + "!base/lib/arm64-v8a/libbad.so", ko.stdout)
-            self.assertIn("1 failing", ko.stdout)
             self.assertEqual(2, run().returncode)
+
+    def test_uncompressed_apk_libraries_must_be_16k_zip_aligned(self):
+        with tempfile.TemporaryDirectory() as d:
+            aligned, unaligned = os.path.join(d, "aligned.apk"), os.path.join(d, "unaligned.apk")
+            write_apk(aligned, [("classes.dex", b"dex", False), ("lib/arm64-v8a/libgood.so", GOOD, True)])
+            write_apk(unaligned, [("classes.dex", b"dex", False), ("lib/arm64-v8a/libgood.so", GOOD, False)])
+            self.assertEqual(0, run(aligned).returncode, run(aligned).stdout)
+            r = run(unaligned)
+            self.assertEqual(1, r.returncode, r.stdout)
+            self.assertIn("zip data offset", r.stdout)
+
+    def test_compressed_apk_libraries_need_no_zip_alignment(self):
+        with tempfile.TemporaryDirectory() as d:
+            legacy = os.path.join(d, "legacy.apk")
+            with zipfile.ZipFile(legacy, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("lib/arm64-v8a/libgood.so", GOOD)  # extracted at install: only the ELF rule applies
+            self.assertEqual(0, run(legacy).returncode)
 
     def test_directory_argument_scans_its_archives(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1083,10 +1115,14 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'check_16kb'`.
 
 ```python
 #!/usr/bin/env python3
-"""16 KB page-size gate (spec §3, hard gate). Every 64-bit .so inside the given AAB/APK/.so files (a directory stands
-for the .aab/.apk files in it) must have every LOAD p_align >= 0x4000 and, if it has a PT_GNU_RELRO segment, a RELRO
-end (p_vaddr + p_memsz) that is a multiple of 0x4000. 32-bit libraries are listed as SKIP (no 16 KB devices).
-Prints a pass/fail table. Exit 0 = all pass, 1 = a library fails, 2 = usage or I/O error (including no artifact)."""
+"""16 KB page-size check (spec §3, revision 4). For every 64-bit .so inside the given AAB/APK/.so files (a directory
+stands for the .aab/.apk files in it):
+  FAIL (hard gate) - a LOAD segment with p_align < 0x4000, or, inside an APK, an uncompressed .so whose zip data
+                     offset is not a multiple of 16384 (the zipalign -P 16 rule);
+  WARN (reported)  - a PT_GNU_RELRO end (p_vaddr + p_memsz) that is not a multiple of 0x4000 (Play doesn't enforce it);
+  SKIP             - 32-bit libraries (no 16 KB devices).
+Zip alignment inside an AAB is not checked: bundletool/Play build the installed APKs (Play Console's 16 KB status covers it).
+Prints a table. Exit 0 = no FAIL (warnings allowed), 1 = a FAIL, 2 = usage or I/O error (including no artifact)."""
 import os
 import struct
 import sys
@@ -1098,7 +1134,7 @@ PT_GNU_RELRO = 0x6474E552
 
 
 def check_elf(data):
-    """Returns (status, detail): status is PASS, FAIL or SKIP (32-bit: no 16 KB devices)."""
+    """Returns (status, detail): PASS, WARN (RELRO end only), FAIL (LOAD alignment / not an ELF) or SKIP (32-bit)."""
     if len(data) < 64 or data[:4] != b"\x7fELF":
         return "FAIL", "not an ELF file"
     if data[4] != 2:
@@ -1106,7 +1142,7 @@ def check_elf(data):
     endian = "<" if data[5] == 1 else ">"
     phoff, = struct.unpack_from(endian + "Q", data, 0x20)
     phentsize, phnum = struct.unpack_from(endian + "HH", data, 0x36)
-    problems = []
+    errors, warnings = [], []
     loads = 0
     for i in range(phnum):
         off = phoff + i * phentsize
@@ -1116,24 +1152,41 @@ def check_elf(data):
         if p_type == PT_LOAD:
             loads += 1
             if p_align < PAGE:
-                problems.append("LOAD p_align 0x%x < 0x4000" % p_align)
+                errors.append("LOAD p_align 0x%x < 0x4000" % p_align)
         elif p_type == PT_GNU_RELRO and (p_vaddr + p_memsz) % PAGE != 0:
-            problems.append("RELRO end 0x%x not 16 KB aligned" % (p_vaddr + p_memsz))
+            warnings.append("RELRO end 0x%x not 16 KB aligned" % (p_vaddr + p_memsz))
     if loads == 0:
-        problems.append("no LOAD segment")
-    return ("FAIL", "; ".join(problems)) if problems else ("PASS", "")
+        errors.append("no LOAD segment")
+    if errors:
+        return "FAIL", "; ".join(errors + warnings)
+    return ("WARN", "; ".join(warnings)) if warnings else ("PASS", "")
+
+
+def zip_data_offset(f, info):
+    """Where an entry's data starts: local header (30 bytes) + file name + local extra field."""
+    f.seek(info.header_offset)
+    header = f.read(30)
+    name_len, extra_len = struct.unpack_from("<HH", header, 26)
+    return info.header_offset + 30 + name_len + extra_len
 
 
 def libraries(path):
-    """(name, bytes) for a bare .so, or every .so inside an AAB/APK (zip)."""
+    """(name, bytes, zip problem or None) for a bare .so, or every .so inside an AAB/APK (zip)."""
     if path.endswith(".so"):
         with open(path, "rb") as f:
-            yield path, f.read()
+            yield path, f.read(), None
         return
-    with zipfile.ZipFile(path) as z:
-        for n in sorted(z.namelist()):
-            if n.endswith(".so"):
-                yield "%s!%s" % (path, n), z.read(n)
+    is_apk = path.endswith(".apk")
+    with zipfile.ZipFile(path) as z, open(path, "rb") as raw:
+        for info in sorted(z.infolist(), key=lambda i: i.filename):
+            if not info.filename.endswith(".so"):
+                continue
+            problem = None
+            if is_apk and info.compress_type == zipfile.ZIP_STORED:
+                offset = zip_data_offset(raw, info)
+                if offset % PAGE != 0:
+                    problem = "zip data offset 0x%x not 16 KB aligned (zipalign -P 16)" % offset
+            yield "%s!%s" % (path, info.filename), z.read(info), problem
 
 
 def artifacts(path):
@@ -1148,25 +1201,32 @@ def artifacts(path):
     return [path]
 
 
+def check(name, data, zip_problem):
+    status, detail = check_elf(data)
+    if zip_problem and status != "SKIP":
+        status, detail = "FAIL", "; ".join(d for d in (zip_problem, detail) if d)
+    return status, detail
+
+
 def main(argv):
     if not argv:
         print("usage: check_16kb.py <aab|apk|so|dir>...", file=sys.stderr)
         return 2
-    failed = False
     rows = []
     try:
         for p in [a for arg in argv for a in artifacts(arg)]:
-            for name, data in libraries(p):
-                status, detail = check_elf(data)
-                failed |= status == "FAIL"
+            for name, data, zip_problem in libraries(p):
+                status, detail = check(name, data, zip_problem)
                 rows.append((status, name, detail))
     except (OSError, zipfile.BadZipFile) as e:
         print("error: %s" % e, file=sys.stderr)
         return 2
     for status, name, detail in rows:
         print("%-4s  %s%s" % (status, name, "  (" + detail + ")" if detail else ""))
-    print("%d libraries, %d failing" % (len(rows), sum(r[0] == "FAIL" for r in rows)))
-    return 1 if failed else 0
+    failing = sum(r[0] == "FAIL" for r in rows)
+    warned = sum(r[0] == "WARN" for r in rows)
+    print("%d libraries, %d failing, %d warnings" % (len(rows), failing, warned))
+    return 1 if failing else 0
 
 
 if __name__ == "__main__":
@@ -1176,10 +1236,10 @@ if __name__ == "__main__":
 Append to the root `build.gradle.kts`:
 
 ```kotlin
-// Spec §3 hard gate: every native library in the phone and watch AABs and the glasses APK is 16 KB aligned.
+// Spec §3 (rev 4) hard gate: LOAD alignment of every native library + 16 KB zip alignment of uncompressed libs in APKs; RELRO end = warning.
 tasks.register<Exec>("check16kb") {
     group = "verification"
-    description = "16 KB page-size check (LOAD p_align and RELRO end) on the release AABs and the glasses APK."
+    description = "16 KB check on the release AABs and the glasses APK: LOAD p_align and APK zip alignment fail; RELRO end warns."
     dependsOn(":phone:bundleRelease", ":watch:bundleRelease", ":glasses:assembleRelease")
     commandLine(
         "python3", "tools/release/check_16kb.py",
@@ -1191,23 +1251,22 @@ tasks.register<Exec>("check16kb") {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python3 -m unittest discover -s tools/release -p 'test_check_16kb.py' -v`
-Expected: PASS (7 tests).
+Expected: PASS (9 tests).
 
 - [ ] **Step 5: Run the gate on the real artifacts and record the table**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && LIVEAR_TILES_KEY=dummy ./gradlew check16kb; echo "exit=$?"`
-Expected today (from the 2026-10-09 inspection): **FAIL** rows for `libandroidx.graphics.path.so` (phone, watch) and for `libcaps.so`, `libflora-cli.so`, `libmutils.so`, `libcxr-bridge-jni.so` (phone via client-l, glasses via cxr-service-bridge 1.5), `PASS` for `libcxr-sock-proto-jni.so`, `SKIP` for `armeabi-v7a`; non-zero exit. Paste the full table into the task report. This task's deliverable is the gate, not a passing release: per the spec the release stays **blocked** until the table is all PASS.
+Expected (from the 2026-10-09 inspection): `exit=0`; `WARN` rows (RELRO end) for `libandroidx.graphics.path.so` (phone, watch) and `libcaps.so`, `libflora-cli.so`, `libmutils.so`, `libcxr-bridge-jni.so` (phone via client-l + bridge 1.5, glasses via bridge 1.5); `PASS` for `libcxr-sock-proto-jni.so`; `SKIP` for `armeabi-v7a`. Any `FAIL` (LOAD alignment or APK zip alignment) blocks the release — report it. Paste the full table into the task report; the WARN list goes into the 1.0.0 release notes and the owner's report to Rokid.
 
-- [ ] **Step 6: Remediation attempts (record each outcome in the report)**
+Cross-check the glasses APK with the SDK tool: `$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)zipalign -c -P 16 -v 4 glasses/build/outputs/apk/release/glasses-*release.apk | tail -1` → `Verification succesful` (the tool's spelling).
 
-1. graphics-path: `./gradlew :phone:dependencies --configuration releaseRuntimeClasspath | grep graphics-path`; try `implementation("androidx.graphics:graphics-path:1.1.0")` in `phone/` and `watch/build.gradle.kts`, rebuild, re-run `check16kb`. Inspection says 1.1.0 still fails the RELRO-end rule; if so revert the line and raise it to the owner (see report) — do not weaken the checker.
-2. Rokid: hand the owner the failing-library table for the Rokid request ("16 KB-aligned `cxr-service-bridge` builds", spec §3). No code change.
+- [ ] **Step 6: Rokid report** — hand the owner the WARN table for the Rokid request (fully 16 KB-aligned `cxr-service-bridge` builds, spec §3). No code change; `cxr-service-bridge` stays pinned at 1.5.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add tools/release/check_16kb.py tools/release/test_check_16kb.py build.gradle.kts
-git commit -m "16 KB gate: ELF LOAD/RELRO checker with fixture tests and check16kb Gradle task
+git commit -m "16 KB gate: LOAD + APK zip-alignment checker (RELRO end = warning) with fixture tests and check16kb Gradle task
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1249,7 +1308,8 @@ class WorkflowPolicyTest(unittest.TestCase):
         rel = read("release.yml")
         for needed in ("tags:", "'v*'", "LIVEAR_KEYSTORE_BASE64", "LIVEAR_KEY_ALIAS", "LIVEAR_STORE_PASSWORD",
                        "LIVEAR_KEY_PASSWORD", "LIVEAR_TILES_KEY", "LIVEAR_UPLOAD_CERT_SHA256", "exit 1",
-                       "-Plivefit.requireSigning=true", "check_16kb.py", "apksigner", "--print-certs",
+                       "-Plivefit.requireSigning=true", "check_16kb.py", "zipalign", "-c -P 16 -v 4", "body_path",
+                       "apksigner", "--print-certs",
                        "sha256sum", "draft: true"):
             self.assertIn(needed, rel)
 
@@ -1336,8 +1396,16 @@ jobs:
           if [ "${GITHUB_REF_NAME#v}" != "$want" ]; then echo "::error::tag $GITHUB_REF_NAME != livefit.version $want"; exit 1; fi
       - name: Build owner-signed release artifacts
         run: ./gradlew -Plivefit.requireSigning=true :phone:bundleRelease :watch:bundleRelease :glasses:assembleRelease --stacktrace
-      - name: 16 KB native check (hard gate)
-        run: python3 tools/release/check_16kb.py phone/build/outputs/bundle/release watch/build/outputs/bundle/release glasses/build/outputs/apk/release
+      - name: 16 KB native check (hard gate on LOAD + zip alignment; RELRO-end warnings go into the release notes)
+        run: |
+          set -o pipefail
+          { echo "16 KB check (RELRO-end WARN rows are reported to Rokid; spec §3):"; echo '```'
+            python3 tools/release/check_16kb.py phone/build/outputs/bundle/release watch/build/outputs/bundle/release glasses/build/outputs/apk/release
+            echo '```'; } | tee "$RUNNER_TEMP/release-notes.md"
+      - name: Glasses APK zip alignment (zipalign -P 16)
+        run: |
+          ZIPALIGN="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)zipalign"
+          "$ZIPALIGN" -c -P 16 -v 4 glasses/build/outputs/apk/release/glasses-release.apk > /dev/null
       - name: Glasses APK is signed with the upload key
         run: |
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner"
@@ -1359,6 +1427,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          body_path: ${{ runner.temp }}/release-notes.md
           files: dist/*
 ```
 
@@ -1374,7 +1443,7 @@ Expected: BUILD SUCCESSFUL. (The workflows themselves run once the owner pushes;
 
 ```bash
 git add .github/workflows/ci.yml .github/workflows/release.yml tools/release/test_workflows.py
-git commit -m "CI: unit tests + debug builds; tag release with secret check, 16 KB gate, cert check and draft GitHub release
+git commit -m "CI: unit tests + debug builds; tag release with secret check, 16 KB gate (LOAD + zip alignment, RELRO warnings in notes), cert check and draft GitHub release
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -3413,7 +3482,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - [ ] **Step 1: Owner-signed release builds and static gates**
 
 Run (owner machine with `keystore.properties` and `LIVEAR_TILES_KEY`): `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew -Plivefit.requireSigning=true test check16kb :phone:assembleRelease :watch:assembleRelease`
-Expected: tests PASS; `check16kb` table — **must be all PASS/SKIP for v1.0.0** (spec §3 hard gate; if it fails, stop here and report: release blocked). Record the table.
+Expected: tests PASS; `check16kb` exits 0 — **no FAIL row** (LOAD alignment, APK zip alignment: spec §3 hard gate; a FAIL stops here: release blocked). WARN rows (RELRO end) are allowed: record them for the release notes and the Rokid report. Also `$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)zipalign -c -P 16 -v 4 <apk>` succeeds for the three release APKs.
 Run: `APKSIGNER=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)apksigner; for a in phone/build/outputs/apk/release/phone-release.apk watch/build/outputs/apk/release/watch-release.apk glasses/build/outputs/apk/release/glasses-release.apk; do $APKSIGNER verify --print-certs $a | grep "SHA-256"; done` → the same upload-key digest three times.
 
 - [ ] **Step 2: Install release builds** — `adb -s <glasses-serial> install -r glasses/build/outputs/apk/release/glasses-release.apk`, `adb -s <watch-serial> install -r watch/build/outputs/apk/release/watch-release.apk`, `adb -s <phone-serial> install -r --user 0 phone/build/outputs/apk/release/phone-release.apk` (uninstall the old `com.debasish.livefit*` apps first).
@@ -3435,8 +3504,10 @@ Run: `APKSIGNER=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)apksign
 - [ ] targetSdk 36 behaviour: the phone hub FGS starts after reboot and app update, notifications appear, Bluetooth link survives screen-off for 10 min.
 - [ ] Release logs: `adb -s <phone-serial> logcat -d | grep -E "LiveFit" | grep -E " [DIV] "` → no lines (v/d/i stripped).
 
-- [ ] **Step 4: 16 KB runtime smoke test**
+- [ ] **Step 4: 16 KB gates — real device and Play Console (hard gate)**
 
-Emulator: `sdkmanager "system-images;android-35;google_apis_ps16k;arm64-v8a"`, create and boot an AVD from it, `adb -s <emulator-serial> shell getconf PAGE_SIZE` → `16384`. Install the release phone APK and glasses APK there; launch both; `adb -s <emulator-serial> logcat -d | grep -iE "dlopen|UnsatisfiedLink|page size|16 ?KB"` → no errors; the phone app reaches Home and the glasses app reaches "Open Live AR Fit". The emulator has no Bluetooth to the glasses, so the spec's "pairs with the glasses through CXR and renders the HUD" part needs a 16 KB **device** (a Pixel 8 or newer with Developer options → "Boot with 16 KB page size"): `getconf PAGE_SIZE` = 16384 there, then pair with the glasses and confirm the HUD renders. Record which environment passed; both parts are required for go.
+Real 16 KB device (a Pixel 8 or newer; Developer options → "Boot with 16 KB page size", reboot): `adb -s <16kb-phone-serial> shell getconf PAGE_SIZE` → `16384`. Install the release phone APK (`--user 0`); pair with the glasses through CXR; the HUD renders; start a workout from the phone and stop it; `adb -s <16kb-phone-serial> logcat -d | grep -iE "dlopen|UnsatisfiedLink|page size"` → no errors. Optional extra: the `system-images;android-35;google_apis_ps16k;arm64-v8a` emulator for a launch-only check (it has no Bluetooth to the glasses, so it never replaces the device run).
 
-- [ ] **Step 5: Report** — the gate table, signer digests, the checklist with pass/fail, any keep rules added, and the go/no-go (no-go if anything in Steps 1 or 4 fails).
+Play Console: upload the phone and watch AABs to an internal-testing release; App bundle explorer → the 16 KB page-size status reads compatible for both. Record a screenshot reference (no device identifiers).
+
+- [ ] **Step 5: Report** — the gate table, signer digests, the checklist with pass/fail, any keep rules added, the RELRO-end WARN list (release notes + Rokid), and the go/no-go (no-go if anything in Steps 1 or 4 fails).

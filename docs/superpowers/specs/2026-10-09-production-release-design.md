@@ -1,6 +1,6 @@
 # Live AR Fit — production release (sub-project B) — design
 
-Status: revision 3 (16 KB is a hard gate; Google cloud relay disclosed) · revision 2 addressed review `reviews/2026-10-09-production-release-design-review.md`, 4 P1 + 4 P2) · 2026-10-09 · Owner decisions are in memory `release-plan` and the session log, entries 52–54.
+Status: revision 4 (owner decision 2026-10-09: the RELRO-end check is a warning, not a gate; the 16 KB gate = LOAD alignment + zip alignment + Play's 16 KB status + a real-device run) · revision 3 (16 KB is a hard gate; Google cloud relay disclosed) · revision 2 addressed review `reviews/2026-10-09-production-release-design-review.md`, 4 P1 + 4 P2) · 2026-10-09 · Owner decisions are in memory `release-plan` and the session log, entries 52–54.
 
 ## 1. Goal
 
@@ -58,18 +58,16 @@ Success means:
     - The reflectively accessed `com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper` (CxrGlassesLink).
     - Health Services, Wearable and Media classes only where the release smoke test shows breakage.
 - **Logging:** release builds strip `Log.v/d/i` via `-assumenosideeffects`. They keep `w/e`. User data stays out of `w/e` messages: no coordinates, no track titles.
-- **16 KB page size gate (review P1-4):** Android 15+ devices with 16 KB pages, and Play's 16 KB requirement, need every native library aligned to 16 KB.
-  - Read-only inspection found that the Rokid `cxr-service-bridge` libraries fail the `PT_GNU_RELRO` end-alignment check, though their LOAD segments are 16 KB aligned. Those libraries are `libcaps`, `libcxr-bridge-jni`, `libcxr-sock-proto-jni`, `libflora-cli` and `libmutils`, pulled in by `client-l:1.1.2`. `androidx.graphics:graphics-path:1.0.1` also fails.
-  - The release gate:
-    - A script checks every `.so` in the final AAB and APKs: LOAD `p_align ≥ 0x4000`, and `(PT_GNU_RELRO.p_vaddr + p_memsz) % 0x4000 == 0`. It produces a pass/fail table.
-    - A runtime smoke test on a 16 KB environment (an emulator image with page size 16384): the phone pairs with the glasses through CXR and renders the HUD. The check is `adb shell getconf PAGE_SIZE` = 16384.
-  - Remediation if the check fails:
-    - Bump `graphics-path` (a newer AndroidX release is 16 KB clean), or pin a Compose version that brings it.
-    - Ask Rokid for 16 KB-aligned CXR builds; we can't relink vendor prebuilts.
-  - **This is a hard gate, with no exceptions.** v1.0.0 is not uploaded to Play or tagged until every native library in the phone and watch AABs and the glasses APK passes both the static check (LOAD alignment and RELRO end) and the 16 KB runtime smoke test. Play requires 16 KB support for apps that target Android 15+.
-    - A "documented misalignment" is not an acceptable outcome.
-    - If Rokid can't supply aligned CXR libraries, the release is blocked. The owner then decides whether to escalate with Rokid or drop or replace the dependency.
-  - Because the vendor fix is outside our control, we contact Rokid about 16 KB-aligned `cxr-service-bridge` builds at the start of B, not at the end.
+- **16 KB page size gate (review P1-4, revision 4):** Android 15+ devices with 16 KB pages, and Play's 16 KB requirement, need every native library loadable with 16 KB pages.
+  - Inspection found that the Rokid `cxr-service-bridge` libraries (`libcaps`, `libcxr-bridge-jni`, `libflora-cli`, `libmutils`; `libcxr-sock-proto-jni` passes from 1.5) and `androidx.graphics:graphics-path` (1.0.1 and 1.1.0) have LOAD segments aligned to 16 KB but a `PT_GNU_RELRO` end that is not.
+  - **Hard gate (blocks the release):**
+    - Every 64-bit `.so` in the phone and watch AABs and the glasses APK has every LOAD `p_align ≥ 0x4000`.
+    - Uncompressed native libraries in the APKs are zip-aligned to 16 KB (`zipalign -c -P 16 -v 4`, or the AGP/bundletool equivalent for the APKs Play builds from the AABs).
+    - Play Console shows the uploaded release as 16 KB compatible.
+    - A runtime smoke test on a real 16 KB device (a Pixel 8 or newer with the 16 KB developer option; `adb shell getconf PAGE_SIZE` = 16384): the phone pairs with the glasses through CXR, the HUD renders, and a workout starts and stops.
+  - **Warning only (reported, never fails the build):** a RELRO end where `(PT_GNU_RELRO.p_vaddr + p_memsz) % 0x4000 != 0`. Each such library is listed in the release notes and reported to Rokid. Rationale: Play does not enforce it, Google's own `graphics-path` fails it, and we can't relink Rokid's prebuilts.
+  - A script checks every `.so` and produces a PASS/WARN/FAIL table; it fails only on the hard-gate rules.
+  - We still ask Rokid for fully 16 KB-aligned `cxr-service-bridge` builds, early in B, and pin the newest release (`1.5`).
 - **Target SDK:** phone and watch move to `targetSdk = 36`. Play's 2026 rule for new apps is the API level released within the last year. This brings behaviour changes, so the smoke test re-checks foreground services, notifications and Bluetooth. The glasses app stays on its current target, since the Rokid OS is fixed.
 - **Removals:**
   - the unused `USE_FAKE_SERVICES` flag
@@ -137,7 +135,7 @@ Success means:
 ## 8. CI (GitHub Actions)
 
 - `ci.yml`: on push/PR, run JDK 17, all unit tests, and `assembleDebug` for the three apps. It caches Gradle and Rokid Maven.
-- `release.yml`: on a `v*` tag, build the release artifacts. It **fails without the signing secrets**. It verifies the glasses APK certificate fingerprint and runs the 16 KB native check, then attaches the owner-signed glasses APK plus its SHA-256 to a draft GitHub Release. The owner adds the secrets: the keystore as base64, the passwords, and the expected certificate SHA-256.
+- `release.yml`: on a `v*` tag, build the release artifacts. It **fails without the signing secrets**. It verifies the glasses APK certificate fingerprint and runs the 16 KB native check (LOAD alignment and zip alignment fail the job; RELRO-end warnings are printed for the release notes), then attaches the owner-signed glasses APK plus its SHA-256 to a draft GitHub Release. The owner adds the secrets: the keystore as base64, the passwords, and the expected certificate SHA-256.
 
 ## 9. Testing
 
@@ -149,7 +147,7 @@ Success means:
   - the Room migration test with exported schema
   - `requiredHealthPermissions(sdkInt)` for API 30/33/35/36
   - the `livefit://` entry guard: unknown paths are ignored, and no state changes from a URI
-  - the 16 KB ELF checker against a known-good and a known-bad `.so` fixture
+  - the 16 KB checker against fixtures: a good `.so` passes, a LOAD-misaligned one fails, a RELRO-end-only one warns, and an unaligned uncompressed `.so` in an APK fails
 - Release smoke test on the owner's devices with release-signed builds of all three apps:
   - pair
   - start/stop a workout from the phone and from the watch
@@ -161,7 +159,7 @@ Success means:
   - the renamed glasses app opening through CXR
   - the Privacy policy action on the phone and the watch
   - watch workout start on API ≤ 35 and on API 36 (heart-rate permission)
-  - the 16 KB runtime smoke test (§3)
+  - the 16 KB runtime smoke test on a real 16 KB device, and Play Console's 16 KB compatibility status (§3)
 
   This catches R8 breakage, which is the biggest release risk.
 
