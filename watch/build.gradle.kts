@@ -4,17 +4,19 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val liveFitVersion = providers.gradleProperty("livefit.version").get()
+
 android {
     namespace = "com.debasish.livefit.watch"
     compileSdk = 36
 
     defaultConfig {
-        // Must match :phone so the Wearable Data Layer pairs the two apps.
-        applicationId = "com.debasish.livefit"
+        // Must match :phone so the Wearable Data Layer pairs the two apps (spec §2).
+        applicationId = "com.livear.fit"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-spike"
+        versionName = liveFitVersion
+        versionCode = LiveFitVersion.code(liveFitVersion, LiveFitVersion.FormFactor.Watch)
         buildConfigField("boolean", "USE_FAKE_SERVICES", "true")
     }
     compileOptions {

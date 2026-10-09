@@ -142,7 +142,7 @@ fun SettingsScreen(
             if (BuildConfig.DEBUG) { ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Developer tools", "Spike console", onDeveloper); Divider() }
             ChipRow(Icons.Rounded.Shield, LiveFitColors.ChipCoral, "Permissions", null, { onNavigate("permissions") })
             Divider()
-            ChipRow(Icons.Rounded.Info, LiveFitColors.ChipRose, "About", "Rokid LiveFit 0.1", { onNavigate("about") })
+            ChipRow(Icons.Rounded.Info, LiveFitColors.ChipRose, "About", "Live AR Fit ${BuildConfig.VERSION_NAME}", { onNavigate("about") })
         }
     }
 }

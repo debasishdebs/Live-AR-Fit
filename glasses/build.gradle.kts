@@ -4,16 +4,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val liveFitVersion = providers.gradleProperty("livefit.version").get()
+
 android {
     namespace = "com.debasish.livefit.glasses"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.debasish.livefit.glasses"
+        applicationId = "com.livear.fit.glasses"
         minSdk = 28
         targetSdk = 32
-        versionCode = 1
-        versionName = "0.1-spike"
+        versionName = liveFitVersion
+        versionCode = LiveFitVersion.code(liveFitVersion, LiveFitVersion.FormFactor.Glasses)
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     compileOptions {

@@ -10,7 +10,7 @@ sleep 30
 # The active session's directory (header + checkpoint) is intentionally retained; only unacked delta files (d-<seq>.json) must be gone.
 echo -n "Watch unacknowledged delta files (expect 0 after sync): "
 # An empty glob is fine (inner `true`); only a failing run-as/adb (non-debuggable build, wrong package) yields rc != 0.
-out=$(adb -s "$WATCH" shell "run-as com.debasish.livefit sh -c 'ls files/lf-buffer/*/ 2>/dev/null; true'; echo rc=\$?" | tr -d '\r' || true)
+out=$(adb -s "$WATCH" shell "run-as com.livear.fit sh -c 'ls files/lf-buffer/*/ 2>/dev/null; true'; echo rc=\$?" | tr -d '\r' || true)
 rc=${out##*rc=}
 if [ "$rc" = "0" ]; then
   echo "$out" | grep -Ec '^d-[0-9]+\.json$' || true

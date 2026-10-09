@@ -4,17 +4,19 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val liveFitVersion = providers.gradleProperty("livefit.version").get()
+
 android {
     namespace = "com.debasish.livefit.phone"
     compileSdk = 36
 
     defaultConfig {
-        // Must match :watch so the Wearable Data Layer pairs the two apps.
-        applicationId = "com.debasish.livefit"
+        // Must match :watch so the Wearable Data Layer pairs the two apps (spec §2).
+        applicationId = "com.livear.fit"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1-spike"
+        versionName = liveFitVersion
+        versionCode = LiveFitVersion.code(liveFitVersion, LiveFitVersion.FormFactor.Phone)
         // Which services are Live (see Bindings in ServiceGraph); later tasks flip these per service.
         buildConfigField("boolean", "LIVE_WATCH", "true")
         buildConfigField("boolean", "LIVE_GLASSES", "true")

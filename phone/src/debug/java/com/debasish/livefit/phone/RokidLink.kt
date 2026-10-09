@@ -29,7 +29,7 @@ import java.io.FileOutputStream
  * and whether "Hi Rokid" wake events + mic audio reach us.
  */
 object RokidLink {
-    const val GLASSES_PKG = "com.debasish.livefit.glasses"
+    const val GLASSES_PKG = "com.livear.fit.glasses"
     const val GLASSES_ACTIVITY = "com.debasish.livefit.glasses.MainActivity"
     private const val PREFS = "rokid"
 

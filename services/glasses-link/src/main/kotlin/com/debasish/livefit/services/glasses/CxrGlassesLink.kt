@@ -195,7 +195,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
                     timeouts = SessionTimeouts(),
                     viewData = "",
                     viewIconData = "",
-                    glassesActivityName = "$GLASSES_PKG.MainActivity",
+                    glassesActivityName = GLASSES_ACTIVITY,
                     glassesApkPath = "",
                 ),
             )
@@ -313,7 +313,10 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
 
     companion object {
         const val TAG = "LiveFitGlassesLink"
-        const val GLASSES_PKG = "com.debasish.livefit.glasses"
+        /** The glasses app's applicationId (spec §2). */
+        const val GLASSES_PKG = "com.livear.fit.glasses"
+        /** Its launcher activity keeps the retained Kotlin namespace — it is not "$GLASSES_PKG.MainActivity" (review P1-3). */
+        const val GLASSES_ACTIVITY = "com.debasish.livefit.glasses.MainActivity"
         const val CONNECT_TIMEOUT_MS = 15_000L
         /** Device-test switch (plan decision): false = PNG in the CXR bytes argument; true = Base64 inside the MapFrame JSON. */
         const val MAP_AS_BASE64 = false

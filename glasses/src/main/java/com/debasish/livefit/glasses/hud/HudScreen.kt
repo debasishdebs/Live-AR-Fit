@@ -200,7 +200,7 @@ private fun WaitingForPhone() {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Glyph(Icons.Outlined.PhoneAndroid, 56.dp, Hud.SECONDARY)
         Spacer(Modifier.height(12.dp))
-        Label("Open Rokid LiveFit", 30.sp, Hud.SECONDARY, FontWeight.Bold, maxLines = 2)
+        Label("Open Live AR Fit", 30.sp, Hud.SECONDARY, FontWeight.Bold, maxLines = 2)
         Label("on your phone", 26.sp, Hud.TERTIARY)
     }
 }
