@@ -3,6 +3,7 @@ package com.debasish.livefit.phone.ui.components
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import androidx.compose.foundation.background
@@ -61,8 +62,10 @@ private fun isExempt(context: Context): Boolean =
     context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
 fun openBatterySettings(context: Context) {
-    for (action in BatteryAdvice.SETTINGS_ACTIONS) {
-        try { context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return } catch (_: ActivityNotFoundException) { }
+    for (spec in BatteryAdvice.SETTINGS_ACTIONS) {
+        val intent = Intent(spec.action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (spec.withPackageUri) intent.data = Uri.parse("package:${context.packageName}")
+        try { context.startActivity(intent); return } catch (_: ActivityNotFoundException) { }
     }
 }
 

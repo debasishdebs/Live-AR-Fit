@@ -32,6 +32,12 @@ class BatteryAdviceTest {
         assertFalse(BatteryAdvice.banner(false, "samsungish")!!.samsung)
     }
 
-    @Test fun openSettingsNeedsNoPermission() =
-        assertEquals("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS", BatteryAdvice.SETTINGS_ACTIONS.first())
+    @Test fun openSettingsFallbackChainOrder() = assertEquals(
+        listOf(
+            SettingsIntentSpec("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS", false),
+            SettingsIntentSpec("android.settings.APPLICATION_DETAILS_SETTINGS", true),
+            SettingsIntentSpec("android.settings.SETTINGS", false),
+        ),
+        BatteryAdvice.SETTINGS_ACTIONS,
+    )
 }
