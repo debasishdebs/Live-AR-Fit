@@ -5,6 +5,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.AppActivity
+import com.debasish.livefit.phone.ui.list.sources.GestureSource
+import com.debasish.livefit.phone.ui.list.sources.PagesSource
 import com.debasish.livefit.phone.ui.list.sources.LanguageSource
 import com.debasish.livefit.phone.ui.list.sources.NearbyDevicesSource
 import com.debasish.livefit.phone.ui.list.sources.PermissionSource
@@ -83,6 +86,11 @@ object ListSources {
     /** Settings → Voice → Voice commands (per-group toggles). */
     const val VOICE_COMMANDS = "voice-commands"
 
+    /** Settings → Pages (spec §3.2). */
+    const val PAGES = "pages"
+    /** Settings → Glasses gestures (spec §4.4), hierarchical via filter {"menu": …}. */
+    const val GESTURES = "glasses-gestures"
+
     /** [open] navigates to a route (e.g. a session detail or a filtered list). */
     fun create(id: String, context: Context, services: ServiceGraph, open: (String) -> Unit = {}): ListSource = when (id) {
         LANGUAGES -> LanguageSource(context.applicationContext, { services.settings.voiceLocale.value }, services.settings::setVoiceLocale, services::refreshVoicePacksAsync)
@@ -91,6 +99,16 @@ object ListSources {
         WORKOUT_DAYS -> WorkoutDaysSource(services.history, open)
         NEARBY -> NearbyDevicesSource(context.applicationContext, services.settings, open)
         VOICE_COMMANDS -> VoiceCommandSource({ services.settings.disabledVoiceGroups.value }, services.settings::setVoiceGroupEnabled)
+        PAGES -> PagesSource({ services.settings.pages.value }, services.settings::setPageEnabled)
+        GESTURES -> GestureSource(
+            current = { services.settings.gestures.value },
+            change = services.settings::changeGesture,
+            setIdle = services.settings::setIdleTimeout,
+            setAsk = services.settings::setAskBeforeClose,
+            reset = services.settings::resetGestures,
+            open = open,
+            routeFor = { menu -> AppActivity.listRoute(GESTURES, JSONObject().put("menu", menu).toString()) },
+        )
         else -> error("Unknown list source: $id")
     }
 }

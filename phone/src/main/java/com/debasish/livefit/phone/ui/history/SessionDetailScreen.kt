@@ -20,10 +20,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.debasish.livefit.map.RouteThumbnail
+import com.debasish.livefit.model.RoutePoint
+import com.debasish.livefit.model.RouteTrack
 import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.SessionSummary
 import com.debasish.livefit.model.formatElapsed
@@ -38,11 +42,15 @@ import kotlinx.coroutines.flow.first
 fun SessionDetailScreen(services: ServiceGraph, sessionId: String, onBack: () -> Unit) {
     var summary by remember { mutableStateOf<SessionSummary?>(null) }
     var samples by remember { mutableStateOf<List<Sample>>(emptyList()) }
+    var route by remember { mutableStateOf<List<RoutePoint>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(sessionId) {
         runCatching {
             summary = services.history.sessions.first().firstOrNull { it.id == sessionId }
             samples = services.history.samples(sessionId)
+            // Rows never normalized (no successful time sync before the session ended) fall back to device time here only.
+            // historyPoint() also drops rows more than 2 min after their receipt (review r2 #2).
+            route = RouteTrack.of(services.routes.routeFixes(sessionId).mapNotNull { it.historyPoint() }).drawn()
         }
         loaded = true
     }
@@ -85,6 +93,19 @@ fun SessionDetailScreen(services: ServiceGraph, sessionId: String, onBack: () ->
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
                 drawPath(path, LiveFitColors.ChipCoral.second, style = Stroke(3.dp.toPx(), cap = StrokeCap.Round))
+            }
+        }
+        if (route.size >= 2) {
+            SectionLabel("Route")
+            SoftCard(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(200.dp)) {
+                Canvas(Modifier.fillMaxSize().padding(16.dp)) {
+                    val px = RouteThumbnail.project(route, size.width.toInt(), size.height.toInt())
+                    if (px.size < 2) return@Canvas
+                    val path = Path().apply { moveTo(px[0].x, px[0].y); for (p in px.drop(1)) lineTo(p.x, p.y) }
+                    drawPath(path, LiveFitColors.Mint, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round))
+                    drawCircle(LiveFitColors.Mint, 5.dp.toPx(), Offset(px.first().x, px.first().y), style = Stroke(2.dp.toPx()))
+                    drawCircle(LiveFitColors.Mint, 5.dp.toPx(), Offset(px.last().x, px.last().y))
+                }
             }
         }
     }

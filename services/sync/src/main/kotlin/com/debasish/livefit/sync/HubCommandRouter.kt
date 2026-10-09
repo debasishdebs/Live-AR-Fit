@@ -27,6 +27,8 @@ class HubCommandRouter(
     private val onStartRequested: (DeviceKind?) -> Unit = {},
     /** Sends a page request to the glasses (lf_page); setting the same page twice is harmless. */
     private val showGlassesPage: (HudPage) -> Unit = {},
+    /** Settings → Pages (spec §5): a voice view of a disabled page only toasts. Workout is always enabled. */
+    private val pageEnabled: (HudPage) -> Boolean = { true },
 ) {
     private val _outdated = MutableStateFlow<DeviceKind?>(null)
     val outdated: StateFlow<DeviceKind?> = _outdated
@@ -72,7 +74,10 @@ class HubCommandRouter(
             is Command.Volume -> music.setVolume((music.volume.value + if (command.up) 0.1f else -0.1f).coerceIn(0f, 1f))
             is Command.SetVolume -> music.setVolume(command.level.coerceIn(0f, 1f))
             is Command.PlayQueueItem -> music.playQueueItem(command.queueId)
-            is Command.ShowGlassesPage -> showGlassesPage(command.page)
+            is Command.ShowGlassesPage -> if (!pageEnabled(command.page)) {
+                toast("${command.page.label} page is turned off in Settings")
+                return
+            } else showGlassesPage(command.page)
             is Command.Answer -> scope.launch { confirm.answer(command.confirmationId, command.yes) }
         }
         describe(command)?.let(toast)
@@ -92,7 +97,7 @@ class HubCommandRouter(
             is Command.Volume -> if (command.up) "Volume up" else "Volume down"
             is Command.SetVolume -> "Volume ${(command.level * 100).toInt().coerceIn(0, 100)}%"
             is Command.PlayQueueItem -> "Playing selected song"
-            is Command.ShowGlassesPage -> "${command.page.name} view"
+            is Command.ShowGlassesPage -> "${command.page.label} view"
             is Command.Answer -> null
         }
     }

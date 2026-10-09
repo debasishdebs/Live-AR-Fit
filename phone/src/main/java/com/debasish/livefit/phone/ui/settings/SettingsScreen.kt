@@ -18,6 +18,8 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Straighten
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -39,6 +41,8 @@ import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.BuildConfig
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.AppActivity
+import com.debasish.livefit.phone.ui.list.ListSources
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
@@ -107,7 +111,16 @@ fun SettingsScreen(
             ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipAmber, "Phone GPS", HubLocationPolicy.phoneGpsLabel(fineLocation, hubHasLocation), { onNavigate("permissions") })
         }
         SectionLabel("Glasses")
-        Group { ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") }) }
+        Group {
+            ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") })
+            Divider()
+            val pagesOff = services.settings.pages.collectAsStateWithLifecycle().value.disabled.size
+            ChipRow(Icons.Rounded.ViewCarousel, LiveFitColors.ChipMint, "Pages", "Glasses + Watch · " + if (pagesOff == 0) "all on" else "$pagesOff turned off",
+                { onNavigate(AppActivity.listRoute(ListSources.PAGES, filter = null)) })
+            Divider()
+            ChipRow(Icons.Rounded.TouchApp, LiveFitColors.ChipViolet, "Glasses gestures", "Per page and mode",
+                { onNavigate(AppActivity.listRoute(ListSources.GESTURES, filter = null)) })
+        }
         SectionLabel("Voice")
         Group {
             val voiceOff = services.settings.disabledVoiceGroups.collectAsStateWithLifecycle().value.size
@@ -116,7 +129,7 @@ fun SettingsScreen(
         }
         SectionLabel("Workout")
         Group {
-            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Run, Cycle, Auto", onClick = { services.settings.setGpsOutdoors(!gps) },
+            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Walk, Run, Cycle, Auto · live map", onClick = { services.settings.setGpsOutdoors(!gps) },
                 trailing = { Switch(gps, null) })
         }
         SectionLabel("Data")
