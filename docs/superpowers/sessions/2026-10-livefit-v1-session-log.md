@@ -270,6 +270,14 @@ Format: **In** = owner's message (paraphrased, key words quoted) · **Out** = wh
 - **Out:** re-read the file against the conversation; admitted gaps (missing prompts, no commits/verification for 1–13, owner decisions folded in); rebuilt this section with one entry per prompt, commits from `git log`, and explicit verification notes.
 
 
+### 48. `/compact`, then `/superpowers:subagent-driven-development docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md`
+- **Out:** ledger at `.superpowers/sdd/2026-10-09-livefit-pages-maps-gestures-plan/progress.md`. An Opus pre-flight scan of all 25 briefs found 0 blocking, 3 fix-in-task and 9 minor issues, each ruled on in the ledger: Task 12 Spacer miscount; Task 15's `pageStates` instead of `GlassesEvent.PageVisible`; the D1 flip owned by the controller. Task 1 (protocol v4) ran alone, then lanes A–G in parallel worktrees `../lf-wt/p-<lane>`, capped at ~4 concurrent Gradle builds because of the 8 GB Mac. Each task had one implementer (Sonnet 5.5, or Opus 5.5 for judgment-heavy tasks: 11, 12, 14, 18, 22, 23) and one reviewer (Sonnet or Opus); never Haiku. All 24 code tasks were approved on first review; deferred minors are in the ledger. I ran device check D1 on the phone and glasses: raw PNG bytes over CXR arrived intact at 8, 38 and 60 KB (crc matched), so `MAP_AS_BASE64 = false` stays.
+- **Commits:** `dcc5fc3` (T1) … `87a7d2c` (T18); integration merge `8274a5b`.
+- **Verified:** full JVM sweep on `8274a5b`: 632 tests, 0 failures. The phone and glasses run the new build, and on the glasses page cycling, Map skipped without a GPS workout, Music controls scroll mode and its 5 s idle exit were all seen. The watch was not installed (it dropped off wireless adb). The phone has no location permission yet, so its FGS type is `connectedDevice` only, as designed.
+
+### 49. "one agent per task with review per workflow/task? in parallel all independent right"
+- **Out:** confirmed: a fresh implementer plus a reviewer per task; Task 1 first; lanes in parallel; tasks inside a lane sequential; cross-lane dependencies merged before the dependent task.
+
 ## Resume here (handoff for the next chat)
 - **Branch:** `design/livefit-v1-v2` (no remote). Plan rev 4 at `b426df5`; session-log commits after it.
 - **Installed on devices:** the r8 build (glance/workout/playlist pages, view voice commands, Nearby devices, voice-command toggles) + phone label fix `bd5634c`.
