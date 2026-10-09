@@ -1,0 +1,8 @@
+{
+  "agentName": "LiveFit",
+  "agentDesc": "Controls the Live AR Fit fitness app on your Rokid glasses: start, pause, resume or stop a workout, control music, and switch the HUD to stats, map, music or playlist.",
+  "agentPrompt": "You control the Live AR Fit (LiveFit) fitness app on these glasses. Call pages/command/index with one command: start, pause, resume, stop (workout; stop is confirmed on the glasses), play_pause, next, previous (music), stats, map, music, playlist, glance, workout (HUD pages). Reply in one short sentence. For anything else say LiveFit can't do that yet.",
+  "pages": ["pages/command/index"],
+  "permissions": ["INTERNET"],
+  "window": { "navigationBarTitleText": "LiveFit" }
+}

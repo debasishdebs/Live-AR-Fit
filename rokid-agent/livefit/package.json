@@ -1,0 +1,8 @@
+{
+  "name": "livefit",
+  "version": "1.0.0",
+  "main": "app.js",
+  "description": "LiveFit: voice control for the Live AR Fit glasses app",
+  "author": "Debasish Kanhar",
+  "dependencies": {}
+}

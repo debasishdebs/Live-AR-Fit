@@ -64,6 +64,15 @@ class WireTest {
         assertEquals(null, QueueWindow(listOf(QueueItem(1, "a")), currentIndex = null).current)
     }
 
+    /** Hi Rokid agent: `via` marks spoken-agent commands; an envelope without it (older peer) is a direct command. */
+    @Test fun envelopeViaDefaultsToDirectAndTravels() {
+        val agent = CommandEnvelope(id = "a", origin = DeviceKind.Glasses, command = Command.PauseWorkout, via = CommandVia.Agent)
+        assertTrue(Wire.encode(agent).contains("\"via\":\"Agent\""))
+        assertEquals(agent, Wire.decode<CommandEnvelope>(Wire.encode(agent)))
+        val old = """{"protocolVersion":$PROTOCOL_VERSION,"id":"o","origin":"Glasses","command":{"cmd":"com.debasish.livefit.model.Command.PauseWorkout"}}"""
+        assertEquals(CommandVia.Direct, Wire.decode<CommandEnvelope>(old).via)
+    }
+
     @Test fun playQueueItemUsesTheCmdDiscriminator() {
         val json = Wire.encode(CommandEnvelope(id = "i", origin = DeviceKind.Glasses, command = Command.PlayQueueItem(42)))
         assertTrue(json.contains("\"cmd\":\"com.debasish.livefit.model.Command.PlayQueueItem\"") && json.contains("\"queueId\":42"), json)

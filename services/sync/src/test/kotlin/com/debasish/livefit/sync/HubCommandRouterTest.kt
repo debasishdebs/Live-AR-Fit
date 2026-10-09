@@ -14,6 +14,8 @@ import com.debasish.livefit.services.ConfirmationOutcome
 import com.debasish.livefit.services.ConfirmationService
 import com.debasish.livefit.services.MusicService
 import com.debasish.livefit.services.WorkoutService
+import com.debasish.livefit.services.voice.VoiceCommandGate
+import com.debasish.livefit.services.voice.VoiceCommandGroup
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
@@ -124,6 +126,62 @@ class HubCommandRouterTest {
         askOutcome = ConfirmationOutcome.Yes
         r.dispatchVoice(Command.StopWorkout); runCurrent()
         assertEquals("stopWorkout", calls.last())
+    }
+
+    // ---- Hi Rokid agent (CommandVia.Agent): spoken commands, so they take the voice path (gate + Stop confirmation) ----
+    private fun agent(id: String, c: Command) =
+        CommandEnvelope(id = id, origin = DeviceKind.Glasses, command = c, via = com.debasish.livefit.model.CommandVia.Agent)
+
+    /** The phone wiring: Settings → Voice gate in front of dispatchVoice (ServiceGraph). */
+    private fun TestScope.gatedRouter(disabled: Set<VoiceCommandGroup>): HubCommandRouter {
+        lateinit var r: HubCommandRouter
+        val gate = VoiceCommandGate(disabled = { disabled }, toast = { toasts += it }, dispatch = { r.dispatchVoice(it) })
+        r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = { toasts += it }, onAgentCommand = { gate(it) })
+        return r
+    }
+
+    @Test fun agentCommandInADisabledGroupIsRefusedWithTheVoiceToast() = runTest {
+        val r = gatedRouter(setOf(VoiceCommandGroup.NextPrevious, VoiceCommandGroup.StopWorkout))
+        r.dispatch(agent("a1", Command.NextTrack))
+        r.dispatch(agent("a2", Command.StopWorkout))
+        runCurrent()
+        assertTrue(calls.isEmpty(), "nothing dispatched: $calls")
+        assertEquals(listOf(VoiceCommandGroup.NextPrevious.blockedMessage, VoiceCommandGroup.StopWorkout.blockedMessage), toasts)
+    }
+
+    @Test fun agentCommandInAnEnabledGroupRuns() = runTest {
+        val r = gatedRouter(setOf(VoiceCommandGroup.Volume))
+        r.dispatch(agent("a1", Command.PauseMusic)); runCurrent()
+        assertEquals(listOf("pauseMusic"), calls)
+        r.dispatch(agent("a1", Command.PauseMusic)); runCurrent() // a resend is applied once
+        assertEquals(listOf("pauseMusic"), calls)
+    }
+
+    @Test fun agentStopAsksFirst() = runTest {
+        val r = gatedRouter(emptySet())
+        askOutcome = ConfirmationOutcome.No
+        r.dispatch(agent("s1", Command.StopWorkout)); runCurrent()
+        assertEquals(listOf("ask:StopWorkoutByVoice"), calls)
+        assertEquals(listOf("Cancelled"), toasts)
+        askOutcome = ConfirmationOutcome.Yes
+        r.dispatch(agent("s2", Command.StopWorkout)); runCurrent()
+        assertEquals(listOf("ask:StopWorkoutByVoice", "ask:StopWorkoutByVoice", "stopWorkout"), calls)
+    }
+
+    /** Without phone wiring the agent path still confirms Stop (default = dispatchVoice). */
+    @Test fun agentStopAsksFirstByDefault() = runTest {
+        val r = router()
+        r.dispatch(agent("s1", Command.StopWorkout)); runCurrent()
+        assertEquals(listOf("ask:StopWorkoutByVoice", "stopWorkout"), calls)
+    }
+
+    /** Touchpad commands (via = Direct) bypass the voice gate and never ask, even with every group off. */
+    @Test fun touchpadCommandsAreUnaffected() = runTest {
+        val r = gatedRouter(VoiceCommandGroup.entries.toSet())
+        r.dispatch(env("t1", Command.NextTrack, origin = DeviceKind.Glasses))
+        r.dispatch(env("t2", Command.StopWorkout, origin = DeviceKind.Glasses))
+        runCurrent()
+        assertEquals(listOf("next", "stopWorkout"), calls)
     }
 
     @Test fun markOutdatedFlagsDeviceAndToasts() = runTest {

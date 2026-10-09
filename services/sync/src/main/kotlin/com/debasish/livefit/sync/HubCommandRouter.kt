@@ -2,6 +2,7 @@ package com.debasish.livefit.sync
 
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
+import com.debasish.livefit.model.CommandVia
 import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
 import com.debasish.livefit.model.HudPage
@@ -29,6 +30,8 @@ class HubCommandRouter(
     private val showGlassesPage: (HudPage) -> Unit = {},
     /** Settings → Pages (spec §5): a voice view of a disabled page only toasts. Workout is always enabled. */
     private val pageEnabled: (HudPage) -> Boolean = { true },
+    /** Agent-marked commands ([CommandVia.Agent]); the phone puts the voice-group gate here. Null = [dispatchVoice]. */
+    private val onAgentCommand: (suspend (Command) -> Unit)? = null,
 ) {
     private val _outdated = MutableStateFlow<DeviceKind?>(null)
     val outdated: StateFlow<DeviceKind?> = _outdated
@@ -45,6 +48,11 @@ class HubCommandRouter(
             return
         }
         if (!deduper.firstTime(envelope.id)) return
+        // Spoken to the Hi Rokid agent: the voice path (phone: Settings → Voice gate, then dispatchVoice's Stop confirmation).
+        if (envelope.via == CommandVia.Agent) {
+            scope.launch { (onAgentCommand ?: ::dispatchVoice)(envelope.command) }
+            return
+        }
         apply(envelope.command, envelope.origin)
     }
 
