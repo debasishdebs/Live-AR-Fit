@@ -106,7 +106,7 @@ class HudController(
     private fun onState(caps: Caps?) {
         val t = text(caps) ?: return
         if (Wire.versionOf(t) != PROTOCOL_VERSION) { outdated = true; refreshConnection(); return }
-        val f = runCatching { Wire.decode<StateFrame>(t) }.getOrElse { Log.w(TAG, "bad frame", it); return }
+        val f = runCatching { Wire.decode<StateFrame>(t) }.getOrElse { Log.w(TAG, "bad frame: ${it.javaClass.simpleName}"); return }
         everReceived = true
         liveness.onFrame()
         _frame.value = f
@@ -161,7 +161,7 @@ class HudController(
     private fun onQueue(caps: Caps?) {
         val t = text(caps) ?: return
         if (Wire.versionOf(t) != PROTOCOL_VERSION) return // lf_state already reports the mismatch
-        _queue.value = runCatching { Wire.decode<QueueFrame>(t).window }.getOrElse { Log.w(TAG, "bad queue", it); return }
+        _queue.value = runCatching { Wire.decode<QueueFrame>(t).window }.getOrElse { Log.w(TAG, "bad queue: ${it.javaClass.simpleName}"); return }
     }
 
     private fun loadSettings(): HudSettings =

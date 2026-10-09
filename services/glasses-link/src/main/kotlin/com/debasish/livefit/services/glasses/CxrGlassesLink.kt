@@ -230,7 +230,7 @@ class CxrGlassesLink(context: Context, private val scope: CoroutineScope) : Glas
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "bad payload on $cmd", e); null
+            Log.w(TAG, "bad payload on $cmd: ${e.javaClass.simpleName}"); null
         }
         if (text.isNullOrEmpty()) return
         inbound.pageState(cmd, text)?.let { _pageStates.tryEmit(it); return }
