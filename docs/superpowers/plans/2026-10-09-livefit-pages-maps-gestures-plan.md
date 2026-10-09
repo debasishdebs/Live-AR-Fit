@@ -39,6 +39,12 @@ Addresses `reviews/2026-10-09-pages-maps-plan-review-r2.md` (revision commit e46
 | r2-1 | Queued tile loads run after the view changed; async render re-shows tiles | A tile job re-checks visibility after it gets a slot (queued obsolete loads never start, newest viewport gets the slots); `TileLoader.hide()` bumps a visibility generation, the renderer captures it on Main before going async and `show(…, generation)` from an obsolete render is ignored; ServiceGraph and the watch clear visibility with `hide()` | 8, 12, 18 |
 | r2-2 | Future-rejected fix accepted again by history and later rebuilds | `RouteFix`/`route_point` gain `receivedAtMs` (first receipt, kept by insert-or-ignore); `point()`/`historyPoint()` reject a phone time > 2 min after receipt, so rejection survives normalization, restarts, time passing and history; the old test that let history accept such a point now asserts the opposite | 3, 12, 13, 14, 20 |
 
+## Revision 4 (review r3 2026-10-09)
+
+| # | Finding | Resolution | Tasks |
+|---|---|---|---|
+| r3-1 | A replay after a failed first write saved the replay's later receipt, making a future-rejected fix valid | RouteHub merges replays and pending retry rows keeping the **earliest** `receivedAtMs` (including the identity already in memory); Room keeps `min(receivedAtMs)` on an existing identity for both `storeRouteFixes` and the `storeDelta` path; identity and normalized phone time keep their roles. Tests: `aReplayAfterAFailedWriteKeepsTheEarliestReceipt`, extended `receiptTimeIsKeptFromTheFirstInsert`; the pre-calibration large-offset tests are unchanged | 13, 14 |
+
 ## Global Constraints
 
 - Build with JDK 17: prefix every Gradle command with `export JAVA_HOME=$(/usr/libexec/java_home -v 17) &&`.
@@ -4973,7 +4979,7 @@ git commit -m "feat(watch): shared page set, live Map with arrival-gated marker 
 - Consumes: `RouteFix`, `FixSource`, `LocationFix.toRouteFix`, `FixQuality` (Tasks 1, 3).
 - Produces:
   - `interface RouteStore { suspend fun storeRouteFixes(sessionId: String, fixes: List<RouteFix>); suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long); suspend fun routeFixes(sessionId: String): List<RouteFix> }` in `:core:services` — identity `(sessionId, source, deviceTimeMs)`, insert-or-ignore; nothing is written for a Discarded or Cleared session (tombstone); `normalizeWatchTimes` sets `phoneTimeMs = deviceTimeMs − offset` on every Watch row of the session that is null or mapped with another offset; `routeFixes` is ordered by phone time (watch first on ties) with uncalibrated rows last by device time.
-  - `RoomSessionStore : HistoryStore, RouteStore`; **`storeDelta` writes the delta's accurate location fixes as route rows (phoneTimeMs = null) in the same transaction as the delta** — so once a delta is stored (and therefore acked) its route rows exist (review #1). `HistoryDatabase` version 2 with `HistoryDatabase.MIGRATION_1_2`; `discard` and `clearFinished` also delete route rows.
+  - `RoomSessionStore : HistoryStore, RouteStore` — on an identity that already exists, insert-or-ignore keeps identity and phone time while `receivedAtMs` becomes the minimum of all inserts, on both the `storeRouteFixes` and the `storeDelta` paths (review r3); **`storeDelta` writes the delta's accurate location fixes as route rows (phoneTimeMs = null) in the same transaction as the delta** — so once a delta is stored (and therefore acked) its route rows exist (review #1). `HistoryDatabase` version 2 with `HistoryDatabase.MIGRATION_1_2`; `discard` and `clearFinished` also delete route rows.
   - Table `route_point(sessionId, source, fixTimeMs /* device clock */, phoneTimeMs /* nullable */, receivedAtMs /* first receipt, phone clock */, lat, lon, accuracyM, bearingDeg)` PK `(sessionId, source, fixTimeMs)`; `storeDelta` stamps `receivedAtMs` with the store's clock.
 
 - [ ] **Step 1: Write the failing test** — `services/history/src/test/kotlin/com/debasish/livefit/history/RoomRouteStoreTest.kt`:
@@ -5048,6 +5054,8 @@ class RoomRouteStoreTest {
         assertEquals(700_000L, back.receivedAtMs)
         assertNull("still rejected after normalization and later reads", back.point())
         assertNull(back.historyPoint())
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 900_000, 900_000, received = 650_000)))
+        assertEquals("an earlier receipt (e.g. the delta path) lowers it; a later one never raises it", 650_000L, s.routeFixes("s").single().receivedAtMs)
     }
 
     @Test fun sameTimeDifferentSourceKeepsBothWatchFirst() = runTest {
@@ -5173,6 +5181,9 @@ data class RoutePointEntity(
 
 ```kotlin
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertRoutePoints(p: List<RoutePointEntity>)
+    /** Review r3: an existing row keeps the EARLIEST receipt — a later-stamped replay never becomes authoritative. */
+    @Query("UPDATE route_point SET receivedAtMs = :receivedAtMs WHERE sessionId = :id AND source = :source AND fixTimeMs = :fixTimeMs AND receivedAtMs > :receivedAtMs")
+    suspend fun keepEarliestReceipt(id: String, source: String, fixTimeMs: Long, receivedAtMs: Long)
     /** Phone-time order; "Watch" sorts after "Phone", so DESC puts the watch first on equal times (spec §2.2); NULL phone times last. */
     @Query("SELECT * FROM route_point WHERE sessionId = :id ORDER BY phoneTimeMs IS NULL, phoneTimeMs, source DESC, fixTimeMs") suspend fun routePoints(id: String): List<RoutePointEntity>
     /** Review #2: only rows that are null or mapped with another offset are written. */
@@ -5187,7 +5198,8 @@ data class RoutePointEntity(
         if (rows.isEmpty()) return
         val status = session(id)?.status
         if (status == DISCARDED || status == CLEARED) return
-        insertRoutePoints(rows)
+        insertRoutePoints(rows) // identity and phone time: first insert wins (normalizeWatchTimes rewrites phone time)
+        for (r in rows) keepEarliestReceipt(id, r.source, r.fixTimeMs, r.receivedAtMs) // receipt: min of all inserts
     }
 ```
 
@@ -5346,7 +5358,7 @@ class RouteHubTest {
             if (fail) error("disk full")
             if (failNextWrites > 0) { failNextWrites--; error("disk busy") }
             if (sessionId in discarded) return
-            for (f in fixes) rows.putIfAbsent(Triple(sessionId, f.source, f.deviceTimeMs), f)
+            for (f in fixes) rows.merge(Triple(sessionId, f.source, f.deviceTimeMs), f) { old, new -> old.copy(receivedAtMs = minOf(old.receivedAtMs, new.receivedAtMs)) }
         }
         override suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long) {
             if (fail) error("disk full")
@@ -5519,6 +5531,33 @@ class RouteHubTest {
         restarted.hub.onWorkout(running)
         assertEquals(1, restarted.hub.state.value.route.size, "still absent after restart and time advance")
         assertEquals(1, restarted.store.routeFixes("s").mapNotNull { it.historyPoint() }.size)
+    }
+
+    /**
+     * Review r3: a calibrated fix 121 s ahead is received at 600 000; its first write fails; the watch replays it at 605 000
+     * (only 116 s ahead of that later receipt) and this write succeeds. The saved receipt must stay 600 000, so the point is
+     * excluded live, in history and after a restart.
+     */
+    @Test fun aReplayAfterAFailedWriteKeepsTheEarliestReceipt() = runTest {
+        val r = Rig(this)
+        r.sync.calibrate { it }
+        advanceTimeBy(600_000)
+        r.hub.onWorkout(running)
+        r.store.failNextWrites = 1
+        val d = delta(listOf(fix(721_000, 0.0)))
+        r.hub.onWatchDelta(d)
+        assertTrue(r.store.routeFixes("s").isEmpty(), "first write failed")
+        advanceTimeBy(5_000)
+        r.hub.onWatchDelta(d.copy(seq = 2)) // the watch resends after the lost ack
+        val saved = r.store.routeFixes("s").single()
+        assertEquals(600_000L, saved.receivedAtMs, "earliest receipt saved")
+        assertNull(saved.historyPoint(), "excluded from history")
+        assertTrue(r.hub.state.value.route.isEmpty(), "excluded live")
+        val restarted = Rig(this, r.sessions, r.store)
+        restarted.sync.calibrate { it }
+        restarted.hub.onWorkout(running)
+        assertTrue(restarted.hub.state.value.route.isEmpty(), "excluded after restart")
+        assertNull(restarted.store.routeFixes("s").single().historyPoint())
     }
 
     @Test fun phoneFallbackFixesDriveTheMarkerWhileTheWatchIsSilent() = runTest {
@@ -5715,10 +5754,22 @@ class RouteHub(
             val offset = appliedOffset
             val rows = d.locations.mapNotNull { f -> f.toRouteFix(FixSource.Watch, offset?.let { f.fixTimeMs - it }, receivedAtMs = now) }
             if (d.sessionId == sessionId) {
-                for (r in rows) if (fixes.putIfAbsent(r.key, r) == null) r.point()?.let { track.add(it, now) }
+                var lowered = false
+                // Review r3: a replay keeps the identity's EARLIEST receipt (in memory and in what gets saved).
+                val merged = rows.map { r ->
+                    val old = fixes[r.key]
+                    when {
+                        old == null -> r.also { fixes[r.key] = it; it.point()?.let { p -> track.add(p, now) } }
+                        r.receivedAtMs < old.receivedAtMs -> old.copy(receivedAtMs = r.receivedAtMs).also { fixes[r.key] = it; lowered = true }
+                        else -> old
+                    }
+                }
+                if (lowered) rebuild()
                 for (f in d.locations) selector.onWatchFix(f, clockSync.toPhoneTime(f.fixTimeMs), now)
+                enqueue(d.sessionId, merged)
+            } else {
+                enqueue(d.sessionId, rows) // another session's replay: history only
             }
-            enqueue(d.sessionId, rows) // another session's replay: history only
             unnormalized += d.sessionId // its delta may have stored the same rows with phoneTimeMs = null
             flush()
             publish()
@@ -5776,7 +5827,8 @@ class RouteHub(
     private fun enqueue(id: String, rows: List<RouteFix>) {
         if (rows.isEmpty()) return
         val q = unsaved.getOrPut(id) { LinkedHashMap() }
-        for (r in rows) q[r.key] = r
+        // Pending rows keep the earliest receipt of every attempt (review r3: a failed first write must not let a replay's later stamp win).
+        for (r in rows) q.merge(r.key, r) { old, new -> new.copy(receivedAtMs = minOf(old.receivedAtMs, new.receivedAtMs)) }
     }
 
     /** Inserts first, then normalization (so rows a concurrent storeDelta wrote with null get their phone time). */
