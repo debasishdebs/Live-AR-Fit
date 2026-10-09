@@ -6,6 +6,7 @@ import com.debasish.livefit.model.ExerciseOp
 import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.PeerGate
+import com.debasish.livefit.model.peerNodeIds
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.google.android.gms.wearable.CapabilityClient
@@ -78,9 +79,13 @@ class PhoneCommandListener : WearableListenerService() {
                 lookup = {
                     val app = context.applicationContext
                     // Same fallback as the sending side (PhoneNodes): an older phone build without the capability -> connected nodes.
-                    Wearable.getCapabilityClient(app).getCapability(CAPABILITY_PHONE, CapabilityClient.FILTER_ALL).await()
-                        .nodes.mapTo(HashSet()) { it.id }
-                        .ifEmpty { Wearable.getNodeClient(app).connectedNodes.await().mapTo(HashSet()) { it.id } }
+                    peerNodeIds(
+                        advertised = {
+                            Wearable.getCapabilityClient(app).getCapability(CAPABILITY_PHONE, CapabilityClient.FILTER_ALL).await()
+                                .nodes.map { it.id }
+                        },
+                        connected = { Wearable.getNodeClient(app).connectedNodes.await().map { it.id } },
+                    )
                 },
                 nowMs = System::currentTimeMillis,
             ).also { gate = it }

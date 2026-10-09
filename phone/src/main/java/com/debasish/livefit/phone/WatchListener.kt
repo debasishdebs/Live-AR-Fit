@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.debasish.livefit.model.CAPABILITY_WATCH
 import com.debasish.livefit.model.PeerGate
+import com.debasish.livefit.model.peerNodeIds
 import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.MessageEvent
@@ -35,9 +36,13 @@ class WatchListener : WearableListenerService() {
             gate ?: PeerGate(
                 lookup = {
                     // Same fallback as the sending side (WearNodes): an older watch build without the capability -> connected nodes.
-                    Wearable.getCapabilityClient(context).getCapability(CAPABILITY_WATCH, CapabilityClient.FILTER_ALL).await()
-                        .nodes.mapTo(HashSet()) { it.id }
-                        .ifEmpty { Wearable.getNodeClient(context).connectedNodes.await().mapTo(HashSet()) { it.id } }
+                    peerNodeIds(
+                        advertised = {
+                            Wearable.getCapabilityClient(context).getCapability(CAPABILITY_WATCH, CapabilityClient.FILTER_ALL).await()
+                                .nodes.map { it.id }
+                        },
+                        connected = { Wearable.getNodeClient(context).connectedNodes.await().map { it.id } },
+                    )
                 },
                 nowMs = System::currentTimeMillis,
             ).also { gate = it }
