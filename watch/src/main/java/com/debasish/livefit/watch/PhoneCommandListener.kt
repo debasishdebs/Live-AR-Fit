@@ -47,7 +47,7 @@ class PhoneCommandListener : WearableListenerService() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                android.util.Log.e(WatchRuntime.TAG, "bad ${event.path} message", e)
+                android.util.Log.e(WatchRuntime.TAG, "bad ${event.path} message: ${e.javaClass.simpleName}")
             }
         }
     }

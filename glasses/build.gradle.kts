@@ -13,10 +13,15 @@ fun rootProperties(name: String): Map<String, String> = Properties().apply {
 val liveFitVersion = providers.gradleProperty("livefit.version").get()
 val releaseRequested = ReleaseGate.requested(gradle.startParameter.taskNames, path)
 val signing = ReleaseSigning.resolve(rootProperties("keystore.properties"), System.getenv())
-if (releaseRequested) {
-    ReleaseSigning.problem(signing, providers.gradleProperty("livefit.requireSigning").orNull == "true")?.let { throw GradleException(it) }
-}
+val requireSigning = providers.gradleProperty("livefit.requireSigning").orNull == "true"
+// The command line only picks the archive name; the gate itself runs on the resolved graph (fails closed).
 base.archivesName.set(if (releaseRequested && signing is SigningResolution.Diagnostic) "glasses-unsigned-diagnostic" else "glasses")
+gradle.taskGraph.whenReady {
+    if (ReleaseGate.packagesRelease(allTasks.filter { it.project == project }.map { it.name })) {
+        ReleaseGate.problem(signing, requireSigning, tilesKeyMissing = false, labelledDiagnostic = releaseRequested)
+            ?.let { throw GradleException("$path: $it") }
+    }
+}
 
 android {
     namespace = "com.debasish.livefit.glasses"
@@ -46,7 +51,11 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Same upload key as phone/watch, so GitHub updates install over each other (spec §3).
-            signingConfig = signingConfigs.getByName(if (signing is SigningResolution.Release) "release" else "debug")
+            signingConfig = when (signing) {
+                is SigningResolution.Release -> signingConfigs.getByName("release")
+                SigningResolution.Diagnostic -> signingConfigs.getByName("debug")
+                is SigningResolution.Misconfigured -> null // the gate fails; never a silent debug signature
+            }
         }
     }
     compileOptions {
@@ -71,6 +80,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.5")
-    implementation("com.rokid.cxr:cxr-service-bridge:1.5") // newest release; same classes/API as 1.4
+    implementation("com.rokid.cxr:cxr-service-bridge:1.5") // newest release; source-compatible for our usage (1.5 adds callbacks)
     implementation("androidx.core:core-ktx:1.13.1")
 }

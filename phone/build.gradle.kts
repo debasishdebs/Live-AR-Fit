@@ -14,11 +14,15 @@ val liveFitVersion = providers.gradleProperty("livefit.version").get()
 val releaseRequested = ReleaseGate.requested(gradle.startParameter.taskNames, path)
 val signing = ReleaseSigning.resolve(rootProperties("keystore.properties"), System.getenv())
 val tilesKey = TilesKey.resolve(rootProperties("local.properties"), System.getenv())
-if (releaseRequested) {
-    ReleaseSigning.problem(signing, providers.gradleProperty("livefit.requireSigning").orNull == "true")?.let { throw GradleException(it) }
-    if (tilesKey == null) throw GradleException("${TilesKey.NAME} is required for release builds (local.properties or env) — spec §5")
-}
+val requireSigning = providers.gradleProperty("livefit.requireSigning").orNull == "true"
+// The command line only picks the archive name; the gate itself runs on the resolved graph (fails closed).
 base.archivesName.set(if (releaseRequested && signing is SigningResolution.Diagnostic) "phone-unsigned-diagnostic" else "phone")
+gradle.taskGraph.whenReady {
+    if (ReleaseGate.packagesRelease(allTasks.filter { it.project == project }.map { it.name })) {
+        ReleaseGate.problem(signing, requireSigning, tilesKeyMissing = tilesKey == null, labelledDiagnostic = releaseRequested)
+            ?.let { throw GradleException("$path: $it") }
+    }
+}
 
 android {
     namespace = "com.debasish.livefit.phone"
@@ -54,8 +58,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // No keystore: debug-signed, named *-unsigned-diagnostic, never distributed (spec §3).
-            signingConfig = signingConfigs.getByName(if (signing is SigningResolution.Release) "release" else "debug")
+            // No keystore: debug-signed, named *-unsigned-diagnostic, never distributed (spec §3). Misconfigured: unset (and the gate fails).
+            signingConfig = when (signing) {
+                is SigningResolution.Release -> signingConfigs.getByName("release")
+                SigningResolution.Diagnostic -> signingConfigs.getByName("debug")
+                is SigningResolution.Misconfigured -> null
+            }
         }
     }
     compileOptions {

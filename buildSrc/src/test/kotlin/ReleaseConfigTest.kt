@@ -49,6 +49,33 @@ class ReleaseConfigTest {
         assertTrue(ReleaseGate.requested(listOf(":glasses:assembleRelease"), ":glasses"))
     }
 
+    /** Fix round 1: a path without the leading colon (run from the root) is still this project's. */
+    @Test fun relativeTaskPathsCount() {
+        assertTrue(ReleaseGate.requested(listOf("phone:bundleRelease"), ":phone"))
+        assertFalse(ReleaseGate.requested(listOf("glasses:assembleRelease"), ":phone"))
+    }
+
+    /** Fix round 1: the gate is scoped to the resolved packaging tasks; tests, lint and compiles don't count. */
+    @Test fun onlyReleasePackagingTasksAreGated() {
+        assertFalse(ReleaseGate.packagesRelease(listOf("compileReleaseKotlin", "testReleaseUnitTest", "lintRelease", "packageReleaseResources", "assembleDebug")))
+        assertTrue(ReleaseGate.packagesRelease(listOf("packageRelease")))
+        assertTrue(ReleaseGate.packagesRelease(listOf("packageReleaseBundle")))
+        assertTrue(ReleaseGate.packagesRelease(listOf("bundleRelease")))
+        assertTrue(ReleaseGate.packagesRelease(listOf("assembleRelease")))
+    }
+
+    /** Fix round 1: every unsafe release packaging fails closed, whatever the command line looked like. */
+    @Test fun packagingProblems() {
+        val release = ReleaseSigning.resolve(all, emptyMap())
+        assertNull(ReleaseGate.problem(release, requireSigning = true, tilesKeyMissing = false, labelledDiagnostic = false))
+        assertNotNull(ReleaseGate.problem(SigningResolution.Misconfigured(listOf("LIVEAR_KEY_PASSWORD")), requireSigning = false, tilesKeyMissing = false, labelledDiagnostic = true))
+        assertNotNull(ReleaseGate.problem(SigningResolution.Diagnostic, requireSigning = true, tilesKeyMissing = false, labelledDiagnostic = true))
+        val tiles = assertNotNull(ReleaseGate.problem(release, requireSigning = false, tilesKeyMissing = true, labelledDiagnostic = false))
+        assertTrue(TilesKey.NAME in tiles)
+        assertNotNull(ReleaseGate.problem(SigningResolution.Diagnostic, requireSigning = false, tilesKeyMissing = false, labelledDiagnostic = false), "a debug-signed build must carry the diagnostic name")
+        assertNull(ReleaseGate.problem(SigningResolution.Diagnostic, requireSigning = false, tilesKeyMissing = false, labelledDiagnostic = true))
+    }
+
     @Test fun tilesKeyFromEnvOrLocalProperties() {
         assertEquals("abcDEF123_-", TilesKey.resolve(emptyMap(), mapOf("LIVEAR_TILES_KEY" to " abcDEF123_- ")))
         assertEquals("fromFile", TilesKey.resolve(mapOf("LIVEAR_TILES_KEY" to "fromFile"), emptyMap()))

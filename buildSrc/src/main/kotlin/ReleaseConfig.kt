@@ -31,18 +31,37 @@ object ReleaseSigning {
 }
 
 /**
- * True when the requested tasks build a release artifact of [projectPath] (so its release-only inputs must be present).
- * Every project's script is configured on each run, so `:glasses:assembleRelease` must not demand the phone's tile key:
- * a task qualified with another project's path doesn't count; unqualified names (`assembleRelease`, `assemble`) count for all.
+ * Release gate. [requested] is a configuration-time guess from the command line, used only to pick the
+ * `*-unsigned-diagnostic` archive name; enforcement runs on the resolved task graph ([packagesRelease] + [problem]),
+ * so relative paths, abbreviations (`:phone:bR`) and aggregates can't skip it.
  */
 object ReleaseGate {
     private val AGGREGATES = setOf("assemble", "bundle", "build", "check16kb")
+    /** This project's release packaging tasks: the gate's scope (tests, lint and compiles don't need a key or keystore). */
+    private val PACKAGING = setOf("assembleRelease", "packageRelease", "bundleRelease", "packageReleaseBundle")
 
+    /**
+     * Every project's script is configured on each run, so `:glasses:assembleRelease` must not count for the phone:
+     * a task qualified with another project's path doesn't count; unqualified names (`assembleRelease`, `assemble`) count for all.
+     */
     fun requested(taskNames: List<String>, projectPath: String): Boolean = taskNames.any { t ->
-        val owner = t.substringBeforeLast(':', missingDelimiterValue = "")
+        val owner = t.substringBeforeLast(':', missingDelimiterValue = "").let { if (it.isEmpty() || it.startsWith(":")) it else ":$it" }
         if (owner.isNotEmpty() && owner != projectPath) return@any false
         val name = t.substringAfterLast(':')
         name.contains("Release") || name in AGGREGATES
+    }
+
+    /** [graphTaskNames]: names of this project's tasks in the resolved task graph. */
+    fun packagesRelease(graphTaskNames: Collection<String>): Boolean = graphTaskNames.any { it in PACKAGING }
+
+    /** Null when this project's release packaging may run; otherwise the error the build fails with. */
+    fun problem(signing: SigningResolution, requireSigning: Boolean, tilesKeyMissing: Boolean, labelledDiagnostic: Boolean): String? {
+        ReleaseSigning.problem(signing, requireSigning)?.let { return it }
+        if (tilesKeyMissing) return "${TilesKey.NAME} is required for release builds (local.properties or env) — spec §5"
+        if (signing is SigningResolution.Diagnostic && !labelledDiagnostic) {
+            return "no keystore configured: this debug-signed release would not be named *-unsigned-diagnostic; run the full task name (e.g. :phone:assembleRelease)"
+        }
+        return null
     }
 }
 
