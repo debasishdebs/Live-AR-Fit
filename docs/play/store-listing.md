@@ -42,7 +42,7 @@ PRIVATE BY DESIGN
 • No account, no ads, no analytics.
 • Live AR Fit has no server of its own. Your workouts stay on your phone and watch.
 • Map tiles come from MapTiler, which sees your IP address and the map area shown.
-• Delete everything with Clear history, or by uninstalling.
+• Delete your workout history with Clear history; uninstall to remove everything.
 
 FREE AND OPEN SOURCE
 Live AR Fit is open source under the Apache License 2.0. Source, glasses app and install guide: github.com/debasishdebs/Live-AR-Fit

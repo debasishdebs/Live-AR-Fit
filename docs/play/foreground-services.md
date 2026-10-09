@@ -49,8 +49,9 @@ connection is to the user's own paired Bluetooth devices, which is the `connecte
 **What it does.** A GPS fallback: if the watch has no GPS fix during a workout with **Use GPS outdoors** on, the
 phone's GPS supplies the route so the glasses map keeps following the user.
 
-**User-visible trigger.** The `location` type is added to the hub service only while Live AR Fit's screen is visible
-on the phone and the user has granted location after the in-app location disclosure. The phone GPS itself is switched
+**User-visible trigger.** The `location` type can only be added to the hub service while Live AR Fit's screen is
+visible on the phone and the user has granted location after the in-app location disclosure; once added, it stays
+for the rest of that service run. The phone GPS itself is switched
 on only during a GPS workout, and only while the watch has no fix. The ongoing hub notification stays visible the whole
 time. No `ACCESS_BACKGROUND_LOCATION` is requested.
 

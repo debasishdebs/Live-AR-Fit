@@ -9,7 +9,7 @@ submitting. Owner to review.
 
 | Permission | Runtime prompt? | User-facing rationale |
 |---|---|---|
-| `INTERNET` | No | Download map tiles from MapTiler for the glasses map and the history thumbnail. |
+| `INTERNET` | No | Download map tiles from MapTiler for the glasses map. |
 | `RECORD_AUDIO` | Yes, after the in-app microphone rationale | Voice commands. Recognised on the phone, on-device only; audio is never uploaded or stored. |
 | `BLUETOOTH_CONNECT` | Yes ("Nearby devices") | Connect to your Rokid glasses and Wear OS watch. |
 | `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` | Yes, after the in-app location disclosure; optional | Phone GPS as a route fallback when the watch has no GPS fix, during workouts with "Use GPS outdoors" on, never in the background when no workout is running. |

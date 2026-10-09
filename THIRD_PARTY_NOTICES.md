@@ -37,7 +37,8 @@ release and update the date above.
 ## Rokid CXR SDK
 
 - `com.rokid.cxr:client-l` (phone app): the phone side of the Rokid CXR-L link.
-- `com.rokid.cxr:cxr-service-bridge` (glasses app): the glasses side of the link.
+- `com.rokid.cxr:cxr-service-bridge` (glasses app, and in the phone app as a dependency of `client-l`): the glasses
+  side of the link and its shared bridge code.
 
 Both are binary libraries from Rokid's Maven repository (https://maven.rokid.com/repository/maven-public/) and are
 © Rokid. Their Maven metadata (POM) declares no licence, and no redistribution terms were found published by Rokid at

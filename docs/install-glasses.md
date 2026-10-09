@@ -54,12 +54,13 @@ The glasses have no convenient permission screen, so grant them with `adb`:
 
 ```sh
 adb -s <glasses-serial> shell pm grant com.livear.fit.glasses android.permission.RECORD_AUDIO
-adb -s <glasses-serial> shell pm grant com.livear.fit.glasses android.permission.BLUETOOTH_ADVERTISE
+adb -s <glasses-serial> shell pm grant com.livear.fit.glasses android.permission.BLUETOOTH_ADVERTISE  # skip on Android 11 and below
 ```
 
 - `RECORD_AUDIO`: the glasses microphone, for voice commands. The audio goes to your phone over the Rokid Bluetooth
   link and is recognised there, on-device only. It is never uploaded or stored.
-- `BLUETOOTH_ADVERTISE`: lets the glasses become discoverable while you pair them with the phone app.
+- `BLUETOOTH_ADVERTISE`: lets the glasses become discoverable while you pair them with the phone app. Skip this
+  grant if the glasses run Android 11 or below: the permission doesn't exist there and `pm grant` fails.
 
 ## 5. First pairing
 

@@ -71,15 +71,18 @@ processed locally on the user's device and not sent off device does not need to 
 
 | Data type | Answer |
 |---|---|
-| App interactions, in-app search history, installed apps, other user-generated content, other actions | **Not collected** |
+| Other actions (music details, see below) | **Collected**, not shared, optional, App functionality |
+| App interactions, in-app search history, installed apps, other user-generated content | **Not collected** |
 | Web browsing, messages, contacts, calendar, files, photos/videos, financial info, personal info, device or other IDs | **Not collected** |
 
 Music details (title, artist, playback state, up-next queue of the active YouTube Music session) are read on the phone
 and sent to the user's own watch (Data Layer) and glasses (Rokid link) to show and control playback; they are not
-stored. **Owner decision:** Play has no type that clearly fits "metadata of the track playing in another app", so the
-draft does not declare it. If the owner prefers the conservative reading of the Data Layer relay, declare it as
-**App activity → Other actions**, collected, not shared, optional (notification access can be declined), purpose
-App functionality.
+stored. They travel over the same Data Layer relay as location and health data, so the draft treats them the same
+way: **App activity → Other actions**, collected, not shared (service-provider and prominent-disclosure exceptions),
+optional (notification access can be declined), purpose App functionality.
+
+**Owner alternative:** Play has no type that clearly fits "metadata of the track playing in another app"; the owner
+may choose not to declare it. The conservative answer above is the default.
 
 ### App info and performance: crash logs
 

@@ -18,7 +18,7 @@ Contact: **d.kanhar@gmail.com**
 - There is **no account**, no sign-in, **no ads** and **no analytics**. There is no third-party crash-reporting SDK.
 - Live AR Fit has **no server of its own**. Your workouts, heart rate and routes stay on your own phone and watch.
 - Data moves only between your own phone, watch and glasses, plus map tile requests to MapTiler (see below).
-- Delete everything with **Clear history** on the phone, or uninstall the apps.
+- Delete your workout history with **Clear history** on the phone; uninstall the apps to remove everything.
 
 ## What the apps use, and why
 
@@ -90,7 +90,7 @@ Music details are not stored.
 
 ## Map tiles: what MapTiler sees
 
-To draw the map, the phone (for the glasses map and the history thumbnail) and the watch download map images
+To draw the map, the phone (for the glasses map) and the watch download map images
 ("tiles") from **MapTiler** (https://www.maptiler.com). Like any web request, each tile request shows MapTiler your
 **IP address** and the **tile coordinates**, which reveal the map area being shown. The request also carries the
 app's name and version and a project API key, but no account, user ID or other data about you. MapTiler's handling of
@@ -118,8 +118,8 @@ automatically. On the phone, Settings → About → **Share last crash** lets yo
 
 - **Clear history** (phone Settings) deletes your finished workouts: their stats, heart-rate samples and routes.
   A workout still running or syncing is kept until it finishes. For each cleared workout, the phone keeps only an
-  internal ID and status (no stats, health data or location) so that late messages from the watch about it are
-  ignored.
+  internal ID, its status and the workout's start and end times (no stats, health data or location), so that late
+  messages from the watch about it are ignored.
 - **Uninstalling** an app deletes everything it stored on that device.
 - Clearing the app's storage in Android settings has the same effect as uninstalling.
 
