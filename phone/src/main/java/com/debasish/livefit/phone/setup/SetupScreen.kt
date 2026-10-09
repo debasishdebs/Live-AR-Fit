@@ -30,7 +30,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.debasish.livefit.phone.ui.linked.hasMusicAccess
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import com.debasish.livefit.phone.ui.linked.watchMediaControlsTip
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -78,8 +80,8 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     val scope = rememberCoroutineScope()
     // Green tick on a completed step, then a short beat before moving on (denied/failed steps never set it).
     var ticked by remember { mutableStateOf<SetupStep?>(null) }
-    var glassesAuthorized by remember { mutableStateOf(false) }
-    var glassesPaired by remember { mutableStateOf(false) }
+    var glassesAuthorized by rememberSaveable { mutableStateOf(false) }
+    var glassesPaired by rememberSaveable { mutableStateOf(false) }
     var cameBack by remember { mutableStateOf(false) } // arriving by Back must not bounce forward again
     var musicDisclosureShown by rememberSaveable { mutableStateOf(false) }
     var mapDisclosureShown by rememberSaveable { mutableStateOf(false) }
@@ -89,9 +91,9 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     fun tick(forStep: SetupStep, outcome: StepOutcome = StepOutcome.Granted, disclosureRequired: Boolean = false, disclosureShown: Boolean = true) {
         if (step == forStep && shouldAutoAdvance(outcome, disclosureRequired, disclosureShown)) ticked = forStep
     }
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
         LiveFitHubService.ensureRunning(activity) // Bluetooth now granted: the connectedDevice hub can start
-        tick(SetupStep.Welcome, if (result.values.all { it }) StepOutcome.Granted else StepOutcome.Denied)
+        tick(SetupStep.Welcome, if (permissionsGranted()) StepOutcome.Granted else StepOutcome.Denied)
     }
     fun go(skip: Boolean = false) {
         if (skip) flow.skip() else flow.next()
@@ -110,12 +112,13 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
             SetupStep.Welcome -> if (permissionsGranted()) tick(step, StepOutcome.AlreadySatisfied)
             SetupStep.Music -> if (hasMusicAccess(activity)) tick(step, StepOutcome.AlreadySatisfied, true, musicDisclosureShown)
             SetupStep.Map -> if (locationGranted()) tick(step, StepOutcome.AlreadySatisfied, true, mapDisclosureShown)
-            SetupStep.Voice -> if (services.settings.voiceLocale.value in SpeechPacks.query(activity).installed) { flow.voicePackInstalled(); tick(step, StepOutcome.AlreadySatisfied) }
+            SetupStep.Voice -> if (withContext(Dispatchers.IO) { services.settings.voiceLocale.value in SpeechPacks.query(activity).installed }) { flow.voicePackInstalled(); tick(step, StepOutcome.AlreadySatisfied) }
             else -> Unit
         }
     }
     // Back from the notification-access / location disclosure: tick if the user completed it.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (cameBack) return@LifecycleEventEffect
         when (step) {
             SetupStep.Music -> if (musicDisclosureShown && hasMusicAccess(activity)) tick(step, StepOutcome.Granted, true, true)
             SetupStep.Map -> if (mapDisclosureShown && locationGranted()) tick(step, StepOutcome.Granted, true, true)

@@ -19,6 +19,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.debasish.livefit.phone.ui.theme.LiveFitColors
@@ -44,7 +48,7 @@ fun GrantTick(size: Dp = 96.dp, modifier: Modifier = Modifier) {
         if (still) return@LaunchedEffect
         draw.animateTo(1f, tween(TICK_DRAW_MS, delayMillis = 100, easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)))
     }
-    Canvas(modifier.size(size).scale(scale.value)) {
+    Canvas(modifier.size(size).scale(scale.value).semantics { contentDescription = "Done"; liveRegion = LiveRegionMode.Polite }) {
         drawCircle(LiveFitColors.Mint)
         val w = this.size.width
         val tick = Path().apply {
