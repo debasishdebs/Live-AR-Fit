@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.BatteryManager
 import com.debasish.livefit.confirm.DefaultConfirmationService
 import com.debasish.livefit.history.HistoryDatabase
+import com.debasish.livefit.map.HttpTileFetcher
+import com.debasish.livefit.map.OsmTileSource
+import com.debasish.livefit.map.TileDiskCache
 import com.debasish.livefit.history.RoomSessionStore
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.CommandEnvelope
@@ -18,6 +21,8 @@ import com.debasish.livefit.model.StateFrame
 import com.debasish.livefit.model.WatchSettingsFrame
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.phone.location.PhoneLocationProvider
+import com.debasish.livefit.phone.map.GlassesMapRenderer
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.GlassesEvent
 import com.debasish.livefit.services.GlassesLinkService
@@ -43,9 +48,12 @@ import com.debasish.livefit.services.watch.DataLayerWatchLink
 import com.debasish.livefit.services.watch.FakeWatchLink
 import com.debasish.livefit.services.workout.HubWorkoutService
 import com.debasish.livefit.services.workout.SimulatedWatchGateway
+import com.debasish.livefit.sync.GlassesMapStreamer
 import com.debasish.livefit.sync.HubCommandRouter
 import com.debasish.livefit.sync.LinkSender
+import com.debasish.livefit.sync.RouteHub
 import com.debasish.livefit.sync.StateBroadcaster
+import com.debasish.livefit.sync.WatchClockSync
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +66,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 
 /** Which services are Live. One place to flip bindings (spec §3.1 principle 2). */
@@ -86,6 +95,14 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
 
     val workout = HubWorkoutService(scope, watchGateway, history, confirm, clock,
         gpsFor = { settings.gpsOutdoors.value })
+
+    // ---- Live map (spec §2) ----
+    /** Route rows in `routes`; missing rows are rebuilt from the deltas in `history` on every session load (review #1). */
+    val routeHub = RouteHub(scope, clock, dataLayer?.clockSync ?: WatchClockSync(clock), routes, history, log = { Log.d("LiveFitMap", it) })
+    private val phoneGps = PhoneLocationProvider(app) { fix -> scope.launch { routeHub.onPhoneFix(fix) } }
+    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(OsmTileSource(), TileDiskCache(File(app.cacheDir, "tiles"), TileDiskCache.PHONE_MAX_BYTES)))
+    private val mapRenderer = GlassesMapRenderer(mapTiles)
+    private val mapStreamer = GlassesMapStreamer(scope, clock, render = mapRenderer::render, send = { f, png -> glasses.pushMap(f, png) }, log = { Log.i("LiveFitMap", it) })
 
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast
@@ -144,6 +161,28 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
                     val pct = d.batteryPct ?: return@forEach
                     if (pct <= 15 && warned.add(k)) flash("${k.name} battery low · $pct%")
                 }
+            }
+        }
+        // ---- Live map: route merge, phone fallback, glasses images (spec §2) ----
+        routeHub.start()
+        mapTiles.start()
+        mapStreamer.start()
+        scope.launch { workout.snapshot.collect { routeHub.onWorkout(it) } }
+        scope.launch { watchGateway.deltas.collect { routeHub.onWatchDelta(it) } }
+        scope.launch { routeHub.state.collect(mapStreamer::onRoute) }
+        scope.launch {
+            combine(routeHub.fallbackWanted, LiveFitHubService.locationCapable) { want, can -> want && can }.distinctUntilChanged()
+                .collect { on -> if (on) phoneGps.start() else phoneGps.stop() }
+        }
+        scope.launch {
+            glasses.status.map { it.link == LinkState.Connected }.distinctUntilChanged().collect { connected ->
+                if (connected) mapStreamer.onConnected() else { mapStreamer.onDisconnected(); mapTiles.hide() }
+            }
+        }
+        scope.launch {
+            glasses.pageStates.collect {
+                mapStreamer.onPageState(it.page, it.seq)
+                if (!mapStreamer.mapVisible) mapTiles.hide() // off the Map page nothing is fetched or retried; obsolete renders can't undo it
             }
         }
         // ---- Link wiring: one block per device ----
