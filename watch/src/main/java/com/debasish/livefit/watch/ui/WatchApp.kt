@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,10 +39,14 @@ import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +65,7 @@ import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.PageIndicatorState
 import androidx.wear.compose.material.Text
 import com.debasish.livefit.model.HeartZones
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
@@ -67,10 +73,12 @@ import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.model.Command
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.zoneLabel
+import com.debasish.livefit.watch.WatchPageModel
 import com.debasish.livefit.watch.WatchUiState
+import com.debasish.livefit.watch.map.WatchTiles
 
 /** Same palette as the phone, on OLED black. */
-private object W {
+internal object W {
     val Mint = Color(0xFF14C3A2)
     val Sky = Color(0xFF3D8BFF)
     val Coral = Color(0xFFFF6B4F)
@@ -105,7 +113,7 @@ private fun zoneName(zone: Int?) = when (zone) {
 private val AMBIENT_PHASES = setOf(WorkoutPhase.Starting, WorkoutPhase.Active, WorkoutPhase.Paused, WorkoutPhase.Syncing)
 
 @Composable
-fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, ambient: Boolean = false) {
+fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, tiles: WatchTiles, ambient: Boolean = false) {
     val s = state.snapshot
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -115,7 +123,7 @@ fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float
                 WorkoutPhase.Idle -> Ready(state.phoneOnline, state.glassesOnline) { onCommand(Command.StartWorkout(it)) }
                 WorkoutPhase.Summary -> Summary(s) { onCommand(Command.DismissSummary) }
                 WorkoutPhase.Stopping -> Saving(s)
-                else -> Live(s, state, onCommand, onVolume)
+                else -> Live(s, state, onCommand, onVolume, tiles)
             }
             if (state.offline) OfflineBadge(Modifier.align(Alignment.TopCenter).padding(top = 18.dp))
             state.confirmation?.let { c -> ConfirmOverlay(c) { yes -> onCommand(Command.Answer(c.id, yes)) } }
@@ -167,27 +175,39 @@ private fun StatusDot(icon: ImageVector, online: Boolean) {
     }
 }
 
+/**
+ * Live pager over the shared page set (spec §3). The pager is rebuilt when the page set changes, opening on the page
+ * that was shown or, if it vanished (disabled, Map ineligible), on Workout. A new session starts on Workout.
+ */
 @Composable
-private fun Live(s: WorkoutSnapshot, state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit) {
-    val pager = rememberPagerState(pageCount = { 3 })
-    Box(Modifier.fillMaxSize()) {
-        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
-            when (page) {
-                0 -> HeartPage(s, state.hrHistory, onCommand)
-                1 -> StatsPage(s)
-                else -> MusicPage(state.music, onCommand, onVolume)
-            }
-        }
-        HorizontalPageIndicator(
-            pageIndicatorState = remember(pager) {
-                object : PageIndicatorState {
-                    override val pageOffset get() = pager.currentPageOffsetFraction
-                    override val selectedPage get() = pager.currentPage
-                    override val pageCount get() = 3
+private fun Live(s: WorkoutSnapshot, state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, tiles: WatchTiles) {
+    val pages = WatchPageModel.pages(state)
+    val shown = remember(s.sessionId) { mutableStateOf(HudPage.Workout) }
+    key(pages) {
+        val pager = rememberPagerState(initialPage = WatchPageModel.initialIndex(pages, shown.value), pageCount = { pages.size })
+        LaunchedEffect(pager) { snapshotFlow { pager.settledPage }.collect { i -> pages.getOrNull(i)?.let { shown.value = it } } }
+        Box(Modifier.fillMaxSize()) {
+            HorizontalPager(pager, Modifier.fillMaxSize()) { i ->
+                when (pages[i]) {
+                    HudPage.Glance -> GlancePage(s)
+                    HudPage.Workout -> HeartPage(s, state.hrHistory, onCommand)
+                    HudPage.Stats -> StatsPage(s)
+                    HudPage.Playlist -> PlaylistPage(state.queue, onCommand)
+                    HudPage.Map -> WatchMapPage(state.route, state.live, s.sessionId, s.type, tiles)
+                    HudPage.MusicControls -> MusicPage(state.music, onCommand, onVolume)
                 }
-            },
-            modifier = Modifier.padding(bottom = 6.dp),
-        )
+            }
+            HorizontalPageIndicator(
+                pageIndicatorState = remember(pager) {
+                    object : PageIndicatorState {
+                        override val pageOffset get() = pager.currentPageOffsetFraction
+                        override val selectedPage get() = pager.currentPage
+                        override val pageCount get() = pages.size
+                    }
+                },
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        }
     }
 }
 
@@ -252,12 +272,14 @@ private fun HeartPage(s: WorkoutSnapshot, history: List<Int>, onCommand: (Comman
 private fun StatsPage(s: WorkoutSnapshot) {
     Column(Modifier.fillMaxSize().padding(horizontal = 28.dp), verticalArrangement = Arrangement.Center) {
         Pill(Icons.Rounded.LocalFireDepartment, W.Amber, "${s.metrics.calories}", "kcal", big = true)
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Pill(Icons.AutoMirrored.Rounded.DirectionsWalk, W.Mint, "%,d".format(s.metrics.steps), "steps")
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Pill(Icons.Rounded.Route, W.Violet, "%.2f".format(s.metrics.distanceKm), "km")
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Pill(Icons.Rounded.Bolt, W.Sky, "%.1f".format(s.metrics.speedKmh), "km/h")
+        Spacer(Modifier.height(4.dp))
+        Pill(Icons.Rounded.Favorite, W.Coral, "${s.avgHeartRate ?: "--"}/${s.maxHeartRate ?: "--"}", "avg/max")
     }
 }
 
@@ -281,6 +303,12 @@ private fun MusicPage(np: NowPlaying?, onCommand: (Command) -> Unit, onVolume: (
         Column(Modifier.fillMaxSize().padding(horizontal = 26.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Text(np?.title ?: "Nothing playing", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, textAlign = TextAlign.Center)
             Text(np?.artist.orEmpty(), fontSize = 13.sp, color = W.Dim, maxLines = 1)
+            if (np != null && np.durationMs > 0) {
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.width(90.dp).height(3.dp).clip(RoundedCornerShape(2.dp)).background(W.Pill)) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth((np.positionMs.toFloat() / np.durationMs).coerceIn(0f, 1f)).background(W.Rose))
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 RoundIcon(Icons.Rounded.SkipPrevious, W.Rose, sizeDp = 40) { onCommand(Command.PreviousTrack) }

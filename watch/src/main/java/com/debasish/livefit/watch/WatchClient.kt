@@ -9,6 +9,7 @@ import com.debasish.livefit.model.ExerciseError
 import com.debasish.livefit.model.ExerciseState
 import com.debasish.livefit.model.ExerciseStateReport
 import com.debasish.livefit.model.LinkState
+import com.debasish.livefit.model.LivePosition
 import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.PageSettings
@@ -23,6 +24,7 @@ import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.sync.LivenessMonitor
+import com.debasish.livefit.watch.map.WatchMapTracker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +52,8 @@ data class WatchUiState(
     val queue: QueueWindow = QueueWindow(),
     /** This session's own route from route.bin (spec §2.6: the watch map never uses phone fixes). */
     val route: List<LocationFix> = emptyList(),
+    /** The watch Map marker: last fix that was usable-live on arrival (WatchMapTracker). */
+    val live: LivePosition? = null,
 )
 
 /** Renders hub frames, falls back to the local session while the phone is offline, re-claims on reconnect. */
@@ -73,12 +77,13 @@ object WatchClient {
     private val pagesFile by lazy { PageSettingsFile(File(WatchRuntime.app.filesDir, "pages.json")) }
     private var pages = PageSettings()
     private var queue = QueueWindow()
+    private val mapTracker = WatchMapTracker()
 
     fun start() {
         if (started) return
         started = true
         pages = pagesFile.load()
-        WatchRuntime.scope.launch { WatchRuntime.routes.route.collect { refresh() } }
+        WatchRuntime.scope.launch { WatchRuntime.routes.route.collect { mapTracker.onRoute(it, System.currentTimeMillis()); refresh() } }
         WatchRuntime.scope.launch {
             while (true) {
                 try { tick() } catch (e: CancellationException) { throw e } catch (e: Exception) { WatchRuntime.log("tick failed: $e") }
@@ -174,6 +179,7 @@ object WatchClient {
                 needsPermissions = missing, outdated = outdated, toast = toastLocal,
                 confirmation = localConfirm?.first,
                 pages = pages, queue = QueueWindow(), route = routeFor(snap.sessionId),
+                live = mapTracker.liveFor(snap.sessionId),
             )
         } else WatchUiState(
             snapshot = f?.workout ?: WorkoutSnapshot(),
@@ -186,6 +192,7 @@ object WatchClient {
             outdated = outdated,
             toast = toastLocal ?: f?.toast,
             pages = pages, queue = queue, route = routeFor(f?.workout?.sessionId),
+            live = mapTracker.liveFor(f?.workout?.sessionId),
         )
     }
 

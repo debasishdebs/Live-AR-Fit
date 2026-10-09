@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
             val tick by ambientTick.collectAsState()
             // In ambient the screen changes only on the system's refresh, not on every frame from the phone.
             val state = tick?.let { remember(it) { WatchClient.ui.value } } ?: live
-            WatchApp(state, onCommand = WatchClient::command, onVolume = WatchClient::setVolume, onGrantPermissions = { permissionRequest.launch(perms) }, ambient = tick != null)
+            WatchApp(state, onCommand = WatchClient::command, onVolume = WatchClient::setVolume, onGrantPermissions = { permissionRequest.launch(perms) }, tiles = WatchRuntime.tiles, ambient = tick != null)
         }
     }
 

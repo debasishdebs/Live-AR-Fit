@@ -10,6 +10,7 @@ import com.debasish.livefit.sync.GpsPreferences
 import com.debasish.livefit.sync.WatchExerciseController
 import com.debasish.livefit.sync.WatchRouteFile
 import com.debasish.livefit.sync.WatchSessionRecorder
+import com.debasish.livefit.watch.map.WatchTiles
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,9 @@ object WatchRuntime {
     lateinit var recorder: WatchSessionRecorder; private set
     lateinit var controller: WatchExerciseController; private set
     lateinit var routes: WatchRouteFile; private set
+
+    /** Map tiles for the watch Map page (created on first use). */
+    val tiles: WatchTiles by lazy { WatchTiles(app, scope) }
     private var initialized = false
 
     @Synchronized
