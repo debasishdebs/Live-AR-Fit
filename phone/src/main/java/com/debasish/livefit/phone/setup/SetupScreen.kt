@@ -3,7 +3,6 @@ package com.debasish.livefit.phone.setup
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -72,8 +71,6 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
     val scope = rememberCoroutineScope()
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         LiveFitHubService.ensureRunning(activity) // Bluetooth now granted: the connectedDevice hub can start
-        // Ask for battery-optimization exemption only after the permission dialogs are dismissed.
-        activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
     }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         LiveFitHubService.promoteLocation(activity) // granted: the visible app re-promotes the hub with `location`
@@ -110,7 +107,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         val (icon, title, body) = when (step) {
-            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Live AR Fit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
+            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Live AR Fit", "Allow microphone, nearby devices and notifications so the hub can run during workouts.")
             SetupStep.Glasses -> Triple(GlassesIcon, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else " Tap Allow on your glasses when asked.")
             SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Wear OS watch", (if (Build.VERSION.SDK_INT < 33) "Pair the watch" else "Pair the watch (tap Allow on your watch when asked)") +

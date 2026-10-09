@@ -45,7 +45,7 @@ class PermissionSource(private val context: Context) : ListSource {
         if (item.status != ItemStatus.ActionNeeded) return null
         val intent = when (item.id) {
             "media" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-            "battery" -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
+            "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
         }
         return ItemAction { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); ActionResult.Silent }

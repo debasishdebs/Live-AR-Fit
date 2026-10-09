@@ -57,6 +57,7 @@ import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.components.BatteryBannerCard
 import com.debasish.livefit.phone.ui.components.GlassesIcon
 import com.debasish.livefit.phone.ui.components.WorkoutTypeSheet
 import com.debasish.livefit.phone.ui.components.icon
@@ -100,6 +101,7 @@ fun HomeScreen(
                     DeviceBubble(Icons.Rounded.MusicNote, "Music", LiveFitColors.ChipRose, music?.isPlaying == true, onMusic)
                 }
             }
+            BatteryBannerCard(Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
 
             val inWorkout = snapshot.phase != WorkoutPhase.Idle
             StartHero(snapshot, onStart = { if (inWorkout) onWorkout() else picking = true })
