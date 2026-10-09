@@ -167,6 +167,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 24. Plan revision 3 committed
 - **Done:** `4fc842b` — tile jobs re-check visibility after taking a slot + `hide()`/generation so async renders can't re-show tiles (Tasks 8, 12, 18); route rows keep immutable `receivedAtMs`, rows > 2 min ahead of receipt rejected live, on rebuild and in history (Tasks 3, 12, 13, 14, 20).
 
+### 25. Codex review of plan revision 3 (1 P2)
+- **Done:** tile finding confirmed closed; accepted the remaining one — a replay after a failed route write could replace the original receipt time and let a future-rejected point back into history. Sent to the plan agent as Revision 4 (keep the earliest receipt through retries and the delta transaction, with the 600,000 / 605,000 regression test).
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
