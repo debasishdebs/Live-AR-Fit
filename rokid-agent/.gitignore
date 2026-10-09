@@ -1,2 +1,4 @@
 *.aix
+# ...but keep the CLI's state dir (livefit/.aix/agent-id = the stable development agent id).
+!.aix/
 node_modules/
