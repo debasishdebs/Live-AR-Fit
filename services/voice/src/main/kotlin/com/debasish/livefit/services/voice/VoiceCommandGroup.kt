@@ -14,7 +14,7 @@ enum class VoiceCommandGroup(val label: String, val examples: String, val toggle
     NextPrevious("Next / previous song", "\"next song\", \"previous\""),
     Volume("Volume", "\"volume up\", \"quieter\""),
     Like("Like song", "\"like this song\""),
-    PageViews("Glasses views", "\"glance view\", \"workout view\", \"playlist view\""),
+    PageViews("Glasses views", "\"glance view\", \"stats view\", \"map view\", \"music view\", \"playlist view\""),
     YesNo("Yes / no answers", "\"yes\", \"no\" to a question", toggleable = false);
 
     val blockedMessage: String get() = "'$label' is turned off in Settings"
