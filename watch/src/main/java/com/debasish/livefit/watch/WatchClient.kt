@@ -82,7 +82,7 @@ object WatchClient {
     fun start() {
         if (started) return
         started = true
-        pages = pagesFile.load()
+        WatchRuntime.scope.launch { pages = pagesFile.load(); refresh() }
         WatchRuntime.scope.launch { WatchRuntime.routes.route.collect { mapTracker.onRoute(it, System.currentTimeMillis()); refresh() } }
         WatchRuntime.scope.launch {
             while (true) {

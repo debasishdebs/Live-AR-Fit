@@ -19,6 +19,11 @@ class LiveFitApp : Application() {
      */
     override fun onCreate() {
         super.onCreate()
+        PhoneCrash.log(this).install()
+        if (BuildConfig.DEBUG) android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
+        // Spec §6: start loading these files on SharedPreferences' own thread now, so the first main-thread read
+        // (SettingsStore, CompanionLinker, PermissionSource) finds them in memory.
+        for (name in listOf("settings", "companion", "rokid")) getSharedPreferences(name, MODE_PRIVATE)
         try { LiveFitHubService.ensureRunning(this) } catch (e: Exception) { android.util.Log.w("LiveFitHub", "hub start at process start failed", e) }
     }
 }

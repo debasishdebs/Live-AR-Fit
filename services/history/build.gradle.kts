@@ -18,12 +18,16 @@ android {
     testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
+// Spec §6: the schema JSON of every version is committed (services/history/schemas/).
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
     api(project(":core:services"))
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    testImplementation("androidx.sqlite:sqlite-framework:2.4.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")

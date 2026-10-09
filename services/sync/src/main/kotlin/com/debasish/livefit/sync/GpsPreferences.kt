@@ -6,8 +6,10 @@ import java.io.File
 
 /** The phone's last GPS choice per workout type, on disk so offline starts after a watch restart still honour it. */
 class GpsPreferences(private val file: File) {
-    private val map: MutableMap<WorkoutType, Boolean> =
+    /** Read on first use, not in the constructor: the watch builds this on the main thread (spec §6). */
+    private val map: MutableMap<WorkoutType, Boolean> by lazy {
         runCatching { Wire.decode<Map<WorkoutType, Boolean>>(file.readText()).toMutableMap() }.getOrDefault(mutableMapOf())
+    }
 
     /** Unknown type (never started from the phone) → off: step-based distance. */
     fun get(type: WorkoutType): Boolean = map[type] ?: false

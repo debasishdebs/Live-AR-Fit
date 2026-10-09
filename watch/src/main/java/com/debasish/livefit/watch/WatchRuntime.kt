@@ -7,6 +7,7 @@ import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.Clock
+import com.debasish.livefit.sync.CrashLog
 import com.debasish.livefit.sync.GpsPreferences
 import com.debasish.livefit.sync.WatchExerciseController
 import com.debasish.livefit.sync.WatchRouteFile
@@ -24,31 +25,43 @@ import java.io.File
 
 object WatchRuntime {
     const val TAG = "LiveFitWatch"
-    /** Main.immediate: the recorder and controller assume this single-threaded dispatcher, so everything must use it. */
-    val scope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main.immediate +
-            kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "uncaught in WatchRuntime.scope", e) },
-    )
+    private val handler = kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.e(TAG, "uncaught in WatchRuntime.scope", e) }
+    /**
+     * One serial background dispatcher (spec §6: no file I/O on the main thread). The recorder and controller assume a
+     * single-threaded caller; limitedParallelism(1) runs one task at a time, in order, off the main thread.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + handler)
+    /** Compose-facing work (the Map page's tile loader, driven from composition) stays on the main thread. */
+    val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + handler)
     lateinit var app: Context; private set
     lateinit var recorder: WatchSessionRecorder; private set
     lateinit var controller: WatchExerciseController; private set
     lateinit var routes: WatchRouteFile; private set
 
     /** Map tiles for the watch Map page (created on first use). */
-    val tiles: WatchTiles by lazy { WatchTiles(app, scope) }
+    val tiles: WatchTiles by lazy { WatchTiles(app, uiScope) }
     private var initialized = false
 
     @Synchronized
     fun init(context: Context) {
         if (initialized) return
         app = context.applicationContext
-        routes = WatchRouteFile(File(app.filesDir, "routes")).also { it.sweep() }
-        recorder = WatchSessionRecorder(
-            File(app.filesDir, "lf-buffer"), Provenance.Live(WatchProvenance.SOURCE), scope,
-            send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
-            sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
-            onFinalAcked = { id -> routes.markAcked(id) },
-        )
+        CrashLog(File(app.filesDir, CrashLog.FILE_NAME), BuildConfig.VERSION_NAME).install()
+        if (BuildConfig.DEBUG) android.os.StrictMode.setThreadPolicy(android.os.StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
+        // The one-time crash-recovery scan (sweep + buffer replay) is the documented main-thread disk read.
+        val policy = android.os.StrictMode.allowThreadDiskReads()
+        try {
+            routes = WatchRouteFile(File(app.filesDir, "routes")).also { it.sweep() }
+            recorder = WatchSessionRecorder(
+                File(app.filesDir, "lf-buffer"), Provenance.Live(WatchProvenance.SOURCE), scope,
+                send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
+                sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
+                onFinalAcked = { id -> routes.markAcked(id) },
+            )
+        } finally {
+            android.os.StrictMode.setThreadPolicy(policy)
+        }
         controller = WatchExerciseController(
             scope, HealthServicesExercise(app), recorder, Clock { System.currentTimeMillis() },
             sendResult = { r ->

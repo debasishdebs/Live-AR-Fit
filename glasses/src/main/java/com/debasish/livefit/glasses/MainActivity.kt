@@ -10,6 +10,8 @@ import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
+import com.debasish.livefit.sync.CrashLog
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -69,6 +71,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog(File(filesDir, CrashLog.FILE_NAME), packageManager.getPackageInfo(packageName, 0).versionName ?: "?").install()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val bridge = CXRServiceBridge(this)
         bridge.setStatusListener(object : CXRServiceBridge.StatusListener {
@@ -116,8 +119,10 @@ class MainActivity : ComponentActivity() {
             val gestureSettings by controller.gestures.collectAsStateWithLifecycle() // review #9: a new idle timeout re-keys the timer effect
             val mapImage by controller.mapImage.collectAsStateWithLifecycle()
             val sessionId = frame?.workout?.sessionId
-            val mapBitmap = androidx.compose.runtime.remember(mapImage, sessionId) {
-                mapImage?.takeIf { it.sessionId == sessionId }?.let { android.graphics.BitmapFactory.decodeByteArray(it.png, 0, it.png.size)?.asImageBitmap() }
+            val mapBitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, mapImage, sessionId) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    mapImage?.takeIf { it.sessionId == sessionId }?.let { android.graphics.BitmapFactory.decodeByteArray(it.png, 0, it.png.size)?.asImageBitmap() }
+                }
             }
             androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
                 // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.

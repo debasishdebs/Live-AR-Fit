@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [SessionEntity::class, DeltaEntity::class, SampleEntity::class, RoutePointEntity::class], version = 2, exportSchema = false)
+@Database(entities = [SessionEntity::class, DeltaEntity::class, SampleEntity::class, RoutePointEntity::class], version = 2, exportSchema = true)
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun dao(): HistoryDao
 
