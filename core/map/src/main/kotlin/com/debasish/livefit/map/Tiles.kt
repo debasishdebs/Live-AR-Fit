@@ -70,13 +70,26 @@ data class TileMeta(val expiresAtMs: Long, val etag: String? = null, val lastMod
  * On-disk LRU tile cache; each file = expiry (Long) + ETag (UTF) + Last-Modified (UTF) + PNG. Least recently used files
  * go first once over [maxBytes]. A stale entry is still returned (offline use, revalidation).
  */
-class TileDiskCache(private val dir: File, private val maxBytes: Long, private val nowMs: () -> Long = System::currentTimeMillis) {
+class TileDiskCache(
+    private val dir: File,
+    private val maxBytes: Long,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private var legacyRoot: File? = null,
+) {
     class Entry(val bytes: ByteArray, val fresh: Boolean, val meta: TileMeta)
 
     init { dir.mkdirs() }
 
+    /** One-time removal of pre-per-source flat tiles in [legacyRoot]: plain `.tile` files only, no subdirectories. */
+    private fun cleanLegacyOnce() {
+        val root = legacyRoot ?: return
+        legacyRoot = null
+        root.listFiles { f -> f.isFile && f.name.endsWith(".tile") }.orEmpty().forEach { it.delete() }
+    }
+
     @Synchronized
     fun get(tile: TileId): Entry? {
+        cleanLegacyOnce()
         val f = file(tile)
         if (!f.exists()) return null
         return try {
@@ -93,6 +106,7 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
 
     @Synchronized
     fun put(tile: TileId, bytes: ByteArray, meta: TileMeta) {
+        cleanLegacyOnce()
         if (!write(tile, bytes, meta)) return
         trim()
     }
@@ -146,11 +160,11 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
 
         /**
          * [source]'s cache under `root/<cacheId>`, so a MapTiler build never serves an OSM tile (wrong attribution) or
-         * sends it OSM validators. Flat `.tile` files directly in [root] from before per-source caches are deleted (idempotent).
+         * sends it OSM validators. Flat `.tile` files directly in [root] from before per-source caches are deleted on the
+         * first cache access (the fetcher's IO thread, never the constructor on Main); subdirectories are never touched.
          */
         fun forSource(root: File, source: TileSource, maxBytes: Long, nowMs: () -> Long = System::currentTimeMillis): TileDiskCache {
-            root.listFiles { f -> f.isFile && f.name.endsWith(".tile") }.orEmpty().forEach { it.delete() }
-            return TileDiskCache(File(root, source.cacheId), maxBytes, nowMs)
+            return TileDiskCache(File(root, source.cacheId), maxBytes, nowMs, legacyRoot = root)
         }
     }
 }

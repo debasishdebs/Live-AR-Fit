@@ -84,12 +84,17 @@ class TilesTest {
         assertNotNull(osmCache.get(tile), "the OSM cache is untouched")
     }
 
+    /** Review fix: legacy flat tiles go on the first cache access (the fetcher's IO thread), not in the constructor (Main). */
     @Test fun legacyFlatTilesAreDeleted() {
         val root = Files.createTempDirectory("tiles-legacy").toFile()
         val legacy = File(root, "18_1_2.tile").apply { writeBytes(png) }
+        val otherSource = File(root, "osm").apply { mkdirs() }
+        val kept = File(otherSource, "18_1_2.tile").apply { writeBytes(png) }
         val c = TileDiskCache.forSource(root, MapTilerTileSource("k", "ua"), 1_000_000, { now })
-        assertFalse(legacy.exists())
+        assertTrue(legacy.exists(), "construction does no file deletes")
         assertNull(c.get(tile))
+        assertFalse(legacy.exists())
+        assertTrue(kept.exists(), "subdirectories are never touched")
         assertTrue(File(root, "maptiler-streets-v2-256").isDirectory)
     }
 
