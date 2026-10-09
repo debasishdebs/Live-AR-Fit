@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.ambient.AmbientLifecycleObserver
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.debasish.livefit.watch.ui.AmbientStyle
 import com.debasish.livefit.watch.ui.WatchApp
 
 class MainActivity : ComponentActivity() {
@@ -28,8 +29,13 @@ class MainActivity : ComponentActivity() {
      * interactive; otherwise the time of the last ambient refresh (the system asks for one about once a minute).
      */
     private val ambientTick = MutableStateFlow<Long?>(null)
+    /** Burn-in protection / low-bit flags from the system's ambient details (Wear OS 3+ watches differ). */
+    private val ambientStyle = MutableStateFlow(AmbientStyle.Default)
     private val ambient = AmbientLifecycleObserver(this, object : AmbientLifecycleObserver.AmbientLifecycleCallback {
-        override fun onEnterAmbient(ambientDetails: AmbientLifecycleObserver.AmbientDetails) { ambientTick.value = System.currentTimeMillis() }
+        override fun onEnterAmbient(ambientDetails: AmbientLifecycleObserver.AmbientDetails) {
+            ambientStyle.value = AmbientStyle.of(ambientDetails.burnInProtectionRequired, ambientDetails.deviceHasLowBitAmbient)
+            ambientTick.value = System.currentTimeMillis()
+        }
         override fun onUpdateAmbient() { ambientTick.value = System.currentTimeMillis() }
         override fun onExitAmbient() { ambientTick.value = null } // live state (already current) renders right away
     })
@@ -42,9 +48,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             val live by WatchClient.ui.collectAsStateWithLifecycle()
             val tick by ambientTick.collectAsState()
+            val aStyle by ambientStyle.collectAsState()
             // In ambient the screen changes only on the system's refresh, not on every frame from the phone.
             val state = tick?.let { remember(it) { WatchClient.ui.value } } ?: live
-            WatchApp(state, onCommand = WatchClient::command, onVolume = WatchClient::setVolume, onGrantPermissions = { permissionRequest.launch(perms) }, tiles = WatchRuntime.tiles, ambient = tick != null)
+            WatchApp(state, onCommand = WatchClient::command, onVolume = WatchClient::setVolume, onGrantPermissions = { permissionRequest.launch(perms) }, tiles = WatchRuntime.tiles, ambient = tick != null, ambientStyle = aStyle, ambientTick = (tick ?: 0L) / 60_000)
         }
     }
 

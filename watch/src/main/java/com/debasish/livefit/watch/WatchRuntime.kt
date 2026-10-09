@@ -2,6 +2,7 @@ package com.debasish.livefit.watch
 
 import android.content.Context
 import android.util.Log
+import com.debasish.livefit.model.NodeCandidate
 import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
@@ -11,6 +12,7 @@ import com.debasish.livefit.sync.WatchExerciseController
 import com.debasish.livefit.sync.WatchRouteFile
 import com.debasish.livefit.sync.WatchSessionRecorder
 import com.debasish.livefit.watch.map.WatchTiles
+import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +44,7 @@ object WatchRuntime {
         app = context.applicationContext
         routes = WatchRouteFile(File(app.filesDir, "routes")).also { it.sweep() }
         recorder = WatchSessionRecorder(
-            File(app.filesDir, "lf-buffer"), Provenance.Live("galaxy-watch/health-services"), scope,
+            File(app.filesDir, "lf-buffer"), Provenance.Live(WatchProvenance.SOURCE), scope,
             send = { d -> send(WatchPaths.DELTA, Wire.encode(d).toByteArray()) },
             sendClaim = { c -> send(WatchPaths.CLAIM, Wire.encode(c).toByteArray()) },
             onFinalAcked = { id -> routes.markAcked(id) },
@@ -74,10 +76,20 @@ object WatchRuntime {
      */
     suspend fun send(path: String, bytes: ByteArray) {
         withTimeoutOrNull(SEND_TIMEOUT_MS) {
-            val nodes = Wearable.getNodeClient(app).connectedNodes.await()
-            check(nodes.isNotEmpty()) { "phone unreachable" }
-            nodes.forEach { Wearable.getMessageClient(app).sendMessage(it.id, path, bytes).await() }
+            val ids = phoneNodeIds()
+            check(ids.isNotEmpty()) { "phone unreachable" }
+            ids.forEach { Wearable.getMessageClient(app).sendMessage(it, path, bytes).await() }
         } ?: throw java.io.IOException("send to phone timed out")
+    }
+
+    /** `livefit_phone` nodes, nearby first; falls back to every connected node (phone build without the capability). */
+    private suspend fun phoneNodeIds(): List<String> {
+        val cap = runCatching {
+            Wearable.getCapabilityClient(app).getCapability(PhoneNodes.CAPABILITY, CapabilityClient.FILTER_REACHABLE).await().nodes
+                .map { NodeCandidate(it.id, it.displayName, it.isNearby) }
+        }.getOrDefault(emptyList())
+        if (cap.isNotEmpty()) return PhoneNodes.targets(cap, emptyList())
+        return PhoneNodes.targets(emptyList(), Wearable.getNodeClient(app).connectedNodes.await().map { it.id })
     }
 
     private const val SEND_TIMEOUT_MS = 10_000L

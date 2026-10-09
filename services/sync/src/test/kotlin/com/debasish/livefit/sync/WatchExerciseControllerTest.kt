@@ -35,6 +35,8 @@ class WatchExerciseControllerTest {
     private class FakeBackend : ExerciseBackend {
         var missing = emptyList<String>()
         var other: String? = null
+        var unsupported: String? = null
+        override suspend fun unsupportedReason(type: WorkoutType): String? = unsupported
         var pauseOk = true
         var endOk = true
         /** What reattach() answers after "process death": true = our exercise still runs, false = gone, null = unknown. */
@@ -102,6 +104,14 @@ class WatchExerciseControllerTest {
         assertTrue(results.single().ok)
         assertIs<SessionEvent.Started>(sent.single().events.single())
         assertEquals("s", c.activeSessionId)
+    }
+
+    @Test fun unsupportedExerciseTypeIsRefusedWithAReasonAndNeverStarts() = runTest {
+        val (b, c) = rig(FakeBackend().also { it.unsupported = "This watch can't track Cycle" }); runCurrent()
+        c.handle(req("r1", "s", ExerciseOp.Start(WorkoutType.Cycle)))
+        assertEquals(emptyList(), b.calls)
+        assertEquals(ExerciseError.Internal("This watch can't track Cycle"), results.single().error)
+        assertNull(c.activeSessionId)
     }
 
     @Test fun opsForAnotherSessionAreRejected() = runTest {

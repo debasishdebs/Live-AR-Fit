@@ -33,6 +33,8 @@ interface ExerciseBackend {
     fun locationGranted(): Boolean = true
     /** Exercise type name if another app currently owns an exercise, else null. */
     suspend fun otherAppTracking(): String?
+    /** Why this watch can't track [type] (e.g. "This watch can't track Cycle"), or null when it can; checked before start. */
+    suspend fun unsupportedReason(type: WorkoutType): String? = null
     suspend fun start(type: WorkoutType, useGps: Boolean): Boolean
     /** Each returns false when Health Services refused or failed — never swallowed. */
     suspend fun pause(): Boolean
@@ -213,6 +215,7 @@ class WatchExerciseController(
         val missing = backend.missingPermissions()
         if (missing.isNotEmpty()) return ExerciseError.PermissionMissing(missing)
         if (!force) backend.otherAppTracking()?.let { return ExerciseError.OtherAppTracking(it) }
+        backend.unsupportedReason(type)?.let { return ExerciseError.Internal(it) }
         val gpsOn = gps && backend.locationGranted()
         if (!backend.start(type, gpsOn)) return ExerciseError.SensorUnavailable
         detector.reset()

@@ -2,7 +2,7 @@ package com.debasish.livefit.watch
 
 /**
  * When the watch itself tries to bring the workout screen to the front (A3): the phone's RemoteActivityHelper launch
- * goes through Galaxy Wearable's JobScheduler and can lag by minutes, so a hub Start (while recording) and each new
+ * is delivered by the watch's companion app and can lag by minutes on some watches, so a hub Start (while recording) and each new
  * hub confirmation also raise it from the watch side. At most one raise per [throttleMs]. Pure.
  */
 class FrontLaunchPolicy(private val throttleMs: Long = 10_000) {

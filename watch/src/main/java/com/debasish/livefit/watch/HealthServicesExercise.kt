@@ -67,6 +67,10 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         WorkoutType.Walk, WorkoutType.Auto -> ExerciseType.WALKING
     }
 
+    override suspend fun unsupportedReason(type: WorkoutType): String? = runCatching {
+        ExerciseSupport.unsupportedReason(type, hsType(type), client.getCapabilitiesAsync().await().supportedExerciseTypes)
+    }.getOrNull() // can't tell: let start() try and report its own failure
+
     override suspend fun start(type: WorkoutType, useGps: Boolean): Boolean = runCatching {
         steps = 0; km = 0.0; kcal = 0.0; speed = null; lastPaused = null
         startedAfter = Instant.now().minusSeconds(1)
