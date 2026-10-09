@@ -25,9 +25,19 @@ First production release: phone and Wear OS apps on Google Play, glasses app on 
 ### Added
 
 - Prominent disclosures before the location, microphone and notification-access (music) requests, and a privacy
-  policy reachable from phone Settings → About and the watch's settings.
+  policy reachable from phone Settings → About and the watch's About page (ⓘ About on the Ready screen).
+- Hi Rokid control: an optional "LiveFit" agent for Rokid's Hi Rokid assistant (`rokid-agent/`), for example "Hi
+  Rokid, tell LiveFit to pause". The glasses app answers it on a loopback-only receiver (`127.0.0.1`), which is why it
+  now declares `INTERNET`; nothing leaves the glasses. Agent commands follow the same Settings → Voice rules and Stop
+  confirmation as voice.
+- A Wearable sender gate: the phone and the watch act only on messages from a node that advertises the other
+  LiveFit app's capability.
+- A `livefit://` entry guard on the watch: a link can only open the workout screen or show the pairing prompt; it
+  never starts, stops or takes over a workout.
 - A battery-optimisation banner with **Open settings**, replacing the direct exemption request.
 - A local crash log; phone Settings → About → **Share last crash** shares it manually.
+- CI on every push and pull request (unit tests and debug builds), and a tag release job that builds the signed
+  artifacts and gates them on a 16 KB page-size check, the glasses certificate and the Wear capabilities.
 - Apache-2.0 licence, third-party notices, glasses install guide.
 
 ### Removed

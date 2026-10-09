@@ -49,6 +49,12 @@ Releases) before the 1.0.0 release.**
 
 The Apache License of this repository does not cover the Rokid libraries.
 
+## Rokid Hi Rokid assistant (LiveFit agent)
+
+`rokid-agent/livefit` is an agent package for Rokid's Hi Rokid assistant. It bundles no third-party code; it runs
+inside Rokid's assistant runtime (the `wx` module it imports is provided by that runtime) under Rokid's terms. Voice
+requests to Hi Rokid are processed by Rokid; see [docs/privacy-policy.md](docs/privacy-policy.md).
+
 ## Open-source libraries
 
 From `./gradlew :phone:dependencies :watch:dependencies :glasses:dependencies --configuration releaseRuntimeClasspath`

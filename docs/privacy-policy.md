@@ -17,7 +17,8 @@ Contact: **d.kanhar@gmail.com**
 
 - There is **no account**, no sign-in, **no ads** and **no analytics**. There is no third-party crash-reporting SDK.
 - Live AR Fit has **no server of its own**. Your workouts, heart rate and routes stay on your own phone and watch.
-- Data moves only between your own phone, watch and glasses, plus map tile requests to MapTiler (see below).
+- Data moves only between your own phone, watch and glasses, plus map tile requests to MapTiler (see below). If you
+  use Rokid's Hi Rokid assistant to control Live AR Fit, Rokid processes what you say to it (see "Hi Rokid assistant").
 - Delete your workout history with **Clear history** on the phone; uninstall the apps to remove everything.
 
 ## What the apps use, and why
@@ -55,9 +56,25 @@ The in-app disclosure, word for word:
 > only after you tap Talk or when it asks you a yes/no question. Audio from the glasses' microphone travels to your
 > phone over the Rokid Bluetooth link. Audio is never uploaded or stored.
 
-Speech recognition uses Android's on-device recogniser and an offline language pack. If the pack is missing, voice
-commands stay off; there is no fallback to cloud recognition. This will not change: Live AR Fit does not and will not
-send your audio to a cloud speech service.
+Live AR Fit's own voice commands (the Talk button and its yes/no questions) use Android's on-device recogniser and an
+offline language pack. If the pack is missing, these voice commands stay off; there is no fallback to cloud
+recognition. This will not change: Live AR Fit itself does not and will not send your audio to a cloud speech service.
+This covers Live AR Fit's own listening only, not Rokid's Hi Rokid assistant (next section).
+
+### Hi Rokid assistant (optional)
+
+You can also control Live AR Fit through Rokid's own voice assistant, for example "Hi Rokid, tell LiveFit to pause",
+using the optional "LiveFit" agent for Hi Rokid.
+
+- What you say to Hi Rokid is heard and processed by **Rokid's assistant, not by Live AR Fit**. Rokid's privacy terms
+  apply to it; Live AR Fit never receives that audio or its transcript.
+- The LiveFit agent passes only the **command name** (for example `pause` or `next`) to the Live AR Fit glasses app,
+  on the glasses themselves (`127.0.0.1`).
+- This is why the glasses app declares the `INTERNET` permission: Android requires it for any network socket, even one
+  that never leaves the device. The glasses app uses it **only** for that local receiver, which accepts connections
+  from the glasses themselves only. It does not connect to the internet, and Live AR Fit sends nothing to any server.
+- The command then takes the same path as a glasses touchpad command, over the Rokid Bluetooth link to your phone.
+  Nothing about it is stored.
 
 ### Music details (YouTube Music control)
 
@@ -77,7 +94,10 @@ Music details are not stored.
 ## How data travels between your devices
 
 - **Phone and glasses:** over the Rokid CXR Bluetooth link, set up through Rokid's Hi Rokid app. The glasses receive
-  your live stats, the map image, music details and settings, and send gestures and microphone audio to the phone.
+  your live stats, the map image, music details and settings, and send gestures, Hi Rokid agent commands and
+  microphone audio to the phone.
+- **Inside the glasses:** the optional Hi Rokid LiveFit agent hands its command name to the glasses app over a local
+  connection (`127.0.0.1`) that never leaves the glasses (see "Hi Rokid assistant" above).
 - **Phone and watch:** in the words of the app:
 
   > Between your phone and watch, data travels over the Wear OS Data Layer: Bluetooth when the watch is nearby. When

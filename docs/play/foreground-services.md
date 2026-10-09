@@ -60,8 +60,9 @@ workout, and must continue when the user turns the screen off and puts the phone
 
 **Recording script (under 30 s):**
 
-1. Open Live AR Fit on the phone; the location disclosure is shown first, then the system permission prompt
-   ("While using the app").
+1. Open Live AR Fit on the phone and go to Settings → Permissions → **Location** (or, during setup, the map fallback
+   step → **Allow location**). The location disclosure is shown first, then the system permission prompt ("While using
+   the app").
 2. Settings: **Use GPS outdoors** is on. Tap **Start workout** (Run).
 3. Show the watch without a GPS fix (for example indoors or with watch location off): the phone takes over the route.
 4. Pull down the notification shade: the "Live AR Fit" notification is visible.

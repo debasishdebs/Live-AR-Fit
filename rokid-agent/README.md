@@ -29,7 +29,7 @@ Because the hub can still refuse a command, the card only confirms delivery, for
 workout". Problems the glasses already know about are said directly:
 
 - phone not connected;
-- "Update LiveFit on your phone";
+- "Update LiveFit on your phone and glasses so versions match";
 - page turned off;
 - map without a GPS workout.
 
@@ -40,7 +40,7 @@ npx -p @yodaos-pkg/aix-cli aix pack rokid-agent/livefit -o /tmp/livefit.aix   # 
 npx -p @yodaos-pkg/aix-cli aix show rokid-agent/livefit                       # effective agent definition
 ```
 
-- `livefit/.aix/agent-id` holds the development agent id (`develop.rokid.agent.<uuid>`). It is committed so that
+- `livefit/.aix/agent-id` holds the development agent id, a bare UUID. It is committed so that
   reinstalls update the same dev agent. AIUI Studio assigns the store id when you publish.
 - Do not commit `.aix` packages.
 
@@ -59,18 +59,24 @@ npx -p @yodaos-pkg/aix-cli aix device --serial $G                       # read-o
 npx -p @yodaos-pkg/aix-cli aix device set-dev --serial $G               # developer mode on (reloads widgets)
 npx -p @yodaos-pkg/aix-cli aix install rokid-agent/livefit --serial $G
 npx -p @yodaos-pkg/aix-cli aix launch-page rokid-agent/livefit pages/command/index --card --params '{"command":"pause"}' --serial $G
-adb -s $G logcat -d | grep -E "LiveFitAgent|\[LiveFit\]"
+adb -s $G logcat -d | grep -E "LiveFitAgent|\[LiveFit\]"            # LiveFitAgent lines: debug glasses builds only
 npx -p @yodaos-pkg/aix-cli aix device unset-dev --serial $G             # undo developer mode
 ```
+
+The glasses app's `LiveFitAgent` log lines use `Log.i`, which release builds strip. With a release glasses APK, check
+the result on the card (or with curl below) instead; the agent page's own `[LiveFit]` lines are not affected.
 
 To test the receiver without the agent, forward the port and use curl from the Mac:
 
 ```bash
 adb -s $G forward tcp:47123 tcp:47123
-curl -s 'http://127.0.0.1:47123/lf?cmd=stats'    # {"ok":true,"say":"Showing stats"}
+curl -s 'http://127.0.0.1:47123/lf?cmd=stats'    # {"ok":true,"say":"Sent to LiveFit: stats view"}
 curl -s 'http://127.0.0.1:47123/lf?cmd=dance'    # 400 {"ok":false,"say":"I can't do that in LiveFit yet"}
 adb -s $G forward --remove tcp:47123
 ```
+
+The receiver refuses (403) a request whose `Host` header is not `127.0.0.1:47123` or `localhost:47123`, so a web page
+that rebinds its own host name to 127.0.0.1 can't drive it. It sends no CORS header.
 
 Voice routing ("Hi Rokid, tell LiveFit to …") does not work for draft agents. It needs Rokid's review. Until then,
 test with `launch-page`.
@@ -96,4 +102,7 @@ test with `launch-page`.
 - [ ] Before submitting:
   - Check on a real device that every command works.
   - Check that the "app not open" card appears and the page closes itself.
+  - With the app open, check that the card shows the app's reply (for example "Sent to LiveFit: pause workout"). The
+    receiver sends no CORS header; if the assistant runtime enforces CORS, the card would wrongly say the app isn't open.
   - Check that the declared permissions match the code (`INTERNET` only).
+- [ ] Privacy policy link: `docs/privacy-policy.md` as published (its "Hi Rokid assistant" section covers the agent).

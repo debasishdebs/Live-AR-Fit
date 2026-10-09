@@ -41,6 +41,10 @@ Modules:
 - `services/*`: one module per service: `workout`, `sync`, `glasses-link`, `watch-link`, `music`, `voice`,
   `voice-android`, `confirm`, `history`.
 - Three apps: `phone`, `watch`, `glasses`.
+- `rokid-agent/`: the optional "LiveFit" agent for Rokid's Hi Rokid assistant. It runs on the glasses and passes the
+  command name to the glasses app's loopback-only receiver (`127.0.0.1:47123`); the glasses app's `INTERNET`
+  permission is used only for that receiver. See [rokid-agent/README.md](rokid-agent/README.md).
+- `tools/release/`: release checks (16 KB page size, Wear capabilities in the shrunk bundles) and their tests.
 
 The phone and watch share the application ID `com.livear.fit` (one Google Play listing, and required by the Data
 Layer). The Kotlin packages stay `com.debasish.livefit.*`.
@@ -156,8 +160,12 @@ git tag v1.0.0 && git push origin v1.0.0
 ```
 
 The job builds the signed artifacts, checks the glasses APK's certificate against `LIVEAR_UPLOAD_CERT_SHA256`, runs the
-16 KB check, and creates a **draft** GitHub Release with the glasses APK and `SHA256SUMS.txt`. The phone and watch AABs
-are a workflow artifact; download them from the workflow run and upload them to Play Console.
+16 KB check and the Wear capability check (`android_wear_capabilities` must survive resource shrinking in both AABs),
+and creates a **draft** GitHub Release with the glasses APK and `SHA256SUMS.txt`. The phone and watch AABs are a
+workflow artifact; download them from the workflow run and upload them to Play Console.
+
+The secrets reach only the secret check and the Gradle build step, the decoded keystore is deleted right after the
+build (also when it fails), and every action is pinned to a commit SHA.
 
 ## Installing
 

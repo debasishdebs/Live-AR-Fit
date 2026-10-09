@@ -70,11 +70,6 @@ A prominent disclosure (`Disclosures.MUSIC`) comes before the app sends the user
 
 No background-health permissions and no `ACCESS_BACKGROUND_LOCATION`.
 
-**Note for review:** the watch's merged manifest also contains the music module's `MediaListener`
-(`NotificationListenerService`), because the watch depends on `:services:music`. The watch never asks for
-notification access. Consider removing it from the watch manifest (`tools:node="remove"`) before 1.0.0 so the Wear
-build does not declare a notification listener.
-
 ### Removed for 1.0.0
 
 | Permission | Replacement |
