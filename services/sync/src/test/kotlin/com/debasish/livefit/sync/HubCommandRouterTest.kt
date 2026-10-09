@@ -5,6 +5,7 @@ import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.Confirmation
 import com.debasish.livefit.model.ConfirmationKind
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.NowPlaying
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.WorkoutSnapshot
@@ -155,5 +156,22 @@ class HubCommandRouterTest {
         runCurrent()
         assertEquals(listOf(DeviceKind.Watch, DeviceKind.Glasses, null), origins)
         assertEquals(listOf("origin:Watch", "start:Walk", "origin:Glasses", "start:Run", "origin:null", "start:Cycle", "next"), calls)
+    }
+
+    /** Spec §5: a disabled page explains itself and is not shown; voice page commands move the glasses only. */
+    @Test fun disabledPageIsNotShownAndExplains() = runTest {
+        val shown = mutableListOf<HudPage>()
+        val r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = { toasts += it }, showGlassesPage = { shown += it }, pageEnabled = { it != HudPage.Map })
+        r.dispatchVoice(Command.ShowGlassesPage(HudPage.Map))
+        r.dispatchVoice(Command.ShowGlassesPage(HudPage.MusicControls))
+        assertEquals(listOf(HudPage.MusicControls), shown)
+        assertEquals(listOf("Map page is turned off in Settings", "Music controls view"), toasts)
+    }
+
+    @Test fun startStillLandsOnWorkoutWhateverThePageSettings() = runTest {
+        val shown = mutableListOf<HudPage>()
+        val r = HubCommandRouter(workout, music, confirm, backgroundScope, toast = { toasts += it }, showGlassesPage = { shown += it }, pageEnabled = { false })
+        r.dispatch(env("s1", Command.StartWorkout(WorkoutType.Run)))
+        assertEquals(listOf(HudPage.Workout), shown)
     }
 }

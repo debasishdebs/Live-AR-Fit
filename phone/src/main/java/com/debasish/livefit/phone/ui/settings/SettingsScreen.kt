@@ -116,7 +116,7 @@ fun SettingsScreen(
         }
         SectionLabel("Workout")
         Group {
-            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Run, Cycle, Auto", onClick = { services.settings.setGpsOutdoors(!gps) },
+            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipMint, "Use GPS outdoors", "Walk, Run, Cycle, Auto · live map", onClick = { services.settings.setGpsOutdoors(!gps) },
                 trailing = { Switch(gps, null) })
         }
         SectionLabel("Data")

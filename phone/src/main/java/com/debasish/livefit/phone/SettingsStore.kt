@@ -2,7 +2,15 @@ package com.debasish.livefit.phone
 
 import android.content.Context
 import com.debasish.livefit.model.DeviceKind
+import com.debasish.livefit.model.Gesture
+import com.debasish.livefit.model.GestureAction
+import com.debasish.livefit.model.GestureChange
+import com.debasish.livefit.model.GestureMode
+import com.debasish.livefit.model.GestureRules
+import com.debasish.livefit.model.GestureSettings
+import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.HudSettings
+import com.debasish.livefit.model.PageSettings
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.music.MusicOnStart
 import com.debasish.livefit.services.music.QueueWindowing
@@ -75,6 +83,28 @@ class SettingsStore(context: Context) {
         val next = VoiceCommandGroup.withEnabled(_disabledVoiceGroups.value, group, enabled)
         _disabledVoiceGroups.value = next; prefs.edit().putString("disabledVoiceGroups", VoiceCommandGroup.encode(next)).apply()
     }
+
+    /** Settings → Pages (spec §3.2): one switch per page, shared by glasses and watch. */
+    private val _pages = pref("pages", PageSettings()) { runCatching { Wire.decode<PageSettings>(it) }.getOrNull() }
+    val pages: StateFlow<PageSettings> = _pages
+    fun setPageEnabled(page: HudPage, enabled: Boolean) {
+        if (page == HudPage.Workout) return // can't be disabled
+        val d = _pages.value.disabled
+        val next = PageSettings(if (enabled) d - page else d + page)
+        _pages.value = next; prefs.edit().putString("pages", Wire.encode(next)).apply()
+    }
+
+    /** Settings → Glasses gestures (spec §4.4); stored tables are re-validated on load. */
+    private val _gestures = pref("gestures", GestureSettings()) { runCatching { GestureRules.sanitized(Wire.decode<GestureSettings>(it)) }.getOrNull() }
+    val gestures: StateFlow<GestureSettings> = _gestures
+    private fun saveGestures(g: GestureSettings) { _gestures.value = g; prefs.edit().putString("gestures", Wire.encode(g)).apply() }
+
+    /** Refused changes (no Close app / no page move left on a page) are returned with the reason and not saved. */
+    fun changeGesture(mode: GestureMode, page: HudPage, gesture: Gesture, action: GestureAction): GestureChange =
+        GestureRules.change(_gestures.value, mode, page, gesture, action).also { if (it is GestureChange.Applied) saveGestures(it.settings) }
+    fun setIdleTimeout(seconds: Int) = saveGestures(GestureRules.withIdleTimeout(_gestures.value, seconds))
+    fun setAskBeforeClose(on: Boolean) = saveGestures(_gestures.value.copy(askBeforeClose = on))
+    fun resetGestures() = saveGestures(GestureSettings())
 
     private val _setupDone = MutableStateFlow(prefs.getBoolean("setupDone", false))
     val setupDone: StateFlow<Boolean> = _setupDone

@@ -15,6 +15,7 @@ import com.debasish.livefit.model.LinkState
 import com.debasish.livefit.model.PageRequest
 import com.debasish.livefit.model.QueueFrame
 import com.debasish.livefit.model.StateFrame
+import com.debasish.livefit.model.WatchSettingsFrame
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
@@ -22,6 +23,7 @@ import com.debasish.livefit.services.GlassesEvent
 import com.debasish.livefit.services.GlassesLinkService
 import com.debasish.livefit.services.HistoryStore
 import com.debasish.livefit.services.MusicService
+import com.debasish.livefit.services.RouteStore
 import com.debasish.livefit.services.VoiceService
 import com.debasish.livefit.services.WatchExerciseGateway
 import com.debasish.livefit.services.WatchLinkService
@@ -66,7 +68,10 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val clock = Clock { System.currentTimeMillis() }
     val settings = SettingsStore(app)
-    val history: HistoryStore = RoomSessionStore(HistoryDatabase.shared(app))
+    private val room = RoomSessionStore(HistoryDatabase.shared(app))
+    val history: HistoryStore = room
+    /** Route points per session (spec §2.2); history detail draws them. */
+    val routes: RouteStore = room
     val confirm = DefaultConfirmationService(clock)
 
     // ---- Service bindings: one line each, so later tasks flip them independently ----
@@ -80,13 +85,14 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     // ---- end bindings ----
 
     val workout = HubWorkoutService(scope, watchGateway, history, confirm, clock,
-        gpsFor = { type -> type != WorkoutType.Walk && settings.gpsOutdoors.value })
+        gpsFor = { settings.gpsOutdoors.value })
 
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast
     private val watchLaunch = WatchLaunchPolicy()
     val router = HubCommandRouter(workout, music, confirm, scope, toast = ::flash, onStartRequested = watchLaunch::onStartRequested,
-        showGlassesPage = { page -> scope.launch { glasses.pushPage(PageRequest(page = page)) } })
+        showGlassesPage = { page -> scope.launch { glasses.pushPage(PageRequest(page = page)) } },
+        pageEnabled = { settings.pages.value.isEnabled(it) })
     /** Voice commands pass Settings → Voice → Voice commands first (P3). */
     private val voiceGate = VoiceCommandGate(disabled = { settings.disabledVoiceGroups.value }, toast = ::flash, dispatch = router::dispatchVoice)
 
@@ -155,11 +161,20 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
                 }
             }
         }
-        // HUD settings: on change and whenever the glasses (re)connect.
+        // HUD settings (+ pages and gestures, spec §3.2/§4.4): on change and whenever the glasses (re)connect.
         scope.launch {
-            combine(settings.hud, glasses.status) { hud, st -> hud to st.link }
-                .distinctUntilChanged()
-                .collect { (hud, link) -> if (link == LinkState.Connected) glasses.pushSettings(HudSettingsFrame(settings = hud)) }
+            combine(settings.hud, settings.pages, settings.gestures, glasses.status) { hud, pages, gestures, st ->
+                HudSettingsFrame(settings = hud, pages = pages, gestures = gestures) to st.link
+            }.distinctUntilChanged().collect { (frame, link) -> if (link == LinkState.Connected) glasses.pushSettings(frame) }
+        }
+        // Watch: the page set and the queue window, on change and whenever the watch (re)connects (spec §3.2, §6).
+        scope.launch {
+            combine(settings.pages, watch.status) { p, st -> p to st.link }.distinctUntilChanged()
+                .collect { (p, link) -> if (link == LinkState.Connected) watch.pushSettings(WatchSettingsFrame(pages = p)) }
+        }
+        scope.launch {
+            combine(music.queue, watch.status) { q, st -> q to st.link }.distinctUntilChanged()
+                .collect { (q, link) -> if (link == LinkState.Connected) watch.pushQueue(QueueFrame(window = q)) }
         }
         // Glasses music screen: the queue window only when it changes, and again whenever the glasses (re)connect.
         scope.launch {
