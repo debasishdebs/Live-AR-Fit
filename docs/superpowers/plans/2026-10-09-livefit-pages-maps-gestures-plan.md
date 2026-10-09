@@ -30,6 +30,15 @@ Addresses all 12 findings of `reviews/2026-10-09-pages-maps-plan-review.md` (pla
 | 12 | Task 12 uses `:core:map` without depending on Task 9 | `api(project(":core:map"))` on `:services:sync` moved to Task 2; index/lanes updated | 2, 9, index |
 | — | Early raw-PNG-over-CXR check | Device check D1 (Task 22 Step 9) with the `map_probe` debug command (Task 15); decides `MAP_AS_BASE64` before Task 23 | 15, 22, 25 |
 
+## Revision 3 (review r2 2026-10-09)
+
+Addresses `reviews/2026-10-09-pages-maps-plan-review-r2.md` (revision commit e46e0b8):
+
+| # | Finding | Resolution | Tasks |
+|---|---|---|---|
+| r2-1 | Queued tile loads run after the view changed; async render re-shows tiles | A tile job re-checks visibility after it gets a slot (queued obsolete loads never start, newest viewport gets the slots); `TileLoader.hide()` bumps a visibility generation, the renderer captures it on Main before going async and `show(…, generation)` from an obsolete render is ignored; ServiceGraph and the watch clear visibility with `hide()` | 8, 12, 18 |
+| r2-2 | Future-rejected fix accepted again by history and later rebuilds | `RouteFix`/`route_point` gain `receivedAtMs` (first receipt, kept by insert-or-ignore); `point()`/`historyPoint()` reject a phone time > 2 min after receipt, so rejection survives normalization, restarts, time passing and history; the old test that let history accept such a point now asserts the opposite | 3, 12, 13, 14, 20 |
+
 ## Global Constraints
 
 - Build with JDK 17: prefix every Gradle command with `export JAVA_HOME=$(/usr/libexec/java_home -v 17) &&`.
@@ -44,7 +53,7 @@ Addresses all 12 findings of `reviews/2026-10-09-pages-maps-plan-review.md` (pla
 - **Phone fallback:** starts when no usable-live watch fix for **15 s** during a GPS workout; stops when watch fixes have been usable-live continuously for **10 s of observed (arrival) time**; while both are usable-live, watch fixes win. Fallback benefits glasses and history only; the watch map always uses its own fixes.
 - **Clock calibration:** on every watch connect/reconnect and **every 5 min**: offset = `tw − (t0 + t1)/2`, accepted only if **RTT `t1 − t0` ≤ 1 s**, else retried **up to 5 tries**. Until a sync succeeded in the current phone process, watch fixes are recorded but never live.
 - **Route merge:** points sorted by `fixTimeMs`; drop `accuracyM > 30`; drop a point **< 3 m** from its chronological neighbour of the same source; duplicates = same source + same `fixTimeMs` (**±50 ms**) + same position (**±1 m**); phone points within **±5 s** of a watch point hidden from the drawn route (kept in storage); points **> 2 min** in the future rejected; ties break watch-first.
-- **Storage:** Room `route_point(sessionId, fixTimeMs, source, lat, lon, accuracyM)` with unique key `(sessionId, source, fixTimeMs)` — `fixTimeMs` is the measuring device's clock (identity, never changed) plus a nullable `phoneTimeMs` (ordering; null until calibrated, rewritten on calibration). A stored delta's route rows are written in the delta's transaction; Discarded/Cleared tombstones block route rows.
+- **Storage:** Room `route_point(sessionId, fixTimeMs, source, lat, lon, accuracyM)` with unique key `(sessionId, source, fixTimeMs)` — `fixTimeMs` is the measuring device's clock (identity, never changed) plus a nullable `phoneTimeMs` (ordering; null until calibrated, rewritten on calibration). A stored delta's route rows are written in the delta's transaction; Discarded/Cleared tombstones block route rows. Each row also keeps `receivedAtMs` (first receipt, phone clock): a row whose phone time is > 2 min after its receipt is never drawn, live or in history.
 - **Map math:** Web-Mercator slippy tiles, north-up, centred on the current position, **zoom 18 default (~270 m across 480 px at latitude 20°; ~1.08 km at zoom 16), zoom 17 for Cycle**; watch bezel zoom **14–18**.
 - **Tiles:** `https://tile.openstreetmap.org/{z}/{x}/{y}.png`, app-specific User-Agent, attribution **"© OpenStreetMap contributors" always visible**, disk LRU cache **50 MB phone / 20 MB watch**, the server's cache lifetime honoured (max-age, else Expires; **7 days only when the server sends neither**), expired tiles revalidated with `If-None-Match`/`If-Modified-Since` (304 keeps the bytes), no prefetch beyond the visible **3×3** tiles, provider behind a `TileSource` interface. Rendering never waits for a tile; missing visible tiles load in the background and are retried while visible.
 - **Glasses map image:** **480×480** PNG, target **≤ 40 KB**, HUD palette (black background, streets dim green, water/park dropped, bright route, arrow, start marker, scale bar, attribution). Sent on `lf_map` **only while the glasses report the Map page visible**; cadence **every 3 s or after ≥ 25 m movement, never more than 1/s**; each image carries `{sessionId, renderEpoch, renderSeq}`; new random `renderEpoch` at phone process start and on every glasses (re)connect, announced first (epoch header, no image). Offline → "No map — route only".
@@ -903,8 +912,8 @@ git commit -m "feat(map): :core:map module with slippy-tile math and viewport"
 - Consumes: `FixSource`, `LocationFix`, `WorkoutType` (Task 1).
 - Produces:
   - `object FixQuality { MAX_ACCURACY_M = 30f; fun accurate(accuracyM: Float?): Boolean }` — **the one accuracy rule** (route filter and usable-live on phone and watch): `null` (unknown) is never accurate (review #8).
-  - `@Serializable data class RouteFix(source: FixSource, lat: Double, lon: Double, accuracyM: Float, deviceTimeMs: Long, phoneTimeMs: Long?, bearingDeg: Float? = null) { fun point(): RoutePoint?; fun historyPoint(): RoutePoint }` — one durable `route_point` row: identity `(source, deviceTimeMs)`, `phoneTimeMs` null while uncalibrated (review #1/#2). `point()` is null until it has a phone time; `historyPoint()` falls back to device time (history display only).
-  - `fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?): RouteFix?` — null unless `FixQuality.accurate(accuracyM)`.
+  - `@Serializable data class RouteFix(source: FixSource, lat: Double, lon: Double, accuracyM: Float, deviceTimeMs: Long, phoneTimeMs: Long?, receivedAtMs: Long, bearingDeg: Float? = null) { fun point(): RoutePoint?; fun historyPoint(): RoutePoint? }` — one durable `route_point` row: identity `(source, deviceTimeMs)`, `phoneTimeMs` null while uncalibrated (review #1/#2), `receivedAtMs` = phone time when the phone first received the fix (kept by insert-or-ignore). `point()` is null until it has a phone time **or when that time is > 2 min after receipt** (durable future rejection, review r2 #2); `historyPoint()` applies the same rule to `phoneTimeMs ?: deviceTimeMs` (history display only).
+  - `fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?, receivedAtMs: Long): RouteFix?` — null unless `FixQuality.accurate(accuracyM)`.
   - `object Geo { fun distanceM(lat1, lon1, lat2, lon2): Double; fun bearingDeg(lat1, lon1, lat2, lon2): Float }`
   - `@Serializable data class RoutePoint(source: FixSource, lat: Double, lon: Double, accuracyM: Float, deviceTimeMs: Long, fixTimeMs: Long, bearingDeg: Float? = null)` — `deviceTimeMs` = the measuring device's clock, `fixTimeMs` = phone time used for ordering.
   - `enum class RouteAdd { Added, Inaccurate, TooClose, Duplicate, Future }`
@@ -1021,27 +1030,41 @@ class RouteTrackTest {
         assertFalse(FixQuality.accurate(null))
         assertTrue(FixQuality.accurate(30f))
         assertFalse(FixQuality.accurate(30.01f))
-        assertNull(LocationFix(lat0, lon0, null, null, 1_000).toRouteFix(FixSource.Watch, 1_000))
-        assertNull(LocationFix(lat0, lon0, 31f, null, 1_000).toRouteFix(FixSource.Watch, 1_000))
+        assertNull(LocationFix(lat0, lon0, null, null, 1_000).toRouteFix(FixSource.Watch, 1_000, receivedAtMs = 1_000))
+        assertNull(LocationFix(lat0, lon0, 31f, null, 1_000).toRouteFix(FixSource.Watch, 1_000, receivedAtMs = 1_000))
     }
 
     /** Review #2: an uncalibrated row keeps its device-time identity and takes no part in ordering until it has a phone time. */
     @Test fun routeFixWithoutPhoneTimeIsNotARoutePointYet() {
-        val f = assertNotNull(LocationFix(lat0, lon0, 5f, 90f, 7_000).toRouteFix(FixSource.Watch, phoneTimeMs = null))
+        val f = assertNotNull(LocationFix(lat0, lon0, 5f, 90f, 7_000).toRouteFix(FixSource.Watch, phoneTimeMs = null, receivedAtMs = 7_500))
         assertEquals(7_000L, f.deviceTimeMs)
         assertNull(f.point())
         val mapped = assertNotNull(f.copy(phoneTimeMs = 2_000).point())
         assertEquals(2_000L, mapped.fixTimeMs)
         assertEquals(7_000L, mapped.deviceTimeMs, "identity unchanged by calibration")
         assertEquals(90f, mapped.bearingDeg)
-        assertEquals(7_000L, f.historyPoint().fixTimeMs, "history fallback: device time")
+        assertEquals(7_000L, assertNotNull(f.historyPoint()).fixTimeMs, "history fallback: device time")
+        assertEquals(7_500L, f.copy(phoneTimeMs = 2_000).receivedAtMs, "receipt time survives normalization")
     }
 
-    /** Review #2: a rebuild after calibration applies the future check with the real clock; history (no clock) never does. */
-    @Test fun ofWithNowRejectsOnlyFuturePoints() {
+    /**
+     * Review r2 #2: a calibrated fix more than 2 min after its receipt time is invalid durably — in every rebuild, after
+     * time has passed, and in history. A legitimate uncalibrated fix from a watch whose clock is 3 min ahead is invalid
+     * only until normalization puts it at its real time.
+     */
+    @Test fun receiptTimeMakesFutureRejectionDurable() {
+        val ahead = assertNotNull(LocationFix(lat0, lon0, 5f, null, 900_000).toRouteFix(FixSource.Watch, phoneTimeMs = 900_000, receivedAtMs = 700_000))
+        assertNull(ahead.point(), "200 s after receipt")
+        assertNull(ahead.historyPoint(), "and not in history, however much later it is rendered")
+        assertNotNull(ahead.copy(phoneTimeMs = 819_000).point(), "within 2 min of receipt")
+        val raw = assertNotNull(LocationFix(lat0, lon0, 5f, null, 880_000).toRouteFix(FixSource.Watch, phoneTimeMs = null, receivedAtMs = 700_000))
+        assertNull(raw.point())
+        assertEquals(700_000L, assertNotNull(raw.copy(phoneTimeMs = 880_000 - 180_000).point()).fixTimeMs, "valid once normalized")
+    }
+
+    @Test fun ofWithNowRejectsFuturePoints() {
         val pts = listOf(p(FixSource.Watch, now + 200_000, 0.0), p(FixSource.Watch, now - 1_000, 10.0))
         assertEquals(listOf(now - 1_000), RouteTrack.of(pts, now).points.map { it.fixTimeMs })
-        assertEquals(2, RouteTrack.of(pts).points.size)
     }
 
     @Test fun ofRestoresStoredPointsWhateverTheirAge() {
@@ -1113,7 +1136,9 @@ object FixQuality {
 /**
  * One durable route row (route_point, spec §2.2). Identity = ([source], [deviceTimeMs]) on the measuring device's clock and
  * never changes; [phoneTimeMs] is the calibrated phone time — null while the watch clock is uncalibrated, rewritten when a
- * (re-)calibration normalizes the session (review #2). Only accurate fixes become rows.
+ * (re-)calibration normalizes the session (review #2); [receivedAtMs] is the phone time the fix was first received, never
+ * rewritten, so "more than 2 min in the future" is judged against receipt in every rebuild and in history (review r2 #2).
+ * Only accurate fixes become rows.
  */
 @Serializable
 data class RouteFix(
@@ -1123,19 +1148,23 @@ data class RouteFix(
     val accuracyM: Float,
     val deviceTimeMs: Long,
     val phoneTimeMs: Long?,
+    val receivedAtMs: Long,
     val bearingDeg: Float? = null,
 ) {
-    /** The ordered point once it has a phone time; uncalibrated rows stay out of ordering, overlap and future checks. */
-    fun point(): RoutePoint? = phoneTimeMs?.let { RoutePoint(source, lat, lon, accuracyM, deviceTimeMs, it, bearingDeg) }
+    /** The ordered point once it has a phone time that is not > 2 min after receipt; uncalibrated rows stay out of ordering. */
+    fun point(): RoutePoint? = phoneTimeMs?.let(::pointAt)
 
-    /** History display only (a finished session whose rows were never normalized falls back to device time). */
-    fun historyPoint(): RoutePoint = RoutePoint(source, lat, lon, accuracyM, deviceTimeMs, phoneTimeMs ?: deviceTimeMs, bearingDeg)
+    /** History display only: a never-normalized row falls back to device time; the receipt-time rule still applies. */
+    fun historyPoint(): RoutePoint? = pointAt(phoneTimeMs ?: deviceTimeMs)
+
+    private fun pointAt(t: Long): RoutePoint? =
+        if (t - receivedAtMs > RouteTrack.MAX_FUTURE_MS) null else RoutePoint(source, lat, lon, accuracyM, deviceTimeMs, t, bearingDeg)
 }
 
-/** A route row for this fix, or null when its accuracy is unknown or worse than 30 m. */
-fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?): RouteFix? {
+/** A route row for this fix (received by the phone at [receivedAtMs]), or null when its accuracy is unknown or worse than 30 m. */
+fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?, receivedAtMs: Long): RouteFix? {
     val acc = accuracyM?.takeIf { FixQuality.accurate(it) } ?: return null
-    return RouteFix(source, lat, lon, acc, fixTimeMs, phoneTimeMs, bearingDeg)
+    return RouteFix(source, lat, lon, acc, fixTimeMs, phoneTimeMs, receivedAtMs, bearingDeg)
 }
 
 enum class RouteAdd { Added, Inaccurate, TooClose, Duplicate, Future }
@@ -2414,7 +2443,7 @@ git commit -m "feat(map): map scene builder, HUD palette conversion and glasses 
   - `data class TileMeta(expiresAtMs: Long, etag: String? = null, lastModified: String? = null)`
   - `class TileDiskCache(dir: File, maxBytes: Long, nowMs: () -> Long = System::currentTimeMillis) { class Entry(bytes: ByteArray, fresh: Boolean, meta: TileMeta); fun get(tile): Entry?; fun put(tile, bytes, meta: TileMeta); fun refresh(tile, meta: TileMeta): Boolean; fun sizeBytes(): Long; companion { PHONE_MAX_BYTES = 50 MB; WATCH_MAX_BYTES = 20 MB; FALLBACK_LIFETIME_MS = 7 days } }`
   - `class HttpTileFetcher(source: TileSource, cache: TileDiskCache, nowMs: () -> Long = System::currentTimeMillis, open: (URL) -> HttpURLConnection = …, timeoutMs: Int = 5_000, retryAfterFailureMs: Long = 30_000) { fun fetch(tile: TileId): ByteArray? /* blocking: call on an IO thread */; companion { fun lifetimeMs(cacheControl: String?, expires: String?, date: String?, nowMs: Long): Long } }` — server lifetime honoured (max-age, else Expires − Date), 7 days only when neither header is present; an expired entry is revalidated with `If-None-Match` / `If-Modified-Since`; `304` keeps the bytes and refreshes the metadata.
-  - `class TileLoader<T : Any>(scope: CoroutineScope, load: suspend (TileId) -> T?, maxConcurrent: Int = 4, retryEveryMs: Long = 5_000, maxCached: Int = 30, log: (String) -> Unit = {}) { val tiles: StateFlow<Map<TileId, T>>; fun show(visible: Collection<TileId>); fun start(): Job }` — `show` never waits; each missing visible tile loads on its own (at most `maxConcurrent` at once, slot released in `finally`); `start()` re-requests still-missing **visible** tiles every `retryEveryMs` (the fetcher's 30 s backoff decides whether the network is hit). Used by the phone renderer (Task 18) and the watch (Task 12).
+  - `class TileLoader<T : Any>(scope: CoroutineScope, load: suspend (TileId) -> T?, maxConcurrent: Int = 4, retryEveryMs: Long = 5_000, maxCached: Int = 30, log: (String) -> Unit = {}) { val tiles: StateFlow<Map<TileId, T>>; val generation: Long; val visibleTiles: Set<TileId>; fun show(visible: Collection<TileId>, generation: Long? = null); fun hide(); fun start(): Job }` — `show` never waits; a job re-checks visibility after it gets a slot, so loads queued for tiles that left the view never start; `hide()` clears visibility and bumps `generation`, and a `show` carrying an older generation is ignored, so an in-flight render cannot reinstate tiles (review r2 #1); each missing visible tile loads on its own (at most `maxConcurrent` at once, slot released in `finally`); `start()` re-requests still-missing **visible** tiles every `retryEveryMs` (the fetcher's 30 s backoff decides whether the network is hit). Used by the phone renderer (Task 18) and the watch (Task 12).
 
 - [ ] **Step 1: Coroutines for `:core:map`** — in `core/map/build.gradle.kts` replace the `dependencies { … }` block with:
 
@@ -2717,6 +2746,50 @@ class TileLoaderTest {
         assertEquals("ok", loader.tiles.value[a])
     }
 
+    /** Review r2 #1: loads queued behind a slow one never start once the map is closed. */
+    @Test fun queuedLoadsDoNotStartAfterTheMapCloses() = runTest {
+        val started = mutableListOf<TileId>()
+        val release = CompletableDeferred<Unit>()
+        val loader = TileLoader(backgroundScope, load = { t: TileId -> started += t; release.await(); "x" }, maxConcurrent = 1)
+        val tiles = (0 until 9).map { TileId(18, it, 0) }
+        loader.show(tiles); runCurrent()
+        assertEquals(listOf(tiles[0]), started)
+        loader.hide()
+        release.complete(Unit); runCurrent()
+        assertEquals(listOf(tiles[0]), started, "the 8 queued loads were dropped")
+        assertTrue(loader.visibleTiles.isEmpty())
+    }
+
+    /** Review r2 #1: after several viewport changes the free slots go to the newest viewport only. */
+    @Test fun theNewestViewportGetsTheSlots() = runTest {
+        val started = mutableListOf<TileId>()
+        val release = CompletableDeferred<Unit>()
+        val loader = TileLoader(backgroundScope, load = { t: TileId -> started += t; release.await(); "x" }, maxConcurrent = 2)
+        val first = (0 until 6).map { TileId(18, it, 0) }
+        val second = (0 until 3).map { TileId(18, it, 1) }
+        val newest = (0 until 3).map { TileId(18, it, 2) }
+        loader.show(first); runCurrent()
+        loader.show(second); runCurrent()
+        loader.show(newest); runCurrent()
+        assertEquals(first.take(2), started)
+        release.complete(Unit); runCurrent()
+        assertEquals(first.take(2) + newest, started, "queued tiles of the older viewports never load")
+        assertTrue(loader.tiles.value.keys.containsAll(newest))
+    }
+
+    /** Review r2 #1: a show() from a render that captured the generation before hide() cannot make tiles visible again. */
+    @Test fun aStaleGenerationCannotReinstateVisibility() = runTest {
+        var calls = 0
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> calls++; "x" })
+        val captured = loader.generation
+        loader.hide()
+        loader.show(listOf(TileId(18, 0, 0)), captured); runCurrent()
+        assertTrue(loader.visibleTiles.isEmpty())
+        assertEquals(0, calls)
+        loader.show(listOf(TileId(18, 0, 0)), loader.generation); runCurrent()
+        assertEquals(1, calls, "the current generation still works")
+    }
+
     @Test fun visibleTilesAreNeverEvicted() = runTest {
         val loader = TileLoader(backgroundScope, load = { t: TileId -> "t${t.x}" }, maxCached = 2)
         loader.show(listOf(TileId(18, 0, 0))); runCurrent()
@@ -2950,6 +3023,8 @@ import kotlinx.coroutines.sync.withPermit
  * its own, at most [maxConcurrent] at a time; a failed or throwing load frees its slot in `finally` and is retried every
  * [retryEveryMs] while the tile stays visible ([load] is expected to honour HttpTileFetcher's backoff). Renderers draw
  * whatever [tiles] holds right now. At most [maxCached] decoded tiles are kept; visible ones are never evicted.
+ * Visibility is owned by the caller's thread (review r2 #1): a job re-checks it after waiting for a slot, [hide] bumps
+ * [generation], and a [show] with an older generation (an in-flight async render) is ignored.
  */
 class TileLoader<T : Any>(
     private val scope: CoroutineScope,
@@ -2963,14 +3038,25 @@ class TileLoader<T : Any>(
     val tiles: StateFlow<Map<TileId, T>> = _tiles
     private val lock = Any()
     private var visible: Set<TileId> = emptySet()
+    private var gen = 0L
     private val inFlight = HashSet<TileId>()
     private val slots = Semaphore(maxConcurrent)
 
-    /** The tiles on screen now (empty when the map is not shown). Never suspends or blocks. */
-    fun show(visible: Collection<TileId>) {
-        synchronized(lock) { this.visible = visible.toSet() }
+    /** Bumped by [hide]; capture it before rendering asynchronously and pass it to [show]. */
+    val generation: Long get() = synchronized(lock) { gen }
+    val visibleTiles: Set<TileId> get() = synchronized(lock) { visible }
+
+    /** The tiles on screen now. Ignored when [generation] is given and no longer current. Never suspends or blocks. */
+    fun show(visible: Collection<TileId>, generation: Long? = null) {
+        synchronized(lock) {
+            if (generation != null && generation != gen) return
+            this.visible = visible.toSet()
+        }
         launchMissing()
     }
+
+    /** The map is no longer shown: nothing visible, queued loads are dropped, older-generation shows are ignored. */
+    fun hide() = synchronized(lock) { gen++; visible = emptySet() }
 
     /** Retries still-missing visible tiles every [retryEveryMs]. */
     fun start(): Job = scope.launch { while (isActive) { delay(retryEveryMs); launchMissing() } }
@@ -2979,7 +3065,8 @@ class TileLoader<T : Any>(
         val todo = synchronized(lock) { visible.filter { it !in _tiles.value && inFlight.add(it) } }
         for (t in todo) scope.launch {
             try {
-                val value = slots.withPermit { load(t) }
+                // Re-check after waiting for a slot: a tile that left the view meanwhile is not loaded (review r2 #1).
+                val value = slots.withPermit { if (synchronized(lock) { t !in visible }) null else load(t) }
                 if (value != null) store(t, value)
             } catch (e: CancellationException) {
                 throw e
@@ -4233,7 +4320,7 @@ git commit -m "feat(watch): GPS fixes from Health Services, health|location FGS,
   - `class WatchMapTracker { val live: LivePosition?; fun onRoute(route: WatchRouteFile.SessionRoute?, nowMs: Long); fun liveFor(sessionId: String?): LivePosition? }` — the marker moves only on a fix that is usable-live **when it arrives** (`Freshness.isUsableLive` on the watch clock, the same predicate as the phone); aged batches still grow the route; a route restored after process death has no marker until a live fix (review #7).
   - `object WatchMapModel { fun state(fixes: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState; fun zoomStep(zoom: Int, scrollPixels: Float): Int }`
   - `object WatchTilePolicy { RETRY_MS = 5_000L; MAX_TILES = 30; MAX_CONCURRENT = 3; fun <T : Any> loader(scope, load: suspend (TileId) -> T?): TileLoader<T> }`
-  - `class WatchTiles(context, scope, tint = 0x14C3A2) { val bitmaps: StateFlow<Map<TileId, ImageBitmap>>; fun show(tiles: Collection<TileId>) }` — missing visible tiles are retried every 5 s while visible (review #6); `WatchRuntime.tiles: WatchTiles`
+  - `class WatchTiles(context, scope, tint = 0x14C3A2) { val bitmaps: StateFlow<Map<TileId, ImageBitmap>>; fun show(tiles: Collection<TileId>); fun hide() }` — missing visible tiles are retried every 5 s while visible (review #6); `WatchRuntime.tiles: WatchTiles`
   - `WatchUiState.live: LivePosition?`; `WatchApp(state, onCommand, onVolume, onGrantPermissions, tiles: WatchTiles, ambient = false)`
 
 - [ ] **Step 1: Write the failing test** — in `watch/build.gradle.kts` add `testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")` next to the other test dependencies, then create `watch/src/test/java/com/debasish/livefit/watch/WatchPagesTest.kt`:
@@ -4460,7 +4547,8 @@ class WatchMapTracker {
 /** The watch map from the watch's own fixes only (spec §2.6); its clock is its own, so no offset. */
 object WatchMapModel {
     fun state(fixes: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState {
-        val track = RouteTrack.of(fixes.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = it.fixTimeMs)?.point() }, nowMs)
+        // Watch fix times are capped at their arrival (Task 11), so receipt = fix time on the watch's own clock.
+        val track = RouteTrack.of(fixes.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = it.fixTimeMs, receivedAtMs = it.fixTimeMs)?.point() }, nowMs)
         val drawn = track.drawn()
         val marker = live?.let { it.copy(bearingDeg = it.bearingDeg ?: track.lastBearing()) }
         return RouteState(sessionId, type, drawn, drawn.firstOrNull(), marker, Freshness.status(live?.fixTimeMs, nowMs))
@@ -4520,8 +4608,11 @@ class WatchTiles(context: Context, scope: CoroutineScope, private val tint: Int 
         .also { it.start() }
     val bitmaps: StateFlow<Map<TileId, ImageBitmap>> = loader.tiles
 
-    /** The tiles of the current viewport, on every viewport change; empty when the Map page is not shown. */
+    /** The tiles of the current viewport, on every viewport change (Main thread, from composition). */
     fun show(tiles: Collection<TileId>) = loader.show(tiles)
+
+    /** The Map page left the screen: nothing visible, queued loads dropped (review r2 #1). */
+    fun hide() = loader.hide()
 
     private fun decode(bytes: ByteArray): ImageBitmap? {
         val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
@@ -4616,7 +4707,7 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
         while (true) { delay(1_000); now = System.currentTimeMillis() } // status ages even without new fixes
     }
     val state = remember(route.size, route.lastOrNull(), live, sessionId, now / 1_000) { WatchMapModel.state(route, live, sessionId, type, now) }
-    DisposableEffect(Unit) { onDispose { tiles.show(emptyList()) } } // off the Map page: nothing visible, nothing retried
+    DisposableEffect(Unit) { onDispose { tiles.hide() } } // off the Map page: nothing visible, nothing retried or queued
     val bitmaps by tiles.bitmaps.collectAsState()
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Color.Black)
@@ -4883,7 +4974,7 @@ git commit -m "feat(watch): shared page set, live Map with arrival-gated marker 
 - Produces:
   - `interface RouteStore { suspend fun storeRouteFixes(sessionId: String, fixes: List<RouteFix>); suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long); suspend fun routeFixes(sessionId: String): List<RouteFix> }` in `:core:services` — identity `(sessionId, source, deviceTimeMs)`, insert-or-ignore; nothing is written for a Discarded or Cleared session (tombstone); `normalizeWatchTimes` sets `phoneTimeMs = deviceTimeMs − offset` on every Watch row of the session that is null or mapped with another offset; `routeFixes` is ordered by phone time (watch first on ties) with uncalibrated rows last by device time.
   - `RoomSessionStore : HistoryStore, RouteStore`; **`storeDelta` writes the delta's accurate location fixes as route rows (phoneTimeMs = null) in the same transaction as the delta** — so once a delta is stored (and therefore acked) its route rows exist (review #1). `HistoryDatabase` version 2 with `HistoryDatabase.MIGRATION_1_2`; `discard` and `clearFinished` also delete route rows.
-  - Table `route_point(sessionId, source, fixTimeMs /* device clock */, phoneTimeMs /* nullable */, lat, lon, accuracyM, bearingDeg)` PK `(sessionId, source, fixTimeMs)`.
+  - Table `route_point(sessionId, source, fixTimeMs /* device clock */, phoneTimeMs /* nullable */, receivedAtMs /* first receipt, phone clock */, lat, lon, accuracyM, bearingDeg)` PK `(sessionId, source, fixTimeMs)`; `storeDelta` stamps `receivedAtMs` with the store's clock.
 
 - [ ] **Step 1: Write the failing test** — `services/history/src/test/kotlin/com/debasish/livefit/history/RoomRouteStoreTest.kt`:
 
@@ -4914,8 +5005,8 @@ import org.robolectric.RobolectricTestRunner
 class RoomRouteStoreTest {
     private val ctx: Context = ApplicationProvider.getApplicationContext()
     private fun store() = RoomSessionStore(HistoryDatabase.create(ctx, inMemory = true))
-    private fun row(src: FixSource, device: Long, phone: Long?, northM: Double = 0.0) =
-        RouteFix(src, 12.9716 + northM / 111_195.0, 77.5946, 5f, deviceTimeMs = device, phoneTimeMs = phone, bearingDeg = 90f)
+    private fun row(src: FixSource, device: Long, phone: Long?, northM: Double = 0.0, received: Long = 0) =
+        RouteFix(src, 12.9716 + northM / 111_195.0, 77.5946, 5f, deviceTimeMs = device, phoneTimeMs = phone, receivedAtMs = received, bearingDeg = 90f)
 
     @Test fun returnsRowsInPhoneTimeOrderWithUncalibratedRowsLast() = runTest {
         val s = store()
@@ -4947,6 +5038,18 @@ class RoomRouteStoreTest {
         assertNull("another session is untouched", s.routeFixes("t").single().phoneTimeMs)
     }
 
+    /** Review r2 #2: the first receipt time is durable — a replay or rebuild cannot move it, so a future fix stays rejected. */
+    @Test fun receiptTimeIsKeptFromTheFirstInsert() = runTest {
+        val s = store()
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 900_000, 900_000, received = 700_000)))
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 900_000, 900_000, received = 1_000_000)))
+        s.normalizeWatchTimes("s", watchOffsetMs = 0)
+        val back = s.routeFixes("s").single()
+        assertEquals(700_000L, back.receivedAtMs)
+        assertNull("still rejected after normalization and later reads", back.point())
+        assertNull(back.historyPoint())
+    }
+
     @Test fun sameTimeDifferentSourceKeepsBothWatchFirst() = runTest {
         val s = store()
         s.storeRouteFixes("s", listOf(row(FixSource.Phone, 1_000, 1_000), row(FixSource.Watch, 1_000, 1_000)))
@@ -4962,6 +5065,9 @@ class RoomRouteStoreTest {
             LocationFix(12.9718, 77.5946, null, null, 7_000),  // unknown accuracy: no row
             LocationFix(12.9719, 77.5946, 6f, null, 8_000),
         )
+        val s2 = RoomSessionStore(HistoryDatabase.create(ctx, inMemory = true), now = { 9_000 })
+        s2.storeDelta(SessionDelta(sessionId = "s", seq = 0, locations = fixes, provenance = Provenance.Fake))
+        assertTrue("receipt stamped by the store's clock", s2.routeFixes("s").all { it.receivedAtMs == 9_000L })
         s.storeDelta(SessionDelta(sessionId = "s", seq = 0, locations = fixes, provenance = Provenance.Fake))
         val back = s.routeFixes("s")
         assertEquals(listOf(5_000L, 8_000L), back.map { it.deviceTimeMs })
@@ -5054,6 +5160,8 @@ data class RoutePointEntity(
     val source: String,
     val fixTimeMs: Long,
     val phoneTimeMs: Long?,
+    /** Phone time the fix was first received; never rewritten (review r2 #2). */
+    val receivedAtMs: Long,
     val lat: Double,
     val lon: Double,
     val accuracyM: Float,
@@ -5125,7 +5233,7 @@ abstract class HistoryDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "CREATE TABLE IF NOT EXISTS `route_point` (`sessionId` TEXT NOT NULL, `source` TEXT NOT NULL, `fixTimeMs` INTEGER NOT NULL, " +
-                        "`phoneTimeMs` INTEGER, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `accuracyM` REAL NOT NULL, `bearingDeg` REAL, " +
+                        "`phoneTimeMs` INTEGER, `receivedAtMs` INTEGER NOT NULL, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `accuracyM` REAL NOT NULL, `bearingDeg` REAL, " +
                         "PRIMARY KEY(`sessionId`, `source`, `fixTimeMs`))",
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_route_point_sessionId` ON `route_point` (`sessionId`)")
@@ -5150,7 +5258,7 @@ abstract class HistoryDatabase : RoomDatabase() {
 
 ```kotlin
             // Review #1: the delta's accurate fixes become route rows in the same transaction (uncalibrated: phoneTimeMs = null).
-            routes = delta.locations.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null) }.map { entity(delta.sessionId, it) },
+            routes = delta.locations.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null, receivedAtMs = now()) }.map { entity(delta.sessionId, it) },
 ```
 
 and add:
@@ -5161,17 +5269,17 @@ and add:
     override suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long) = dao.normalizeWatchTimes(sessionId, watchOffsetMs)
 
     override suspend fun routeFixes(sessionId: String): List<RouteFix> = dao.routePoints(sessionId).map {
-        RouteFix(FixSource.valueOf(it.source), it.lat, it.lon, it.accuracyM, deviceTimeMs = it.fixTimeMs, phoneTimeMs = it.phoneTimeMs, bearingDeg = it.bearingDeg)
+        RouteFix(FixSource.valueOf(it.source), it.lat, it.lon, it.accuracyM, deviceTimeMs = it.fixTimeMs, phoneTimeMs = it.phoneTimeMs, receivedAtMs = it.receivedAtMs, bearingDeg = it.bearingDeg)
     }
 
     private fun entity(sessionId: String, f: RouteFix) =
-        RoutePointEntity(sessionId, f.source.name, f.deviceTimeMs, f.phoneTimeMs, f.lat, f.lon, f.accuracyM, f.bearingDeg)
+        RoutePointEntity(sessionId, f.source.name, f.deviceTimeMs, f.phoneTimeMs, f.receivedAtMs, f.lat, f.lon, f.accuracyM, f.bearingDeg)
 ```
 
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:history:testDebugUnitTest`
-Expected: PASS (new 8 tests and the existing RoomSessionStore tests).
+Expected: PASS (new 9 tests and the existing RoomSessionStore tests).
 
 - [ ] **Step 9: Commit**
 
@@ -5193,7 +5301,7 @@ git commit -m "feat(history): route_point with device-time identity, nullable ph
 - Produces: `class RouteHub(scope, clock, clockSync: WatchClockSync, store: RouteStore, sessions: SessionStore, tickMs: Long = 1_000, log: (String) -> Unit = {}) { val state: StateFlow<RouteState>; val fallbackWanted: StateFlow<Boolean>; fun start(): Job; suspend fun onWorkout(snapshot: WorkoutSnapshot); suspend fun onWatchDelta(d: SessionDelta); suspend fun onPhoneFix(f: LocationFix) }`
 
 Design (review #1/#2, one coherent rule set):
-- **Identity vs order.** Every accurate fix is a `RouteFix` keyed by `(source, deviceTimeMs)`. Watch rows get `phoneTimeMs = deviceTimeMs − offset` once calibrated, `null` before. Only rows with a phone time take part in ordering, the ±5 s overlap rule and the 2-min future rejection; uncalibrated rows are stored but not drawn yet (plan ruling), and never live.
+- **Identity vs order.** Every accurate fix is a `RouteFix` keyed by `(source, deviceTimeMs)`, stamped with `receivedAtMs = now` on arrival; a phone time more than 2 min after that receipt makes the row invalid for drawing and history for good (review r2 #2), while the raw row is kept. Watch rows get `phoneTimeMs = deviceTimeMs − offset` once calibrated, `null` before. Only rows with a phone time take part in ordering, the ±5 s overlap rule and the 2-min future rejection; uncalibrated rows are stored but not drawn yet (plan ruling), and never live.
 - **Calibration.** Whenever `clockSync.offsetMs` differs from the offset the in-memory rows were mapped with, every watch row of the current session (and every unsaved row) is re-mapped, the `RouteTrack` is rebuilt chronologically from scratch (so the duplicate filter can never block a repair), and `normalizeWatchTimes` is queued for every session that received watch rows. The selector is *not* replayed: re-mapped old fixes never become live.
 - **Durability.** `RoomSessionStore.storeDelta` already writes a delta's rows before the ack (Task 13). RouteHub additionally (a) writes its own rows (phone fixes, watch rows with phone times, another session's replay) through an unsaved queue that is retried on every tick and every new fix until the store accepts it, and (b) on loading a session (every phone restart) rebuilds rows missing from `route_point` out of the session's stored deltas. The store's tombstone check drops rows for Discarded/Cleared sessions, so retries never resurrect them.
 
@@ -5327,7 +5435,7 @@ class RouteHubTest {
     /** Review Focus #1: phone restart; the watch's minutes-old replay arrives before, and right after, the first time-sync. */
     @Test fun delayedFirstReplayAfterPhoneRestartDoesNotLookLive() = runTest {
         val r = Rig(this)
-        r.store.storeRouteFixes("s", listOf(RouteFix(FixSource.Watch, 12.9716, 77.5946, 5f, 1_000, 1_000))) // before the restart
+        r.store.storeRouteFixes("s", listOf(RouteFix(FixSource.Watch, 12.9716, 77.5946, 5f, 1_000, 1_000, receivedAtMs = 1_000))) // before the restart
         advanceTimeBy(600_000)
         r.hub.onWorkout(running)
         assertEquals(1, r.hub.state.value.route.size, "stored route reloaded")
@@ -5389,6 +5497,28 @@ class RouteHubTest {
         r.hub.onWatchDelta(d)
         r.hub.onWatchDelta(d)
         assertEquals(listOf(0L, 1_000L), r.store.routeFixes("s").map { it.deviceTimeMs })
+    }
+
+    /**
+     * Review r2 #2: a calibrated, accurate fix > 2 min ahead of its receipt is rejected live, and stays absent from history,
+     * after a restart with a slightly different offset (full rebuild + normalization) and after its bad time has passed.
+     */
+    @Test fun aFutureFixStaysRejectedEverywhere() = runTest {
+        val r = Rig(this)
+        r.sync.calibrate { it }
+        advanceTimeBy(600_000)
+        r.hub.onWorkout(running)
+        r.hub.onWatchDelta(delta(listOf(fix(599_000, 0.0), fix(800_000, 50.0)))) // the second is 200 s ahead
+        assertEquals(listOf(599_000L), r.hub.state.value.route.map { it.fixTimeMs })
+        val stored = r.store.routeFixes("s")
+        assertEquals(2, stored.size, "kept raw for diagnostics")
+        assertEquals(listOf(599_000L), stored.mapNotNull { it.historyPoint() }.map { it.fixTimeMs }, "history after finalization")
+        advanceTimeBy(600_000) // its bad time is in the past now
+        val restarted = Rig(this, r.sessions, r.store)
+        restarted.sync.calibrate { it + 1 }
+        restarted.hub.onWorkout(running)
+        assertEquals(1, restarted.hub.state.value.route.size, "still absent after restart and time advance")
+        assertEquals(1, restarted.store.routeFixes("s").mapNotNull { it.historyPoint() }.size)
     }
 
     @Test fun phoneFallbackFixesDriveTheMarkerWhileTheWatchIsSilent() = runTest {
@@ -5583,7 +5713,7 @@ class RouteHub(
             applyOffset()
             val now = clock.nowMs()
             val offset = appliedOffset
-            val rows = d.locations.mapNotNull { f -> f.toRouteFix(FixSource.Watch, offset?.let { f.fixTimeMs - it }) }
+            val rows = d.locations.mapNotNull { f -> f.toRouteFix(FixSource.Watch, offset?.let { f.fixTimeMs - it }, receivedAtMs = now) }
             if (d.sessionId == sessionId) {
                 for (r in rows) if (fixes.putIfAbsent(r.key, r) == null) r.point()?.let { track.add(it, now) }
                 for (f in d.locations) selector.onWatchFix(f, clockSync.toPhoneTime(f.fixTimeMs), now)
@@ -5601,7 +5731,7 @@ class RouteHub(
         applyOffset()
         val now = clock.nowMs()
         selector.onPhoneFix(f, now)
-        val r = f.toRouteFix(FixSource.Phone, phoneTimeMs = f.fixTimeMs)
+        val r = f.toRouteFix(FixSource.Phone, phoneTimeMs = f.fixTimeMs, receivedAtMs = now)
         if (r != null && fixes.putIfAbsent(r.key, r) == null) {
             r.point()?.let { track.add(it, now) }
             enqueue(id, listOf(r))
@@ -5617,7 +5747,8 @@ class RouteHub(
         if (id != null) {
             guard("route load") { store.routeFixes(id) }?.forEach { fixes[it.key] = it }
             val fromDeltas = guard("delta load") { sessions.deltas(id) }.orEmpty()
-                .flatMap { it.locations }.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null) }
+                // Receipt = now: the true receipt is not in the delta, and rows normally exist already (stored with their delta).
+                .flatMap { it.locations }.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null, receivedAtMs = clock.nowMs()) }
             val missing = fromDeltas.filter { fixes.putIfAbsent(it.key, it) == null }
             if (missing.isNotEmpty()) {
                 log("rebuilt ${missing.size} route rows from stored deltas")
@@ -6383,9 +6514,9 @@ git commit -m "feat(phone): pages and gesture settings in the settings frames, w
 - Consumes: `RouteHub(…, store, sessions, …)` (Task 14); `GlassesMapStreamer` (Task 9); `MapSceneBuilder`, `MapScene`, `HudPalette`, `Viewport`, `PlacedTile`, `TileId`, `HttpTileFetcher`, `TileDiskCache`, `OsmTileSource`, `TileLoader` (Tasks 2, 7, 8); `PhoneLocationProvider`, `LiveFitHubService.locationCapable` (Task 16); `DataLayerWatchLink.clockSync`, `GlassesLinkService.pushMap/pageStates` (Task 15); `ServiceGraph.routes`, `ServiceGraph.history` (Task 17). (Device check D1, Task 22 Step 9, may flip `CxrGlassesLink.MAP_AS_BASE64`; nothing in this task depends on its outcome.)
 - Produces:
   - `object GlassesMapText { fun captionLines(scene: MapScene, drewTile: Boolean): List<String> }`
-  - `data class GlassesMapPlan<T>(scene: MapScene, wanted: List<TileId>, drawn: List<Pair<PlacedTile, T>>, captions: List<String>) { companion fun <T> of(state: RouteState, sizePx: Int, loaded: Map<TileId, T>): GlassesMapPlan<T> }` — pure: what one image shows from the tiles loaded **right now**.
-  - `class GlassesMapRenderer(tiles: TileLoader<Bitmap>, sizePx: Int = 480) { suspend fun render(state: RouteState): ByteArray?; companion { fun tileLoader(scope, fetcher: HttpTileFetcher): TileLoader<Bitmap> } }` — never waits for the network: draws the cached/loaded tiles (or route only) with the latest state and asks the loader for the missing ones (review #5); logs `LiveFitMap` when a PNG exceeds 40 KB.
-  - `ServiceGraph.routeHub: RouteHub`; the phone GPS runs exactly while `routeHub.fallbackWanted && LiveFitHubService.locationCapable`; images stream only while the glasses report Map; leaving Map (or disconnecting) empties the loader's visible set.
+  - `data class GlassesMapPlan<T>(scene: MapScene, wanted: List<TileId>, drawn: List<Pair<PlacedTile, T>>, captions: List<String>) { companion { fun <T> of(state: RouteState, sizePx: Int, loaded: Map<TileId, T>): GlassesMapPlan<T>; fun <T : Any> request(state: RouteState, sizePx: Int, loader: TileLoader<T>, generation: Long): GlassesMapPlan<T> } }` — pure: what one image shows from the tiles loaded **right now**; `request` also asks the loader for the wanted tiles with the generation captured when the render started (review r2 #1).
+  - `class GlassesMapRenderer(tiles: TileLoader<Bitmap>, sizePx: Int = 480) { suspend fun render(state: RouteState): ByteArray?; companion { fun tileLoader(scope, fetcher: HttpTileFetcher): TileLoader<Bitmap> } }` — captures `tiles.generation` on the caller's (Main) thread before going to `Dispatchers.Default`, so a `hide()` from the page-state collector always wins; never waits for the network: draws the cached/loaded tiles (or route only) with the latest state and asks the loader for the missing ones (review #5); logs `LiveFitMap` when a PNG exceeds 40 KB.
+  - `ServiceGraph.routeHub: RouteHub`; the phone GPS runs exactly while `routeHub.fallbackWanted && LiveFitHubService.locationCapable`; images stream only while the glasses report Map; leaving Map (or disconnecting) calls `mapTiles.hide()` on Main — the only place visibility is cleared.
 
 - [ ] **Step 1: Write the failing tests** — `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapTextTest.kt`:
 
@@ -6456,7 +6587,7 @@ class GlassesMapPlanTest {
         var images = 0
         val streamer = GlassesMapStreamer(
             backgroundScope, Clock { testScheduler.currentTime },
-            render = { s -> GlassesMapPlan.of(s, 480, loader.tiles.value).also { plans += it; loader.show(it.wanted) }; byteArrayOf(1) },
+            render = { s -> GlassesMapPlan.request(s, 480, loader, loader.generation).also { plans += it }; byteArrayOf(1) },
             send = { f, _ -> if (f.kind == MapFrameKind.Image) images++; true },
             newEpoch = { 1L },
         )
@@ -6473,6 +6604,29 @@ class GlassesMapPlanTest {
         assertEquals(4, images)
         assertEquals(plans.last().wanted.size, plans.last().drawn.size, "every visible tile drawn once loaded")
         assertEquals(listOf("GPS delayed"), plans.last().captions)
+    }
+
+    /** Review r2 #1: a render suspended before it asks for tiles; the wearer leaves Map; the resumed render must not re-show them. */
+    @Test fun aRenderResumedAfterLeavingMapCannotReShowTiles() = runTest {
+        var loads = 0
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> loads++; "t" })
+        val paused = CompletableDeferred<Unit>()
+        val streamer = GlassesMapStreamer(
+            backgroundScope, Clock { testScheduler.currentTime },
+            // Same order as GlassesMapRenderer.render: capture the generation, suspend (Dispatchers.Default), then request.
+            render = { s -> val gen = loader.generation; paused.await(); GlassesMapPlan.request(s, 480, loader, gen); byteArrayOf(1) },
+            send = { _, _ -> true },
+            newEpoch = { 1L },
+        )
+        streamer.start()
+        streamer.onRoute(RouteState(sessionId = "s", live = live, status = GpsStatus.Live))
+        streamer.onConnected()
+        streamer.onPageState(HudPage.Map, 1)
+        runCurrent() // the first render is now suspended
+        streamer.onPageState(HudPage.Workout, 2); loader.hide() // what ServiceGraph's page-state collector does on Main
+        paused.complete(Unit); runCurrent()
+        assertTrue(loader.visibleTiles.isEmpty(), "the obsolete render did not reinstate the tiles")
+        assertEquals(0, loads)
     }
 
     @Test fun planOnlyUsesLoadedTilesOfTheViewport() {
@@ -6516,6 +6670,7 @@ import com.debasish.livefit.map.MapScene
 import com.debasish.livefit.map.MapSceneBuilder
 import com.debasish.livefit.map.PlacedTile
 import com.debasish.livefit.map.TileId
+import com.debasish.livefit.map.TileLoader
 import com.debasish.livefit.map.Viewport
 import com.debasish.livefit.model.RouteState
 
@@ -6531,6 +6686,10 @@ data class GlassesMapPlan<T>(val scene: MapScene, val wanted: List<TileId>, val 
             val drawn = visible.mapNotNull { pt -> loaded[pt.tile]?.let { pt to it } }
             return GlassesMapPlan(scene, visible.map { it.tile }, drawn, GlassesMapText.captionLines(scene, drewTile = drawn.isNotEmpty()))
         }
+
+        /** [of] plus asking [loader] for the wanted tiles — ignored by the loader if the map was hidden since [generation] was captured. */
+        fun <T : Any> request(state: RouteState, sizePx: Int, loader: TileLoader<T>, generation: Long): GlassesMapPlan<T> =
+            of(state, sizePx, loader.tiles.value).also { loader.show(it.wanted, generation) }
     }
 }
 ```
@@ -6538,7 +6697,7 @@ data class GlassesMapPlan<T>(val scene: MapScene, val wanted: List<TileId>, val 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:testDebugUnitTest --tests '*GlassesMapTextTest*' --tests '*GlassesMapPlanTest*'`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: `GlassesMapRenderer.kt`**
 
@@ -6580,9 +6739,13 @@ class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val size
     private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f }
     private val attribution = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 16f; textAlign = Paint.Align.RIGHT }
 
-    suspend fun render(state: RouteState): ByteArray? = withContext(Dispatchers.Default) {
-        val plan = GlassesMapPlan.of(state, sizePx, tiles.tiles.value)
-        tiles.show(plan.wanted) // returns at once; missing tiles load (and retry) in the background
+    suspend fun render(state: RouteState): ByteArray? {
+        val generation = tiles.generation // on the caller's (Main) thread, before suspending: a later hide() wins (review r2 #1)
+        return withContext(Dispatchers.Default) { draw(state, generation) }
+    }
+
+    private fun draw(state: RouteState, generation: Long): ByteArray {
+        val plan = GlassesMapPlan.request(state, sizePx, tiles, generation) // returns at once; missing tiles load in the background
         val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         c.drawColor(Color.BLACK)
@@ -6590,7 +6753,7 @@ class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val size
         drawOverlay(c, plan.scene, plan.captions)
         val out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-        out.toByteArray().also { if (it.size > MAX_PNG_BYTES) Log.w(TAG, "map PNG ${it.size} B exceeds the ${MAX_PNG_BYTES} B target") }
+        return out.toByteArray().also { if (it.size > MAX_PNG_BYTES) Log.w(TAG, "map PNG ${it.size} B exceeds the ${MAX_PNG_BYTES} B target") }
     }
 
     private fun drawOverlay(c: Canvas, scene: MapScene, captions: List<String>) {
@@ -6684,13 +6847,13 @@ In `start()`, before `// ---- Link wiring ----`, add:
         }
         scope.launch {
             glasses.status.map { it.link == LinkState.Connected }.distinctUntilChanged().collect { connected ->
-                if (connected) mapStreamer.onConnected() else { mapStreamer.onDisconnected(); mapTiles.show(emptyList()) }
+                if (connected) mapStreamer.onConnected() else { mapStreamer.onDisconnected(); mapTiles.hide() }
             }
         }
         scope.launch {
             glasses.pageStates.collect {
                 mapStreamer.onPageState(it.page, it.seq)
-                if (!mapStreamer.mapVisible) mapTiles.show(emptyList()) // off the Map page nothing is fetched or retried
+                if (!mapStreamer.mapVisible) mapTiles.hide() // off the Map page nothing is fetched or retried; obsolete renders can't undo it
             }
         }
 ```
@@ -7177,7 +7340,8 @@ inside the `LaunchedEffect`'s `runCatching { … }` add:
 
 ```kotlin
             // Rows never normalized (no successful time sync before the session ended) fall back to device time here only.
-            route = RouteTrack.of(services.routes.routeFixes(sessionId).map { it.historyPoint() }).drawn()
+            // historyPoint() also drops rows more than 2 min after their receipt (review r2 #2).
+            route = RouteTrack.of(services.routes.routeFixes(sessionId).mapNotNull { it.historyPoint() }).drawn()
 ```
 
 and after the heart-rate `SoftCard { … }` add:
