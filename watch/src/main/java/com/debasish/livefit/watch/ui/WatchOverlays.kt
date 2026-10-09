@@ -56,7 +56,7 @@ fun VolumeArc(level: Float, onChange: (Float) -> Unit, modifier: Modifier = Modi
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     Canvas(
-        modifier.fillMaxSize().padding(4.dp)
+        modifier.fillMaxSize().padding(rememberInsets().x(4))
             .onRotaryScrollEvent { e -> local = (local + if (e.verticalScrollPixels > 0) 0.05f else -0.05f).coerceIn(0f, 1f); onChange(local); true }
             .focusRequester(focus).focusable()
             .pointerInput(Unit) {
@@ -89,7 +89,7 @@ fun VolumeArc(level: Float, onChange: (Float) -> Unit, modifier: Modifier = Modi
 @Composable
 fun ConfirmOverlay(c: Confirmation, onAnswer: (Boolean) -> Unit) {
     Box(Modifier.fillMaxSize().background(Color(0xEE000000)), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(rememberInsets().x(24))) {
             Text(c.title, fontSize = 16.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             Text(c.message, fontSize = 12.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center, maxLines = 3)
             Spacer(Modifier.height(10.dp))
@@ -114,7 +114,7 @@ fun OfflineBadge(modifier: Modifier = Modifier) {
 @Composable
 fun PermissionCard(perms: List<String>, onGrant: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(rememberInsets().x(24))) {
             Text("LiveFit needs sensor access", fontSize = 15.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             Text(perms.joinToString { it.substringAfterLast('.') }, fontSize = 11.sp, color = Color(0xFF9AA0A6), textAlign = TextAlign.Center)
             Spacer(Modifier.height(10.dp))

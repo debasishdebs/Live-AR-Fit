@@ -55,6 +55,9 @@ object WatchMapModel {
         return RouteState(sessionId, type, drawn, drawn.firstOrNull(), marker, Freshness.status(live?.fixTimeMs, nowMs))
     }
 
+    /** The on-screen +/− buttons (watches without a bezel): same 14–18 range. */
+    fun zoomBy(zoom: Int, delta: Int): Int = (zoom + delta).coerceIn(Viewport.MIN_ZOOM, Viewport.MAX_ZOOM)
+
     /** One bezel detent = one zoom level, 14–18; the map always re-centres on the current position. */
     fun zoomStep(zoom: Int, scrollPixels: Float): Int =
         (zoom + when { scrollPixels > 0 -> 1; scrollPixels < 0 -> -1; else -> 0 }).coerceIn(Viewport.MIN_ZOOM, Viewport.MAX_ZOOM)

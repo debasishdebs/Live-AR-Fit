@@ -2,7 +2,11 @@ package com.debasish.livefit.watch.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -45,7 +49,7 @@ import com.debasish.livefit.watch.map.WatchMapModel
 import com.debasish.livefit.watch.map.WatchTiles
 import kotlinx.coroutines.delay
 
-/** Watch Map page (spec §2.6): own fixes over tiles, bezel = zoom 14–18, offline = route only on black. */
+/** Watch Map page (spec §2.6): own fixes over tiles, bezel/crown or on-screen +/− = zoom 14–18, offline = route only on black. */
 @Composable
 internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, tiles: WatchTiles) {
     var zoom by remember(type) { mutableIntStateOf(Viewport.zoomFor(type)) }
@@ -58,6 +62,7 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
     val state = remember(route.size, route.lastOrNull(), live, sessionId, now / 1_000) { WatchMapModel.state(route, live, sessionId, type, now) }
     DisposableEffect(Unit) { onDispose { tiles.hide() } } // off the Map page: nothing visible, nothing retried or queued
     val bitmaps by tiles.bitmaps.collectAsState()
+    val ins = rememberInsets()
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Color.Black)
             .onRotaryScrollEvent { e -> zoom = WatchMapModel.zoomStep(zoom, e.verticalScrollPixels); true }
@@ -86,7 +91,10 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
                 drawLine(Color.White.copy(alpha = 0.6f), Offset(x0, y), Offset(x0 + s.lengthPx, y), strokeWidth = 2.dp.toPx())
             }
         }
-        Column(Modifier.fillMaxSize().padding(top = 26.dp, bottom = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        // Watches without a bezel/crown: small on-screen zoom buttons at the middle edges (clear of a round screen's corners).
+        ZoomButton("+", ins.x(32), Modifier.align(Alignment.CenterEnd).padding(end = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, +1) }
+        ZoomButton("−", ins.x(32), Modifier.align(Alignment.CenterStart).padding(start = ins.x(6))) { zoom = WatchMapModel.zoomBy(zoom, -1) }
+        Column(Modifier.fillMaxSize().padding(top = ins.y(26), bottom = ins.y(14)), horizontalAlignment = Alignment.CenterHorizontally) {
             val caption = listOfNotNull(scene.caption, MapSceneBuilder.NO_TILES_CAPTION.takeIf { scene.viewport != null && !anyTile }).joinToString(" · ")
             if (caption.isNotEmpty()) Text(caption, fontSize = 12.sp, color = W.Amber, textAlign = TextAlign.Center)
             Box(Modifier.weight(1f))
@@ -94,6 +102,14 @@ internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, session
             Text(scene.attribution, fontSize = 9.sp, color = W.Dim) // always visible (spec §2.4)
         }
     }
+}
+
+@Composable
+private fun ZoomButton(label: String, size: androidx.compose.ui.unit.Dp, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.size(size).clip(CircleShape).background(Color(0x99000000)).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(label, fontSize = 18.sp, color = Color.White) }
 }
 
 private fun DrawScope.drawArrow(a: MapArrow, color: Color) {
