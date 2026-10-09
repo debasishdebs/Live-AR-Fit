@@ -113,7 +113,7 @@ private fun zoneName(zone: Int?) = when (zone) {
 private val AMBIENT_PHASES = setOf(WorkoutPhase.Starting, WorkoutPhase.Active, WorkoutPhase.Paused, WorkoutPhase.Syncing)
 
 @Composable
-fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, tiles: WatchTiles, ambient: Boolean = false, ambientStyle: AmbientStyle = AmbientStyle.Default, ambientTick: Long = 0) {
+fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, tiles: WatchTiles, ambient: Boolean = false, ambientStyle: AmbientStyle = AmbientStyle.Default, ambientTick: Long = 0, locationDisclosure: Boolean = false, onLocationDisclosure: (Boolean) -> Unit = {}) {
     val s = state.snapshot
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -128,6 +128,7 @@ fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float
             if (state.offline) OfflineBadge(Modifier.align(Alignment.TopCenter).padding(top = rememberInsets().y(18)))
             state.confirmation?.let { c -> ConfirmOverlay(c) { yes -> onCommand(Command.Answer(c.id, yes)) } }
             if (state.needsPermissions.isNotEmpty() && s.phase == WorkoutPhase.Idle) PermissionCard(state.needsPermissions, onGrantPermissions)
+            if (locationDisclosure && s.phase == WorkoutPhase.Idle && state.needsPermissions.isEmpty()) LocationDisclosureCard(onLocationDisclosure)
         }
     }
 }
