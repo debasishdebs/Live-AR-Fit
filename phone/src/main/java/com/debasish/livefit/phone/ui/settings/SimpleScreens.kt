@@ -2,6 +2,7 @@ package com.debasish.livefit.phone.ui.settings
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -70,6 +71,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 HorizontalDivider(color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.Policy, LiveFitColors.ChipMint, "Privacy policy", "Opens in your browser", {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(Disclosures.PRIVACY_POLICY_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                        .onFailure { Toast.makeText(context, "No browser found. The policy is at ${Disclosures.PRIVACY_POLICY_URL}", Toast.LENGTH_LONG).show() }
                 })
                 HorizontalDivider(color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.BugReport, LiveFitColors.ChipSlate, "Share last crash",

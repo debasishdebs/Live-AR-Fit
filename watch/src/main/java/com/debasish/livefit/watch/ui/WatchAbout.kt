@@ -1,5 +1,6 @@
 package com.debasish.livefit.watch.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -19,29 +20,37 @@ import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.CompactChip
+import androidx.wear.compose.material.SwipeToDismissBox
 import androidx.wear.compose.material.Text
 import com.debasish.livefit.model.Disclosures
 import com.debasish.livefit.watch.BuildConfig
 import com.debasish.livefit.watch.OpenOnPhone
 import kotlinx.coroutines.launch
 
-/** Spec §7 (review P2-8): Privacy policy opens on the paired phone; the short summary is always shown as the fallback. */
+/**
+ * Spec §7 (review P2-8): Privacy policy opens on the paired phone; the short summary is always shown as the fallback.
+ * Back or swipe right closes it.
+ */
 @Composable
 internal fun AboutPage(onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var note by remember { mutableStateOf<String?>(null) }
-    ScalingLazyColumn(Modifier.fillMaxSize().background(Color.Black), horizontalAlignment = Alignment.CenterHorizontally) {
-        item { Text("Live AR Fit", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
-        item { Text("Version ${BuildConfig.VERSION_NAME}", fontSize = 11.sp, color = W.Dim) }
-        item {
-            Chip(
-                onClick = { scope.launch { note = if (OpenOnPhone.open(context, Disclosures.PRIVACY_POLICY_URL)) "Opened on your phone" else "Couldn't reach the phone" } },
-                label = { Text("Privacy policy") }, secondaryLabel = { Text("Open on phone") }, colors = ChipDefaults.secondaryChipColors(),
-            )
+    BackHandler(onBack = onClose)
+    SwipeToDismissBox(onDismissed = onClose) { isBackground ->
+        if (isBackground) return@SwipeToDismissBox
+        ScalingLazyColumn(Modifier.fillMaxSize().background(Color.Black), horizontalAlignment = Alignment.CenterHorizontally) {
+            item { Text("Live AR Fit", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
+            item { Text("Version ${BuildConfig.VERSION_NAME}", fontSize = 11.sp, color = W.Dim) }
+            item {
+                Chip(
+                    onClick = { scope.launch { note = if (OpenOnPhone.open(context, Disclosures.PRIVACY_POLICY_URL)) "Opened on your phone" else "Couldn't reach the phone" } },
+                    label = { Text("Privacy policy") }, secondaryLabel = { Text("Open on phone") }, colors = ChipDefaults.secondaryChipColors(),
+                )
+            }
+            note?.let { item { Text(it, fontSize = 11.sp, color = W.Mint) } }
+            item { Text(Disclosures.WATCH_SUMMARY, fontSize = 11.sp, color = W.Dim, textAlign = TextAlign.Center) }
+            item { CompactChip(onClick = onClose, label = { Text("Close") }) }
         }
-        note?.let { item { Text(it, fontSize = 11.sp, color = W.Mint) } }
-        item { Text(Disclosures.WATCH_SUMMARY, fontSize = 11.sp, color = W.Dim, textAlign = TextAlign.Center) }
-        item { CompactChip(onClick = onClose, label = { Text("Close") }) }
     }
 }

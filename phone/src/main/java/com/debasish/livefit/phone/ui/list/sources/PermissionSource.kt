@@ -50,6 +50,7 @@ class PermissionSource(private val context: Context) : ListSource {
         val intent = when (item.id) {
             "media" -> DisclosureActivity.intent(context, DisclosureKind.Music)
             "location" -> DisclosureActivity.intent(context, DisclosureKind.Location)
+            "mic" -> DisclosureActivity.intent(context, DisclosureKind.Mic)
             else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
         }
         return ItemAction { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); ActionResult.Silent }

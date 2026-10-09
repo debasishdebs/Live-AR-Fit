@@ -116,6 +116,8 @@ private val AMBIENT_PHASES = setOf(WorkoutPhase.Starting, WorkoutPhase.Active, W
 fun WatchApp(state: WatchUiState, onCommand: (Command) -> Unit, onVolume: (Float) -> Unit, onGrantPermissions: () -> Unit, tiles: WatchTiles, ambient: Boolean = false, ambientStyle: AmbientStyle = AmbientStyle.Default, ambientTick: Long = 0, locationDisclosure: Boolean = false, onLocationDisclosure: (Boolean) -> Unit = {}) {
     val s = state.snapshot
     var about by remember { mutableStateOf(false) }
+    // A workout started from the phone or glasses closes About, so it doesn't reappear after the summary.
+    LaunchedEffect(s.phase) { if (s.phase != WorkoutPhase.Idle) about = false }
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // AOD: a low-power workout screen; the interactive one (with seconds and controls) returns on wake.
