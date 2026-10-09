@@ -12,6 +12,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -26,7 +27,8 @@ fun MapAttributionRow(attribution: MapAttribution, modifier: Modifier = Modifier
     Column(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (attribution.mapTilerLogo) {
-                Image(painterResource(R.drawable.maptiler_logo), contentDescription = "MapTiler", modifier = Modifier.height(16.dp))
+                // The logo's wordmark is white (made for dark maps): tint it to ink so it reads on the light theme.
+                Image(painterResource(R.drawable.maptiler_logo), contentDescription = "MapTiler", modifier = Modifier.height(16.dp), colorFilter = ColorFilter.tint(LiveFitColors.Ink))
                 Spacer(Modifier.width(8.dp))
             }
             Text(attribution.text, style = MaterialTheme.typography.labelSmall, color = LiveFitColors.InkSoft)

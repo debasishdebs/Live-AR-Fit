@@ -104,7 +104,7 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     /** Spec §5: MapTiler in every build with a key; the OSM server only in keyless debug builds. */
     private val tileSource = TileSources.select(BuildConfig.TILES_KEY, BuildConfig.DEBUG, BuildConfig.VERSION_NAME)
     val mapAttribution: MapAttribution get() = tileSource.attribution
-    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(tileSource, TileDiskCache(File(app.cacheDir, "tiles"), TileDiskCache.PHONE_MAX_BYTES)))
+    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(tileSource, TileDiskCache.forSource(File(app.cacheDir, "tiles"), tileSource, TileDiskCache.PHONE_MAX_BYTES)))
     private val mapRenderer = GlassesMapRenderer(mapTiles, tileSource.attribution, GlassesMapRenderer.logo(app))
     private val mapStreamer = GlassesMapStreamer(scope, clock, render = mapRenderer::render, send = { f, png -> glasses.pushMap(f, png) }, log = { Log.i("LiveFitMap", it) })
 

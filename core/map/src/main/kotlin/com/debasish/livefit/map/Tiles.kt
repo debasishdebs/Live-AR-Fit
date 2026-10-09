@@ -26,12 +26,15 @@ object Attributions {
 interface TileSource {
     val userAgent: String
     val attribution: MapAttribution
+    /** Names this source's own cache directory: tiles (and their validators) are never shared between providers. */
+    val cacheId: String
     fun url(tile: TileId): String
 }
 
 /** Debug/personal fallback only (spec §5): the OSM server is not for public-scale use. */
 class OsmTileSource(override val userAgent: String = TileSources.userAgent("dev")) : TileSource {
     override val attribution: MapAttribution = Attributions.OSM
+    override val cacheId: String = "osm"
     override fun url(tile: TileId): String = "https://tile.openstreetmap.org/${tile.z}/${tile.x}/${tile.y}.png"
 }
 
@@ -39,6 +42,7 @@ class OsmTileSource(override val userAgent: String = TileSources.userAgent("dev"
 class MapTilerTileSource(private val key: String, override val userAgent: String) : TileSource {
     init { require(key.isNotBlank()) { "MapTiler key is blank" } }
     override val attribution: MapAttribution = Attributions.MAPTILER
+    override val cacheId: String = "maptiler-streets-v2-256"
     override fun url(tile: TileId): String = "https://api.maptiler.com/maps/streets-v2/256/${tile.z}/${tile.x}/${tile.y}.png?key=$key"
     override fun toString(): String = "MapTilerTileSource(streets-v2/256)"
 }
@@ -139,6 +143,15 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
         const val WATCH_MAX_BYTES = 20L * 1024 * 1024
         /** Spec §2.4 "7-day max-age": the lifetime used only when the server gives none (plan ruling, review #11). */
         const val FALLBACK_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000
+
+        /**
+         * [source]'s cache under `root/<cacheId>`, so a MapTiler build never serves an OSM tile (wrong attribution) or
+         * sends it OSM validators. Flat `.tile` files directly in [root] from before per-source caches are deleted (idempotent).
+         */
+        fun forSource(root: File, source: TileSource, maxBytes: Long, nowMs: () -> Long = System::currentTimeMillis): TileDiskCache {
+            root.listFiles { f -> f.isFile && f.name.endsWith(".tile") }.orEmpty().forEach { it.delete() }
+            return TileDiskCache(File(root, source.cacheId), maxBytes, nowMs)
+        }
     }
 }
 

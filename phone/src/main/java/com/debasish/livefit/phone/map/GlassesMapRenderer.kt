@@ -81,7 +81,7 @@ class GlassesMapRenderer(
         // Spec §5: MapTiler logo + "© MapTiler © OpenStreetMap contributors" on every image, in the HUD palette, HUD-legible.
         val textY = sizePx - 12f
         c.drawText(attribution.text, sizePx - 12f, textY, attributionPaint)
-        if (attribution.mapTilerLogo && logo != null) c.drawBitmap(logo, sizePx - 12f - logo.width, textY - 24f - logo.height, logoPaint)
+        if (attribution.mapTilerLogo && logo != null) c.drawBitmap(logo, sizePx - 12f - logo.width, textY - 18f - logo.height, logoPaint)
     }
 
     private fun drawArrow(c: Canvas, a: MapArrow) {

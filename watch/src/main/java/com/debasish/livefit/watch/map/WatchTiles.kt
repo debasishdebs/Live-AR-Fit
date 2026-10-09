@@ -28,7 +28,7 @@ class WatchTiles(context: Context, scope: CoroutineScope, private val tint: Int 
     private val source = TileSources.select(BuildConfig.TILES_KEY, BuildConfig.DEBUG, BuildConfig.VERSION_NAME)
     /** What the Map page must show for these tiles (spec §5). */
     val attribution: MapAttribution get() = source.attribution
-    private val fetcher = HttpTileFetcher(source, TileDiskCache(File(context.cacheDir, "tiles"), TileDiskCache.WATCH_MAX_BYTES))
+    private val fetcher = HttpTileFetcher(source, TileDiskCache.forSource(File(context.cacheDir, "tiles"), source, TileDiskCache.WATCH_MAX_BYTES))
     private val loader = WatchTilePolicy.loader(scope) { t -> withContext(Dispatchers.IO) { fetcher.fetch(t)?.let(::decode) } }
         .also { it.start() }
     val bitmaps: StateFlow<Map<TileId, ImageBitmap>> = loader.tiles

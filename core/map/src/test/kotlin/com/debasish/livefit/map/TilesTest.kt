@@ -60,7 +60,37 @@ class TilesTest {
     private val source = object : TileSource {
         override val userAgent = "LiveARFit/test"
         override val attribution = Attributions.OSM
+        override val cacheId = "test"
         override fun url(tile: TileId) = "http://127.0.0.1:${server.address.port}/${tile.z}/${tile.x}/${tile.y}.png"
+    }
+
+    @Test fun sourcesHaveDistinctCacheIds() {
+        assertEquals("osm", OsmTileSource().cacheId)
+        assertEquals("maptiler-streets-v2-256", MapTilerTileSource("k", "ua").cacheId)
+    }
+
+    /** Review fix: a MapTiler fetcher never serves (or revalidates with the ETag of) a tile cached from the OSM server. */
+    @Test fun mapTilerFetcherNeverServesAnOsmCachedTile() {
+        val root = Files.createTempDirectory("tiles-root").toFile()
+        val osmCache = TileDiskCache.forSource(root, OsmTileSource(), 1_000_000, { now })
+        osmCache.put(tile, png, TileMeta(now + day, etag = "\"osm\""))
+        val mt = MapTilerTileSource("k", "ua")
+        val local = "http://127.0.0.1:${server.address.port}/x.png"
+        val f = HttpTileFetcher(mt, TileDiskCache.forSource(root, mt, 1_000_000, { now }), { now }, open = { java.net.URL(local).openConnection() as java.net.HttpURLConnection })
+        status = 503
+        assertNull(f.fetch(tile), "no OSM bytes under MapTiler attribution")
+        assertEquals(1, requests.get(), "went to the network, not the OSM cache")
+        assertEquals(listOf<String?>(null), ifNoneMatch.toList(), "no OSM ETag sent to MapTiler")
+        assertNotNull(osmCache.get(tile), "the OSM cache is untouched")
+    }
+
+    @Test fun legacyFlatTilesAreDeleted() {
+        val root = Files.createTempDirectory("tiles-legacy").toFile()
+        val legacy = File(root, "18_1_2.tile").apply { writeBytes(png) }
+        val c = TileDiskCache.forSource(root, MapTilerTileSource("k", "ua"), 1_000_000, { now })
+        assertFalse(legacy.exists())
+        assertNull(c.get(tile))
+        assertTrue(File(root, "maptiler-streets-v2-256").isDirectory)
     }
 
     private fun cache(dir: File = Files.createTempDirectory("tiles").toFile()) = TileDiskCache(dir, 1_000_000, { now })
