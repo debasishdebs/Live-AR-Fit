@@ -41,6 +41,10 @@ interface GlassesLinkService {
     suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
     /** Shows a HUD page on the glasses (lf_page, voice "playlist view"); dropped while not connected. */
     suspend fun pushPage(request: com.debasish.livefit.model.PageRequest) {}
+    /** Map epoch header or image on lf_map (spec §2.5); false when not sent (not connected or the send failed). */
+    suspend fun pushMap(frame: com.debasish.livefit.model.MapFrame, png: ByteArray?): Boolean = false
+    /** lf_page_state from the glasses: the visible page, on every page change and every (re)connect. */
+    val pageStates: Flow<com.debasish.livefit.model.PageState> get() = kotlinx.coroutines.flow.emptyFlow()
 }
 
 sealed interface GlassesEvent {
@@ -58,6 +62,10 @@ interface WatchLinkService {
     /** Asks the watch app to make the watch discoverable for companion pairing; false when it could not be sent. */
     suspend fun requestDiscoverable(): Boolean = false
     suspend fun push(frame: com.debasish.livefit.model.StateFrame)
+    /** Settings → Pages on /lf/settings, on change and on every (re)connect (spec §3.2). */
+    suspend fun pushSettings(frame: com.debasish.livefit.model.WatchSettingsFrame) {}
+    /** Queue window on /lf/queue for the watch Playlist page, on change and on every (re)connect (spec §6). */
+    suspend fun pushQueue(frame: com.debasish.livefit.model.QueueFrame) {}
 }
 
 interface MusicService {

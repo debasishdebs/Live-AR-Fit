@@ -3,6 +3,7 @@ package com.debasish.livefit.services.glasses
 import com.debasish.livefit.model.CommandEnvelope
 import com.debasish.livefit.model.GlassesChannels
 import com.debasish.livefit.model.PROTOCOL_VERSION
+import com.debasish.livefit.model.PageState
 import com.debasish.livefit.model.Wire
 import com.debasish.livefit.services.GlassesEvent
 import java.util.Base64
@@ -35,4 +36,7 @@ class GlassesInbound {
         }
         else -> emptyList()
     }
+
+    /** lf_page_state (spec §2.5); another version is ignored (lf_cmd already reports a mismatch). */
+    fun pageState(cmd: String, text: String): PageState? = if (cmd == GlassesChannels.PAGE_STATE) PageState.parse(text) else null
 }

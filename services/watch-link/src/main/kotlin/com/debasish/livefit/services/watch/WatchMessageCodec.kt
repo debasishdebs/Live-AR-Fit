@@ -6,6 +6,7 @@ import com.debasish.livefit.model.ExerciseStateReport
 import com.debasish.livefit.model.PROTOCOL_VERSION
 import com.debasish.livefit.model.SessionClaim
 import com.debasish.livefit.model.SessionDelta
+import com.debasish.livefit.model.TimeSyncResponse
 import com.debasish.livefit.model.WatchPaths
 import com.debasish.livefit.model.Wire
 
@@ -15,6 +16,7 @@ sealed interface WatchInbound {
     data class State(val report: ExerciseStateReport) : WatchInbound
     data class Claim(val claim: SessionClaim) : WatchInbound
     data class Cmd(val envelope: CommandEnvelope) : WatchInbound
+    data class TimeRes(val response: TimeSyncResponse) : WatchInbound
     data class Battery(val pct: Int) : WatchInbound
     data class Outdated(val version: Int?) : WatchInbound
 }
@@ -33,10 +35,11 @@ object WatchMessageCodec {
                 WatchPaths.EXERCISE_RES -> WatchInbound.Result(Wire.decode(text))
                 WatchPaths.EXERCISE_STATE -> WatchInbound.State(Wire.decode(text))
                 WatchPaths.CLAIM -> WatchInbound.Claim(Wire.decode(text))
+                WatchPaths.TIME_RES -> WatchInbound.TimeRes(Wire.decode(text))
                 else -> WatchInbound.Cmd(Wire.decode(text))
             }
         }.getOrNull()
     }
 
-    private val jsonPaths = setOf(WatchPaths.DELTA, WatchPaths.EXERCISE_RES, WatchPaths.EXERCISE_STATE, WatchPaths.CLAIM, WatchPaths.COMMAND)
+    private val jsonPaths = setOf(WatchPaths.DELTA, WatchPaths.EXERCISE_RES, WatchPaths.EXERCISE_STATE, WatchPaths.CLAIM, WatchPaths.COMMAND, WatchPaths.TIME_RES)
 }
