@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -113,6 +114,11 @@ class MainActivity : ComponentActivity() {
             val queue by controller.queue.collectAsStateWithLifecycle()
             val pages by controller.pages.collectAsStateWithLifecycle()
             val gestureSettings by controller.gestures.collectAsStateWithLifecycle() // review #9: a new idle timeout re-keys the timer effect
+            val mapImage by controller.mapImage.collectAsStateWithLifecycle()
+            val sessionId = frame?.workout?.sessionId
+            val mapBitmap = androidx.compose.runtime.remember(mapImage, sessionId) {
+                mapImage?.takeIf { it.sessionId == sessionId }?.let { android.graphics.BitmapFactory.decodeByteArray(it.png, 0, it.png.size)?.asImageBitmap() }
+            }
             androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
                 // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
                 ptt.stop()
@@ -157,7 +163,8 @@ class MainActivity : ComponentActivity() {
                 else -> HudOverlay.None
             }
             HudScreen(frame, settings, connection, battery, history, overlay = overlay, clock = clock,
-                page = nav.page, queue = queue, musicHighlight = nav.highlightRow(queue))
+                page = nav.page, queue = queue, musicHighlight = nav.highlightRow(queue),
+                selector = nav.visibleSelector(), mapImage = mapBitmap, scrolling = nav.mode == GestureMode.Scroll)
         }
     }
 

@@ -39,12 +39,12 @@ private const val MUSIC_ROWS = 7
  * ✓/✕ choices), never a fill, always drawn while the queue has songs ([highlight], on the current song unless moved). A dim hint line sits at the bottom.
  */
 @Composable
-fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: String) {
+fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: String, scrolling: Boolean = false) {
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Glyph(Icons.Outlined.MusicNote, 26.dp, Hud.TERTIARY)
             Label(" MUSIC", 22.sp, Hud.TERTIARY, FontWeight.Bold)
-            val position = highlight ?: queue.currentIndex
+            val position = highlight?.takeIf { it < queue.items.size } ?: queue.currentIndex
             if (queue.items.isNotEmpty() && position != null) Label("  ${position + 1}/${queue.items.size}", 22.sp, Hud.TERTIARY)
             Spacer(Modifier.weight(1f))
             if (clock.isNotEmpty()) Label(clock, 24.sp, Hud.SECONDARY, FontWeight.Bold)
@@ -67,21 +67,21 @@ fun MusicScreen(np: NowPlaying?, queue: QueueWindow, highlight: Int?, clock: Str
         Box(Modifier.fillMaxWidth().height(2.dp).background(Hud.Green.copy(alpha = Hud.TERTIARY))) // hairline rule
         Spacer(Modifier.height(8.dp))
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
-            if (queue.items.isEmpty()) {
-                Label("No queue from YouTube Music", 24.sp, Hud.TERTIARY)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (i in visibleRows(queue.items.size, highlight ?: queue.currentIndex, MUSIC_ROWS)) {
-                        QueueRow(queue.items[i], played = queue.currentIndex != null && i < queue.currentIndex!!, current = i == queue.currentIndex, highlighted = i == highlight)
-                    }
+            val rows = queue.items.size + if (scrolling) 1 else 0 // scroll mode adds the ✕ Back row
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (queue.items.isEmpty()) Label("No queue from YouTube Music", 24.sp, Hud.TERTIARY)
+                for (i in visibleRows(rows, highlight ?: queue.currentIndex, MUSIC_ROWS)) {
+                    if (i == queue.items.size) BackRow(highlighted = i == highlight)
+                    else QueueRow(queue.items[i], played = queue.currentIndex != null && i < queue.currentIndex!!, current = i == queue.currentIndex, highlighted = i == highlight)
                 }
             }
         }
         Spacer(Modifier.height(6.dp))
         val hint = when {
-            highlight == null -> "tap: talk · long swipe: pages"
-            highlight == queue.currentIndex -> "swipe: songs · long swipe: pages · tap: play/pause"
-            else -> "swipe: songs · long swipe: pages · tap: play song"
+            !scrolling -> "tap: choose songs · swipe: pages"
+            highlight == queue.items.size -> "tap: leave song list"
+            highlight == queue.currentIndex -> "swipe: songs · tap: play/pause · ✕ Back: leave"
+            else -> "swipe: songs · tap: play song · ✕ Back: leave"
         }
         Label(hint, 18.sp, Hud.TERTIARY, maxLines = 2) // the HUD block is narrow at 40 % size
     }
@@ -97,5 +97,14 @@ private fun QueueRow(item: QueueItem, played: Boolean, current: Boolean, highlig
         Spacer(Modifier.width(6.dp))
         val text = if (item.artist.isEmpty()) item.title else "${item.title} · ${item.artist}"
         Label(text, 24.sp, level, if (current) FontWeight.Bold else FontWeight.Medium, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun BackRow(highlighted: Boolean) {
+    val shape = RoundedCornerShape(10.dp)
+    val outline = if (highlighted) Modifier.border(3.dp, Hud.Green.copy(alpha = Hud.PRIMARY), shape) else Modifier
+    Row(outline.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Label("✕ Back", 24.sp, if (highlighted) Hud.PRIMARY else Hud.SECONDARY, FontWeight.Bold)
     }
 }

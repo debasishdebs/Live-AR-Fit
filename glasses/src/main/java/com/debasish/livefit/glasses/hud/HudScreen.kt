@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
@@ -123,6 +124,12 @@ fun HudScreen(
     queue: QueueWindow = QueueWindow(),
     /** Highlighted queue row on the music page; null = none (empty queue or another page). */
     musicHighlight: Int? = null,
+    /** Music controls selector in scroll mode; null in page mode. */
+    selector: MusicControl? = null,
+    /** Newest accepted lf_map image for this session. */
+    mapImage: ImageBitmap? = null,
+    /** Playlist / Music controls are in scroll mode. */
+    scrolling: Boolean = false,
 ) {
     val phase = frame?.workout?.phase ?: WorkoutPhase.Idle
     val inWorkout = phase == WorkoutPhase.Starting || phase == WorkoutPhase.Active || phase == WorkoutPhase.Paused || phase == WorkoutPhase.Syncing
@@ -135,7 +142,10 @@ fun HudScreen(
                     connection == HudConnection.Outdated -> Message("Update LiveFit", "on your glasses")
                     frame == null && connection == HudConnection.OpenPhoneApp -> WaitingForPhone()
                     frame == null -> Message("Connecting…", "to your phone")
-                    page == HudPage.Playlist -> { cornerClock = false; MusicScreen(frame.music, queue, musicHighlight, clock) }
+                    page == HudPage.Playlist -> { cornerClock = false; MusicScreen(frame.music, queue, musicHighlight, clock, scrolling) }
+                    page == HudPage.MusicControls -> { cornerClock = false; MusicControlsScreen(frame.music, selector, clock) }
+                    page == HudPage.Stats && phase != WorkoutPhase.Stopping && phase != WorkoutPhase.Summary -> StatsScreen(frame)
+                    page == HudPage.Map && inWorkout -> MapScreen(mapImage)
                     page == HudPage.Glance && phase != WorkoutPhase.Stopping && phase != WorkoutPhase.Summary -> Glance(frame)
                     inWorkout -> { cornerClock = false; Full(frame, settings, glassesBattery, hrHistory, clock) }
                     phase == WorkoutPhase.Stopping -> Message("Saving workout…", formatElapsed(frame.workout.elapsedMs))
