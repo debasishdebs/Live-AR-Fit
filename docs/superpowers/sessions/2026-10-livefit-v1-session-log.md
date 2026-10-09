@@ -164,6 +164,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 23. Codex review of plan revision 2 (2 P2, both reproduced by probes)
 - **Done:** accepted both — obsolete queued tile loads after the map closes / viewport changes (and async renders re-showing tiles), and future-rejected fixes reappearing in history/rebuilds. Review saved to `../reviews/2026-10-09-pages-maps-plan-review-r2.md`; plan agent revising (Revision 3).
 
+### 24. Plan revision 3 committed
+- **Done:** `4fc842b` — tile jobs re-check visibility after taking a slot + `hide()`/generation so async renders can't re-show tiles (Tasks 8, 12, 18); route rows keep immutable `receivedAtMs`, rows > 2 min ahead of receipt rejected live, on rebuild and in history (Tasks 3, 12, 13, 14, 20).
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
