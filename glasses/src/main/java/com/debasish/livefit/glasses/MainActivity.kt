@@ -71,7 +71,10 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val bridge = CXRServiceBridge(this)
         bridge.setStatusListener(object : CXRServiceBridge.StatusListener {
-            override fun onConnected(name: String?, mac: String?, type: Int) { Log.i(TAG, "phone connected $name") }
+            override fun onConnected(name: String?, mac: String?, type: Int) {
+                Log.i(TAG, "phone connected $name")
+                if (::controller.isInitialized) controller.onPhoneConnected()
+            }
             override fun onDisconnected() { Log.i(TAG, "phone disconnected") }
             override fun onConnecting(name: String?, mac: String?, type: Int) {}
             override fun onARTCStatus(p0: Float, p1: Boolean) {}
@@ -80,6 +83,7 @@ class MainActivity : ComponentActivity() {
         })
         controller = HudController(lifecycleScope, bridge, getSharedPreferences("hud", 0), onDiscoverable = { s -> runOnUiThread { requestDiscoverable(s) } },
             onPage = { p -> runOnUiThread { updateNav(nav.show(p, availablePages())) } }).also { it.start() }
+        controller.reportPage(nav.page)
         ptt = PushToTalk(
             controller::sendRaw,
             hasPermission = { checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
@@ -107,6 +111,8 @@ class MainActivity : ComponentActivity() {
             val history by controller.hrHistory.collectAsStateWithLifecycle()
             val listening by ptt.recording.collectAsStateWithLifecycle()
             val queue by controller.queue.collectAsStateWithLifecycle()
+            val pages by controller.pages.collectAsStateWithLifecycle()
+            val gestureSettings by controller.gestures.collectAsStateWithLifecycle() // review #9: a new idle timeout re-keys the timer effect
             androidx.compose.runtime.LaunchedEffect(frame?.confirmation?.id) {
                 // Mic belongs to the confirmation: close it when it is resolved elsewhere, expires or is replaced.
                 ptt.stop()
@@ -123,7 +129,7 @@ class MainActivity : ComponentActivity() {
             // (a dismissal restarts the timer) before the timer effect — keyed on the gate, the input time and the
             // timeout — computes its deadline. Task 22 makes idleMs collected state, so a new timeout re-keys the effect.
             val overlayUp = frame?.confirmation != null || closeConfirm.shown
-            val idleMs = gestures().idleTimeoutS * 1_000L
+            val idleMs = gestureSettings.idleTimeoutS * 1_000L
             androidx.compose.runtime.LaunchedEffect(overlayUp) {
                 val (gate, resumed) = idleGate.onOverlay(overlayUp, nav, System.currentTimeMillis())
                 idleGate = gate
@@ -135,7 +141,7 @@ class MainActivity : ComponentActivity() {
                 updateNav(idleGate.tick(nav, idleMs, System.currentTimeMillis()))
             }
             // The visible page disappears (disabled, GPS workout ended) → Workout at once (spec §3.3).
-            val available = PageSet.available(pageSettings(), PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()))
+            val available = PageSet.available(pages, PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()))
             androidx.compose.runtime.LaunchedEffect(available) { updateNav(nav.reconcile(available)) }
             androidx.compose.runtime.LaunchedEffect(localToast) {
                 // While a confirmation is shown the error stays inside it; the id effect clears it.
@@ -217,14 +223,17 @@ class MainActivity : ComponentActivity() {
         swipes.deadlineMs?.let { swipeTimer.postAtTime(closeSwipe, it) } // eventTime and postAtTime share the uptime clock
     }
 
-    private fun gestures(): GestureSettings = GestureSettings()
-    private fun pageSettings(): PageSettings = PageSettings()
+    private fun gestures(): GestureSettings = controller.gestures.value
+    private fun pageSettings(): PageSettings = controller.pages.value
     /** Scroll idle timer pause state (review #9); changed only through IdleGate.onOverlay. */
     private var idleGate by mutableStateOf(IdleGate())
     private fun availablePages(): List<HudPage> =
         PageSet.available(pageSettings(), PageSet.mapEligible(controller.frame.value?.workout ?: WorkoutSnapshot()))
     private fun navContext() = NavContext(controller.queue.value, gestures(), availablePages())
-    private fun updateNav(next: HudNav) { nav = next }
+    private fun updateNav(next: HudNav) {
+        if (next.page != nav.page) controller.reportPage(next.page)
+        nav = next
+    }
 
     /** Priority (spec §4.2): hub confirmation, then our close prompt, then the configurable table. */
     private fun onGesture(g: Gesture) {
