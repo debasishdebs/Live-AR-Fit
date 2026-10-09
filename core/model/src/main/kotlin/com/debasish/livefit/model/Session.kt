@@ -10,7 +10,8 @@ enum class EndReason { User, OtherApp, System, Error }
 sealed interface SessionEvent {
     val tMs: Long
 
-    @Serializable data class Started(override val tMs: Long, val type: WorkoutType) : SessionEvent
+    /** [gps]: GPS was requested for this session (phone setting): a GPS workout for Map eligibility and the fallback (spec §3.1). */
+    @Serializable data class Started(override val tMs: Long, val type: WorkoutType, val gps: Boolean = false) : SessionEvent
     @Serializable data class Paused(override val tMs: Long) : SessionEvent
     @Serializable data class Resumed(override val tMs: Long) : SessionEvent
     @Serializable data class TypeDetected(override val tMs: Long, val type: WorkoutType) : SessionEvent
@@ -34,7 +35,7 @@ sealed interface Provenance {
     @Serializable data object Fake : Provenance
 }
 
-/** Watch → phone. seq starts at 0 and increases by 1 per delta within a session. */
+/** Watch → phone. seq starts at 0 and increases by 1 per delta within a session. v4: [locations] (watch clock times). */
 @Serializable
 data class SessionDelta(
     val protocolVersion: Int = PROTOCOL_VERSION,
@@ -44,6 +45,7 @@ data class SessionDelta(
     val samples: List<Sample> = emptyList(),
     val provenance: Provenance,
     val final: Boolean = false,
+    val locations: List<LocationFix> = emptyList(),
 )
 
 /** Phone → watch: highest contiguous seq durably stored on the phone. */

@@ -39,6 +39,8 @@ data class WorkoutSnapshot(
     val maxHeartRate: Int? = null,
     /** Watch-clock time of the newest sample; used to measure end-to-end latency. */
     val latestSampleMs: Long? = null,
+    /** A GPS workout (Started.gps, or the hub's GPS choice while Starting): the Map page is eligible while it records. */
+    val gps: Boolean = false,
 ) {
     /** The type to show the user: the detected one in Auto mode, else the chosen one. */
     val displayType: WorkoutType get() = if (type == WorkoutType.Auto) detectedType ?: WorkoutType.Walk else type

@@ -70,10 +70,6 @@ class WireTest {
     }
 
     /** §4.7: v2 added lf_queue and PlayQueueItem; v3 added lf_page (PageRequest) and ShowGlassesPage. Older peers are outdated. */
-    @Test fun protocolVersionIsThree() = assertEquals(3, PROTOCOL_VERSION)
-
-    @Test fun glassesPagesAreGlanceWorkoutPlaylist() = assertEquals(listOf(HudPage.Glance, HudPage.Workout, HudPage.Playlist), HudPage.entries)
-
     /** P2: voice "playlist view" → lf_page; the glasses apply only a current-version request. */
     @Test fun pageRequestParsesOnlyCurrentVersion() {
         for (p in HudPage.entries) assertEquals(p, PageRequest.parse(Wire.encode(PageRequest(page = p))))

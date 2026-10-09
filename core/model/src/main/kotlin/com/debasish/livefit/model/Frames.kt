@@ -34,9 +34,14 @@ data class StateFrame(
     val sentAtMs: Long = 0,
 )
 
-/** Phone → glasses on change and on every (re)connect. */
+/** Phone → glasses on change and on every (re)connect; v4 adds the page set and the gesture table (spec §3.2, §4.4). */
 @Serializable
-data class HudSettingsFrame(val protocolVersion: Int = PROTOCOL_VERSION, val settings: HudSettings)
+data class HudSettingsFrame(
+    val protocolVersion: Int = PROTOCOL_VERSION,
+    val settings: HudSettings,
+    val pages: PageSettings = PageSettings(),
+    val gestures: GestureSettings = GestureSettings(),
+)
 
 /** Glasses → phone on lf_listen: opens push-to-talk. Versioned so an outdated glasses app can't drive voice (spec §4.7). */
 @Serializable
@@ -66,9 +71,16 @@ data class DiscoverableRequest(val protocolVersion: Int = PROTOCOL_VERSION, val 
     }
 }
 
-/** Glasses HUD pages, in swipe order (spec §6.3). */
+/** The shared page set of glasses and watch, in cycling order (spec §3.1). */
 @Serializable
-enum class HudPage { Glance, Workout, Playlist }
+enum class HudPage(val label: String) {
+    Glance("Glance"),
+    Workout("Workout"),
+    Stats("Stats"),
+    Playlist("Playlist"),
+    Map("Map"),
+    MusicControls("Music controls"),
+}
 
 /**
  * Phone → glasses on lf_page: show [page] (voice "glance view" / "workout view" / "playlist view"). Idempotent: applying
@@ -84,3 +96,50 @@ data class PageRequest(val protocolVersion: Int = PROTOCOL_VERSION, val page: Hu
         }
     }
 }
+
+/** Glasses → phone on lf_page_state: the visible page, on every page change and every (re)connect; [seq] grows per glasses process. */
+@Serializable
+data class PageState(val protocolVersion: Int = PROTOCOL_VERSION, val page: HudPage, val seq: Long) {
+    companion object {
+        fun parse(text: String): PageState? {
+            if (Wire.versionOf(text) != PROTOCOL_VERSION) return null
+            return runCatching { Wire.decode<PageState>(text) }.getOrNull()
+        }
+    }
+}
+
+@Serializable
+enum class MapFrameKind { Epoch, Image }
+
+/**
+ * Phone → glasses on lf_map (spec §2.5). [MapFrameKind.Epoch] announces a new [renderEpoch] (no image);
+ * [MapFrameKind.Image] carries a PNG in the CXR bytes argument (or [pngBase64] when CxrGlassesLink.MAP_AS_BASE64 is on).
+ */
+@Serializable
+data class MapFrame(
+    val protocolVersion: Int = PROTOCOL_VERSION,
+    val kind: MapFrameKind,
+    val renderEpoch: Long,
+    val sessionId: String? = null,
+    val renderSeq: Long = 0,
+    val pngBase64: String? = null,
+) {
+    companion object {
+        fun parse(text: String): MapFrame? {
+            if (Wire.versionOf(text) != PROTOCOL_VERSION) return null
+            return runCatching { Wire.decode<MapFrame>(text) }.getOrNull()
+        }
+    }
+}
+
+/** Phone → watch on /lf/settings: the page set, on change and on every (re)connect (spec §3.2). */
+@Serializable
+data class WatchSettingsFrame(val protocolVersion: Int = PROTOCOL_VERSION, val pages: PageSettings)
+
+/** Phone → watch: clock calibration ping (spec §2.1). */
+@Serializable
+data class TimeSyncRequest(val protocolVersion: Int = PROTOCOL_VERSION, val id: Long, val t0: Long)
+
+/** Watch → phone: [tw] = watch wall clock when the ping arrived. */
+@Serializable
+data class TimeSyncResponse(val protocolVersion: Int = PROTOCOL_VERSION, val id: Long, val t0: Long, val tw: Long)
