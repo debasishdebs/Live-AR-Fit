@@ -8,7 +8,7 @@ import com.debasish.livefit.model.WorkoutType
  * Maps a recognised utterance to a [Command]. Shared by the fake and live voice services.
  *
  * Rules are checked in order, most specific first, so a music word ("pause music") never
- * reaches the workout rules and "play next song" is a skip, not play. Page views ("playlist view", "show glance") come
+ * reaches the workout rules and "play next song" is a skip, not play. Page views ("map view", "stats view", "music view" = Music controls, "playlist view", "show glance") come
  * first but only without an action verb, so "play my playlist" stays play and "start workout mode" still starts.
  */
 object CommandParser {
@@ -17,7 +17,7 @@ object CommandParser {
         if (t.isEmpty()) return null
         fun has(vararg words: String) = words.any { Regex("\\b$it\\b").containsMatchIn(t) }
 
-        val music = has("music", "song", "songs", "track", "tune", "playlist")
+        val music = has("music", "song", "songs", "track", "tune", "playlist", "player")
         val workout = has("workout", "work out", "work", // "work": recognizers clip "start workout" to "start work"
             "exercise", "run", "running", "walk", "walking", "ride", "cycle", "cycling", "bike", "auto")
         val down = has("down", "quieter", "lower", "decrease")
@@ -58,8 +58,11 @@ object CommandParser {
         val view = any("view", "screen", "page", "mode", "show", "open", "display", "switch", "go")
         return when {
             any("glance") -> HudPage.Glance
-            any("playlist", "queue") || (view && any("music", "song", "songs", "track", "tracks")) -> HudPage.Playlist
-            view && any("workout", "work out", "stats", "metrics") -> HudPage.Workout
+            any("map") -> HudPage.Map
+            any("playlist", "queue") || (view && any("songs", "tracks")) -> HudPage.Playlist
+            any("controls") || (view && any("music", "player", "song")) -> HudPage.MusicControls
+            view && any("stats", "statistics") -> HudPage.Stats
+            view && any("workout", "work out", "metrics") -> HudPage.Workout
             else -> null
         }
     }

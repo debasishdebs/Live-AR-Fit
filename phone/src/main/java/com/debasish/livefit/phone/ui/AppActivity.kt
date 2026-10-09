@@ -169,6 +169,7 @@ class AppActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         LiveFitHubService.ensureRunning(this)
+        LiveFitHubService.promoteLocation(this)
         (services.glasses as? com.debasish.livefit.services.glasses.CxrGlassesLink)?.connectOnResume()
     }
 

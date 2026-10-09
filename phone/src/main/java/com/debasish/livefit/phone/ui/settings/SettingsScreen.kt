@@ -1,5 +1,7 @@
 package com.debasish.livefit.phone.ui.settings
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,7 +32,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.debasish.livefit.phone.HubLocationPolicy
+import com.debasish.livefit.phone.LiveFitHubService
 import com.debasish.livefit.phone.BuildConfig
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.phone.ServiceGraph
@@ -64,6 +69,8 @@ fun SettingsScreen(
     val watchStatus = watch.link.name + (watch.batteryPct?.let { " · $it%" } ?: "")
     val musicStatus = musicStatusLabel(services.musicConnected.collectAsStateWithLifecycle().value, hasMusicAccess(LocalContext.current))
     val nearby by services.settings.startWhenNearby.collectAsStateWithLifecycle()
+    val hubHasLocation by LiveFitHubService.locationCapable.collectAsStateWithLifecycle()
+    val fineLocation = ContextCompat.checkSelfPermission(LocalContext.current, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     val nearbyStatus = "Start LiveFit when nearby: " + nearby.filterValues { it }.keys
         .joinToString { if (it == com.debasish.livefit.model.DeviceKind.Glasses) "glasses" else "watch" }.ifEmpty { "off" }
     val phase = services.workout.snapshot.collectAsStateWithLifecycle().value.phase
@@ -96,6 +103,8 @@ fun SettingsScreen(
             ChipRow(Icons.Rounded.LibraryMusic, LiveFitColors.ChipRose, "YouTube Music", musicStatus, { onNavigate("linked/music") })
             Divider()
             ChipRow(Icons.Rounded.Bluetooth, LiveFitColors.ChipSky, "Nearby devices", nearbyStatus, { onNavigate("nearby") })
+            Divider()
+            ChipRow(Icons.Rounded.MyLocation, LiveFitColors.ChipAmber, "Phone GPS", HubLocationPolicy.phoneGpsLabel(fineLocation, hubHasLocation), { onNavigate("permissions") })
         }
         SectionLabel("Glasses")
         Group { ChipRow(Icons.Rounded.Dashboard, LiveFitColors.ChipSky, "Glasses display", "Size, position, metrics", { onNavigate("hud") }) }

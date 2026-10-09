@@ -20,7 +20,7 @@ rootProject.name = "live-fitness-tracker"
 include(":phone", ":watch", ":glasses")
 
 // Shared contracts
-include(":core:model", ":core:services")
+include(":core:model", ":core:services", ":core:map")
 
 // One module per service; each ships a Fake now and gains a Live implementation later.
 include(
