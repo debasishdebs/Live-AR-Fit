@@ -1,5 +1,6 @@
 package com.debasish.livefit.watch
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -44,6 +45,12 @@ class MainActivity : ComponentActivity() {
         override fun onUpdateAmbient() { ambientTick.value = System.currentTimeMillis() }
         override fun onExitAmbient() { ambientTick.value = null } // live state (already current) renders right away
     })
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.data?.let { d -> WatchRuntime.log("opened by ${LaunchEntry.of(d.scheme, d.host, d.path, null)}") } // UI only (spec §4)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
