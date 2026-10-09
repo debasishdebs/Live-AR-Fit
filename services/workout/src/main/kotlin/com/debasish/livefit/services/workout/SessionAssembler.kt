@@ -82,6 +82,8 @@ class SessionAssembler(val sessionId: String) {
 
     /** The Started event's time (watch clock), if received. */
     fun startedAtMs(): Long? = events().filterIsInstance<SessionEvent.Started>().firstOrNull()?.tMs
+    /** GPS was requested for this session (Started.gps). */
+    fun gps(): Boolean = events().filterIsInstance<SessionEvent.Started>().firstOrNull()?.gps ?: false
 
     /** When the current phase began: the last Started / Paused / Resumed / Stopped event. */
     fun phaseSinceMs(): Long? = events().lastOrNull { it !is SessionEvent.TypeDetected }?.tMs
@@ -138,6 +140,7 @@ class SessionAssembler(val sessionId: String) {
             avgHeartRate = if (hr.count == 0) null else (hr.sum / hr.count).toInt(),
             maxHeartRate = hr.max,
             latestSampleMs = last?.tMs,
+            gps = gps(),
         )
     }
 

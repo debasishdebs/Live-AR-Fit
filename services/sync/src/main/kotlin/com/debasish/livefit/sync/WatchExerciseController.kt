@@ -7,6 +7,7 @@ import com.debasish.livefit.model.ExerciseRequest
 import com.debasish.livefit.model.ExerciseResult
 import com.debasish.livefit.model.ExerciseState
 import com.debasish.livefit.model.ExerciseStateReport
+import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.SessionEvent
 import com.debasish.livefit.model.WorkoutPhase
@@ -28,6 +29,8 @@ import java.util.UUID
 
 interface ExerciseBackend {
     fun missingPermissions(): List<String>
+    /** ACCESS_FINE_LOCATION granted on the watch; without it a GPS workout runs health-only (spec §2.1). */
+    fun locationGranted(): Boolean = true
     /** Exercise type name if another app currently owns an exercise, else null. */
     suspend fun otherAppTracking(): String?
     suspend fun start(type: WorkoutType, useGps: Boolean): Boolean
@@ -48,6 +51,8 @@ sealed interface BackendUpdate {
     data class Reading(val samples: List<Sample>) : BackendUpdate {
         constructor(sample: Sample) : this(listOf(sample))
     }
+    /** Health Services location points of one update, fix times on the watch clock. */
+    data class Locations(val fixes: List<LocationFix>) : BackendUpdate
     data class Ended(val by: EndReason) : BackendUpdate
     /**
      * Authoritative Active/Paused state, reported when it changes and first after start/reattach.
@@ -68,6 +73,8 @@ class WatchExerciseController(
     private val gpsPrefs: GpsPreferences,
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val endTimeoutMs: Long = 5_000,
+    /** Full-session route kept independently of delta retention (spec §2.6); null in tests that don't need it. */
+    private val routes: WatchRouteFile? = null,
 ) {
     private val recent = LinkedHashMap<String, ExerciseResult>()
     private val _lastError = MutableStateFlow<ExerciseError?>(null)
@@ -85,6 +92,8 @@ class WatchExerciseController(
     private val startLock = Mutex()
 
     val activeSessionId: String? get() = recorder.sessionId?.takeIf { !recorder.isFinalized }
+    /** The recording session is a GPS workout (Started.gps): the watch Map page is eligible and the FGS asks for `location`. */
+    val activeGps: Boolean get() = activeSessionId != null && recorder.assembler?.gps() == true
 
     init {
         scope.launch {
@@ -92,6 +101,7 @@ class WatchExerciseController(
                 when (u) {
                     is BackendUpdate.Reading -> onReadings(u.samples)
                     is BackendUpdate.Phase -> onBackendPhase(u)
+                    is BackendUpdate.Locations -> onLocations(u.fixes)
                     is BackendUpdate.Ended -> {
                         stopping?.let { it.complete(Unit); return@collect } // our own stop: localStop writes the final delta
                         val id = activeSessionId ?: return@collect
@@ -101,6 +111,13 @@ class WatchExerciseController(
                 }
             }
         }
+    }
+
+    private fun onLocations(fixes: List<LocationFix>) {
+        val id = activeSessionId ?: return
+        if (fixes.isEmpty()) return
+        recorder.locations(fixes)
+        routes?.append(id, fixes)
     }
 
     private fun onReadings(batch: List<Sample>) {
@@ -196,9 +213,12 @@ class WatchExerciseController(
         val missing = backend.missingPermissions()
         if (missing.isNotEmpty()) return ExerciseError.PermissionMissing(missing)
         if (!force) backend.otherAppTracking()?.let { return ExerciseError.OtherAppTracking(it) }
-        if (!backend.start(type, gps)) return ExerciseError.SensorUnavailable
+        val gpsOn = gps && backend.locationGranted()
+        if (!backend.start(type, gpsOn)) return ExerciseError.SensorUnavailable
         detector.reset()
-        recorder.begin(sessionId(), type, clock.nowMs()) // id made only once the start succeeded
+        val id = sessionId() // made only once the start succeeded
+        recorder.begin(id, type, clock.nowMs(), gps = gps) // requested GPS = a GPS workout, even if the watch can't locate
+        routes?.open(id)
         return null
     }
 

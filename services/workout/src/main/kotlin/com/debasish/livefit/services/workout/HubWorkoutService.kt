@@ -109,7 +109,7 @@ class HubWorkoutService(
         }
         val id = newId()
         beginSession(id)
-        _snapshot.value = WorkoutSnapshot(sessionId = id, phase = WorkoutPhase.Starting, type = type)
+        _snapshot.value = WorkoutSnapshot(sessionId = id, phase = WorkoutPhase.Starting, type = type, gps = gpsFor(type))
         startJob = scope.launch { runStart(id, type, force = false) }
     }
 
@@ -406,7 +406,7 @@ class HubWorkoutService(
         // A live session's timer runs to the estimated watch "now"; syncing or ended ones only to their recorded times.
         val watchNow = watchClockOffset?.takeIf { !ended && syncUntilSeq == null }?.let { clock.nowMs() - it }
         var snap = a.snapshot(atMs = watchNow)
-        if (a.deltaCount == 0) snap = snap.copy(type = claim?.type ?: _snapshot.value.type, phase = WorkoutPhase.Starting)
+        if (a.deltaCount == 0) snap = snap.copy(type = claim?.type ?: _snapshot.value.type, phase = WorkoutPhase.Starting, gps = _snapshot.value.gps)
         snap = when {
             syncUntilSeq != null -> snap.copy(phase = WorkoutPhase.Syncing)
             ended -> snap.copy(phase = WorkoutPhase.Stopping)

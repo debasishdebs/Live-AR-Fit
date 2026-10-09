@@ -1,6 +1,7 @@
 package com.debasish.livefit.sync
 
 import com.debasish.livefit.model.DeltaAck
+import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.Provenance
 import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.SessionClaim
@@ -38,6 +39,8 @@ class WatchSessionRecorder(
     private val sendClaim: suspend (SessionClaim) -> Unit = {},
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val sendTimeoutMs: Long = SEND_TIMEOUT_MS,
+    /** The phone acked this session's final delta: it is finalized there (WatchRouteFile.markAcked). */
+    private val onFinalAcked: (String) -> Unit = {},
 ) {
     private class Held(val buffer: FileDeltaBuffer, var header: WatchSessionHeader, val assembler: SessionAssembler) {
         /** Deltas whose disk write failed: still sent by [resendUnacked] and re-written on the next record. */
@@ -88,12 +91,12 @@ class WatchSessionRecorder(
     /** True while [sessionId]'s data is still held (recording, or ended and awaiting its final ack). */
     fun holds(sessionId: String): Boolean = held.any { it.header.sessionId == sessionId }
 
-    fun begin(sessionId: String, type: WorkoutType, tMs: Long) {
+    fun begin(sessionId: String, type: WorkoutType, tMs: Long, gps: Boolean = false) {
         check(newest == null || isFinalized) { "session ${this.sessionId} is still recording" }
         val buffer = FileDeltaBuffer(File(root, sessionId))
         val h = WatchSessionHeader(sessionId, type, tMs, lastSeq = -1).also { buffer.writeHeader(it) }
         held += Held(buffer, h, SessionAssembler(sessionId))
-        record(listOf(SessionEvent.Started(tMs, type)), emptyList(), final = false)
+        record(listOf(SessionEvent.Started(tMs, type, gps)), emptyList(), final = false)
     }
 
     fun event(e: SessionEvent, final: Boolean = false) = record(listOf(e), emptyList(), final)
@@ -101,9 +104,12 @@ class WatchSessionRecorder(
     /** A batch (e.g. screen-off HR points) is one delta. */
     fun samples(s: List<Sample>) { if (s.isNotEmpty()) record(emptyList(), s, final = false) }
 
-    private fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean) {
+    /** One Health Services location batch is one delta (spec §2.1: fixes travel ordered, acked and offline-buffered). */
+    fun locations(fixes: List<LocationFix>) { if (fixes.isNotEmpty()) record(emptyList(), emptyList(), final = false, locations = fixes) }
+
+    private fun record(events: List<SessionEvent>, samples: List<Sample>, final: Boolean, locations: List<LocationFix> = emptyList()) {
         val h = newest?.takeIf { it.header.finalSeq == null } ?: return
-        val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final)
+        val d = SessionDelta(sessionId = h.header.sessionId, seq = h.header.lastSeq + 1, events = events, samples = samples, provenance = provenance, final = final, locations = locations)
         h.header = h.header.copy(lastSeq = d.seq, finalSeq = if (final) d.seq else null)
         // Disk trouble must not stop tracking: failed deltas stay in the retry list (still sent, re-written next record).
         h.retry[d.seq] = d
@@ -164,6 +170,7 @@ class WatchSessionRecorder(
         if (ack.seq < f) return
         val wasOldest = h === held.first()
         h.buffer.delete()
+        onFinalAcked(ack.sessionId)
         held.remove(h)
         if (wasOldest && held.isNotEmpty()) resync() // next session's turn
     }
