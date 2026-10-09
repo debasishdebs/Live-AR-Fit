@@ -1,5 +1,6 @@
 package com.debasish.livefit.phone.setup
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Watch
 import com.debasish.livefit.phone.ui.linked.WATCH_MEDIA_CONTROLS_TIP
@@ -71,6 +73,9 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         // Ask for battery-optimization exemption only after the permission dialogs are dismissed.
         activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
     }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        LiveFitHubService.promoteLocation(activity) // granted: the visible app re-promotes the hub with `location`
+    }
     fun go(skip: Boolean = false) {
         if (skip) flow.skip() else flow.next()
         step = flow.step; pairNote = null
@@ -110,6 +115,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
                 ", then open Rokid LiveFit on the watch once and tap Allow for heart-rate sensors." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Galaxy Wearable instead." else "")
             SetupStep.Music -> Triple(Icons.Rounded.LibraryMusic, "Control YouTube Music", "Give LiveFit notification access so it can play, skip and like songs.")
+            SetupStep.Map -> Triple(Icons.Rounded.MyLocation, "Map fallback", "Allow location so your phone can draw the route when the watch has no GPS fix. Optional — workouts record without it.")
             SetupStep.Voice -> Triple(Icons.Rounded.Mic, "Offline voice: English (India)", "Download the on-device voice pack. Voice stays off until it's installed — there's no online fallback.")
             SetupStep.Done -> Triple(Icons.Rounded.Favorite, "All set", "")
         }
@@ -128,6 +134,7 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
             }
             SetupStep.Watch -> Button(onClick = { pair(DeviceKind.Watch, "Galaxy Wearable") }) { Text("Pair watch") }
             SetupStep.Music -> Button(onClick = { activity.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("Open notification access") }
+            SetupStep.Map -> Button(onClick = { locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("Allow location") }
             SetupStep.Voice -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Button(enabled = !downloading, onClick = {
                     downloading = true; voiceNote = null

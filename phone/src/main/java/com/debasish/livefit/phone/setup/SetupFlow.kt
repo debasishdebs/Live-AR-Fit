@@ -2,8 +2,8 @@ package com.debasish.livefit.phone.setup
 
 import android.Manifest
 
-/** First-run steps (spec §6.1). Voice is required for voice features but skippable. */
-enum class SetupStep { Welcome, Glasses, Watch, Music, Voice, Done }
+/** First-run steps (spec §6.1). Map fallback (location) and Voice are optional. */
+enum class SetupStep { Welcome, Glasses, Watch, Music, Map, Voice, Done }
 
 class SetupFlow(start: SetupStep = SetupStep.Welcome) {
     var step: SetupStep = start
