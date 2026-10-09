@@ -1,0 +1,7 @@
+{
+  "agentName": "LiveFit Probe",
+  "agentDesc": "Throwaway spike: sends a workout command (pause, resume, stop, start, map, stats, music) to the LiveFit fitness app.",
+  "pages": ["pages/command/index"],
+  "permissions": ["INTERNET"],
+  "window": { "navigationBarTitleText": "LiveFit Probe" }
+}
