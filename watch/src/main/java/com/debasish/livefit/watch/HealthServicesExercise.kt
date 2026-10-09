@@ -26,6 +26,7 @@ import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.sync.BackendUpdate
 import com.debasish.livefit.sync.ExerciseBackend
 import com.debasish.livefit.sync.batchSamples
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.guava.await
@@ -90,9 +91,18 @@ class HealthServicesExercise(context: Context) : ExerciseBackend {
         Log.i(TAG, "batching overrides supported=${caps.supportedBatchingModeOverrides} using=$batching")
         client.setUpdateCallback(callback)
         runCatching { client.prepareExerciseAsync(WarmUpConfig(exerciseType, setOf(DataType.HEART_RATE_BPM))).await() }
-        client.startExerciseAsync(
-            ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(batching).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && locationGranted()).build(),
-        ).await()
+        fun config(overrides: Set<BatchingMode>) =
+            ExerciseConfig.builder(exerciseType).setDataTypes(types).setBatchingModeOverrides(overrides).setIsAutoPauseAndResumeEnabled(false).setIsGpsEnabled(useGps && locationGranted()).build()
+        try {
+            client.startExerciseAsync(config(batching)).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A future/incompatible advertised override must not stop the workout from recording: retry with the safe one only.
+            Log.w(TAG, "start with batching overrides $batching failed, retrying with heart-rate only", e)
+            val safe = setOf(BatchingMode.HEART_RATE_5_SECONDS).filter { it in caps.supportedBatchingModeOverrides }.toSet()
+            client.startExerciseAsync(config(safe)).await()
+        }
         true
     }.getOrDefault(false)
 
