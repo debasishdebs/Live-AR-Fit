@@ -21,7 +21,6 @@ class MapSceneTest {
         val s = MapSceneBuilder.build(RouteState(sessionId = "s"), 18, 480, 480)
         assertNull(s.viewport)
         assertEquals("Waiting for GPS…", s.caption)
-        assertEquals("© OpenStreetMap contributors", s.attribution, "attribution always present")
     }
 
     @Test fun waitingWithStoredPointsCentresOnTheLastPoint() {

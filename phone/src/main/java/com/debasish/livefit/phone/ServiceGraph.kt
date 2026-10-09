@@ -5,7 +5,8 @@ import android.os.BatteryManager
 import com.debasish.livefit.confirm.DefaultConfirmationService
 import com.debasish.livefit.history.HistoryDatabase
 import com.debasish.livefit.map.HttpTileFetcher
-import com.debasish.livefit.map.OsmTileSource
+import com.debasish.livefit.map.MapAttribution
+import com.debasish.livefit.map.TileSources
 import com.debasish.livefit.map.TileDiskCache
 import com.debasish.livefit.history.RoomSessionStore
 import com.debasish.livefit.model.Command
@@ -100,8 +101,11 @@ class ServiceGraph(private val app: Context, bindings: Bindings) {
     /** Route rows in `routes`; missing rows are rebuilt from the deltas in `history` on every session load (review #1). */
     val routeHub = RouteHub(scope, clock, dataLayer?.clockSync ?: WatchClockSync(clock), routes, history, log = { Log.d("LiveFitMap", it) })
     private val phoneGps = PhoneLocationProvider(app) { fix -> scope.launch { routeHub.onPhoneFix(fix) } }
-    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(OsmTileSource(), TileDiskCache(File(app.cacheDir, "tiles"), TileDiskCache.PHONE_MAX_BYTES)))
-    private val mapRenderer = GlassesMapRenderer(mapTiles)
+    /** Spec §5: MapTiler in every build with a key; the OSM server only in keyless debug builds. */
+    private val tileSource = TileSources.select(BuildConfig.TILES_KEY, BuildConfig.DEBUG, BuildConfig.VERSION_NAME)
+    val mapAttribution: MapAttribution get() = tileSource.attribution
+    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(tileSource, TileDiskCache.forSource(File(app.cacheDir, "tiles"), tileSource, TileDiskCache.PHONE_MAX_BYTES)))
+    private val mapRenderer = GlassesMapRenderer(mapTiles, tileSource.attribution, GlassesMapRenderer.logo(app))
     private val mapStreamer = GlassesMapStreamer(scope, clock, render = mapRenderer::render, send = { f, png -> glasses.pushMap(f, png) }, log = { Log.i("LiveFitMap", it) })
 
     private val _toast = MutableStateFlow<String?>(null)

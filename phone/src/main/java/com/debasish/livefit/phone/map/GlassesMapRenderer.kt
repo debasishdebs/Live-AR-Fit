@@ -1,18 +1,25 @@
 package com.debasish.livefit.phone.map
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.util.Log
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import com.debasish.livefit.map.HttpTileFetcher
 import com.debasish.livefit.map.HudPalette
 import com.debasish.livefit.map.MapArrow
+import com.debasish.livefit.map.MapAttribution
 import com.debasish.livefit.map.MapScene
 import com.debasish.livefit.map.TileLoader
 import com.debasish.livefit.model.RouteState
+import com.debasish.livefit.phone.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,7 +31,12 @@ import java.io.ByteArrayOutputStream
  * (review #5): it draws what [tiles] holds now — or route only with "No map — route only" — and asks the loader for the
  * missing visible tiles, which then appear in a later image.
  */
-class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val sizePx: Int = SIZE_PX) {
+class GlassesMapRenderer(
+    private val tiles: TileLoader<Bitmap>,
+    private val attribution: MapAttribution,
+    private val logo: Bitmap?,
+    private val sizePx: Int = SIZE_PX,
+) {
     private val green = 0xFF000000.toInt() or HudPalette.HUD_GREEN
     private val dim = HudPalette.scaled(HudPalette.HUD_GREEN, 0.6f)
     private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green; style = Paint.Style.STROKE; strokeWidth = 6f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
@@ -33,7 +45,8 @@ class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val size
     private val arrowHollow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green; style = Paint.Style.STROKE; strokeWidth = 4f }
     private val caption = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green; textSize = 28f; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
     private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f }
-    private val attribution = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 16f; textAlign = Paint.Align.RIGHT }
+    private val attributionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f; textAlign = Paint.Align.RIGHT; isFakeBoldText = true }
+    private val logoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = PorterDuffColorFilter(dim, PorterDuff.Mode.SRC_IN) }
 
     suspend fun render(state: RouteState): ByteArray? {
         val generation = tiles.generation // on the caller's (Main) thread, before suspending: a later hide() wins (review r2 #1)
@@ -65,7 +78,10 @@ class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val size
             c.drawText(s.label, 16f, y - 8f, small)
         }
         captions.forEachIndexed { i, line -> c.drawText(line, sizePx / 2f, 40f + i * 34f, caption) }
-        c.drawText(scene.attribution, sizePx - 12f, sizePx - 14f, attribution)
+        // Spec §5: MapTiler logo + "© MapTiler © OpenStreetMap contributors" on every image, in the HUD palette, HUD-legible.
+        val textY = sizePx - 12f
+        c.drawText(attribution.text, sizePx - 12f, textY, attributionPaint)
+        if (attribution.mapTilerLogo && logo != null) c.drawBitmap(logo, sizePx - 12f - logo.width, textY - 18f - logo.height, logoPaint)
     }
 
     private fun drawArrow(c: Canvas, a: MapArrow) {
@@ -85,6 +101,12 @@ class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val size
         const val TAG = "LiveFitMap"
         const val SIZE_PX = 480
         const val MAX_PNG_BYTES = 40 * 1024
+        const val LOGO_HEIGHT_PX = 24
+
+        /** The MapTiler logo at HUD size (tinted at draw time); null if the drawable is missing. */
+        fun logo(context: Context): Bitmap? = ContextCompat.getDrawable(context, R.drawable.maptiler_logo)?.let { d ->
+            d.toBitmap(width = LOGO_HEIGHT_PX * d.intrinsicWidth / d.intrinsicHeight.coerceAtLeast(1), height = LOGO_HEIGHT_PX)
+        }
 
         /** Up to 4 tiles at once, missing visible tiles retried every 5 s (the fetcher's backoff limits real requests). */
         fun tileLoader(scope: CoroutineScope, fetcher: HttpTileFetcher): TileLoader<Bitmap> =

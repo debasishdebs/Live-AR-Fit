@@ -3,9 +3,10 @@ package com.debasish.livefit.map
 enum class OsmClass { Background, Water, Park, MinorRoad, MajorRoad }
 
 /**
- * OSM standard tile pixels → HUD palette (spec §2.5): black background (transparent on the glasses), streets as dim
- * green, water and parks dropped, labels and buildings dropped. Only three output values, so PNGs compress well.
- * The watch uses the same mapping with its mint tint.
+ * Raster tile pixels (MapTiler streets-v2 in production, the OSM standard style in keyless debug builds) → HUD palette
+ * (spec §2.5): black background (transparent on the glasses), streets as dim green, water and parks dropped, labels
+ * and buildings dropped. Only three output values, so PNGs compress well. The watch uses the same mapping with its
+ * mint tint. Both styles' main colours are covered by HudPaletteTest.
  */
 object HudPalette {
     const val HUD_GREEN = 0x3CFF6E

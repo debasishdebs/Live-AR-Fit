@@ -14,6 +14,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -57,9 +58,44 @@ class TilesTest {
     @AfterTest fun down() = server.stop(0)
 
     private val source = object : TileSource {
-        override val userAgent = "RokidLiveFit/test"
-        override val attribution = OSM_ATTRIBUTION
+        override val userAgent = "LiveARFit/test"
+        override val attribution = Attributions.OSM
+        override val cacheId = "test"
         override fun url(tile: TileId) = "http://127.0.0.1:${server.address.port}/${tile.z}/${tile.x}/${tile.y}.png"
+    }
+
+    @Test fun sourcesHaveDistinctCacheIds() {
+        assertEquals("osm", OsmTileSource().cacheId)
+        assertEquals("maptiler-streets-v2-256", MapTilerTileSource("k", "ua").cacheId)
+    }
+
+    /** Review fix: a MapTiler fetcher never serves (or revalidates with the ETag of) a tile cached from the OSM server. */
+    @Test fun mapTilerFetcherNeverServesAnOsmCachedTile() {
+        val root = Files.createTempDirectory("tiles-root").toFile()
+        val osmCache = TileDiskCache.forSource(root, OsmTileSource(), 1_000_000, { now })
+        osmCache.put(tile, png, TileMeta(now + day, etag = "\"osm\""))
+        val mt = MapTilerTileSource("k", "ua")
+        val local = "http://127.0.0.1:${server.address.port}/x.png"
+        val f = HttpTileFetcher(mt, TileDiskCache.forSource(root, mt, 1_000_000, { now }), { now }, open = { java.net.URL(local).openConnection() as java.net.HttpURLConnection })
+        status = 503
+        assertNull(f.fetch(tile), "no OSM bytes under MapTiler attribution")
+        assertEquals(1, requests.get(), "went to the network, not the OSM cache")
+        assertEquals(listOf<String?>(null), ifNoneMatch.toList(), "no OSM ETag sent to MapTiler")
+        assertNotNull(osmCache.get(tile), "the OSM cache is untouched")
+    }
+
+    /** Review fix: legacy flat tiles go on the first cache access (the fetcher's IO thread), not in the constructor (Main). */
+    @Test fun legacyFlatTilesAreDeleted() {
+        val root = Files.createTempDirectory("tiles-legacy").toFile()
+        val legacy = File(root, "18_1_2.tile").apply { writeBytes(png) }
+        val otherSource = File(root, "osm").apply { mkdirs() }
+        val kept = File(otherSource, "18_1_2.tile").apply { writeBytes(png) }
+        val c = TileDiskCache.forSource(root, MapTilerTileSource("k", "ua"), 1_000_000, { now })
+        assertTrue(legacy.exists(), "construction does no file deletes")
+        assertNull(c.get(tile))
+        assertFalse(legacy.exists())
+        assertTrue(kept.exists(), "subdirectories are never touched")
+        assertTrue(File(root, "maptiler-streets-v2-256").isDirectory)
     }
 
     private fun cache(dir: File = Files.createTempDirectory("tiles").toFile()) = TileDiskCache(dir, 1_000_000, { now })
@@ -69,8 +105,44 @@ class TilesTest {
     @Test fun osmSourceUrlAndAttribution() {
         val osm = OsmTileSource()
         assertEquals("https://tile.openstreetmap.org/18/1/2.png", osm.url(tile))
-        assertEquals("© OpenStreetMap contributors", osm.attribution)
-        assertTrue(osm.userAgent.startsWith("RokidLiveFit/"), "app-specific User-Agent")
+        assertEquals("© OpenStreetMap contributors", osm.attribution.text)
+        assertFalse(osm.attribution.mapTilerLogo)
+        assertTrue(osm.userAgent.startsWith("LiveARFit/"), "app-specific User-Agent")
+    }
+
+    @Test fun mapTilerStreetsV2RasterWithLogoAndBothLinks() {
+        val mt = MapTilerTileSource("k3y", TileSources.userAgent("1.0.0"))
+        assertEquals("https://api.maptiler.com/maps/streets-v2/256/18/1/2.png?key=k3y", mt.url(tile))
+        assertEquals("© MapTiler © OpenStreetMap contributors", mt.attribution.text)
+        assertTrue(mt.attribution.mapTilerLogo)
+        assertEquals(listOf("https://www.maptiler.com/copyright/", "https://www.openstreetmap.org/copyright"), mt.attribution.links.map { it.url })
+    }
+
+    @Test fun userAgentNamesAppVersionAndContact() =
+        assertEquals("LiveARFit/1.0.0 (com.livear.fit; contact: d.kanhar@gmail.com)", TileSources.userAgent("1.0.0"))
+
+    /** Review focus 3: the key is in the URL only — never in the User-Agent, toString or anything logged. */
+    @Test fun theKeyStaysOutOfTheUserAgentAndToString() {
+        val mt = TileSources.select("s3cretKey", debug = false, version = "1.0.0")
+        assertFalse("s3cretKey" in mt.userAgent)
+        assertFalse("s3cretKey" in mt.toString())
+    }
+
+    @Test fun selectFallsBackToOsmOnlyInDebug() {
+        assertTrue(TileSources.select("", debug = true, version = "1.0.0") is OsmTileSource)
+        assertTrue(TileSources.select("k", debug = true, version = "1.0.0") is MapTilerTileSource)
+        assertFailsWith<IllegalStateException> { TileSources.select(" ", debug = false, version = "1.0.0") }
+    }
+
+    /** Review focus 3: a revoked key (401/403) or an exhausted Free plan (429) → route only, no retry storm. */
+    @Test fun keyAndQuotaErrorsBackOffLikeAnyFailure() {
+        for (code in listOf(401, 403, 429)) {
+            requests.set(0); status = code
+            val f = fetcher()
+            assertNull(f.fetch(tile), "HTTP $code")
+            assertNull(f.fetch(tile))
+            assertEquals(1, requests.get(), "HTTP $code: backed off")
+        }
     }
 
     @Test fun sendsTheAppUserAgentAndServesRepeatsFromCache() {
@@ -78,7 +150,7 @@ class TilesTest {
         assertContentEquals(png, f.fetch(tile))
         assertContentEquals(png, f.fetch(tile))
         assertEquals(1, requests.get())
-        assertEquals(listOf("RokidLiveFit/test"), userAgents.toList())
+        assertEquals(listOf("LiveARFit/test"), userAgents.toList())
         assertNull(ifNoneMatch.single(), "a first download carries no validators")
     }
 

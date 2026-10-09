@@ -7,7 +7,10 @@ import kotlin.math.hypot
 data class MapArrow(val at: Px, val bearingDeg: Float?, val hollow: Boolean)
 data class ScaleBar(val lengthPx: Float, val label: String)
 
-/** Everything a map renderer draws; the glasses PNG renderer and the watch Canvas draw the same scene. */
+/**
+ * Everything a map renderer draws; the glasses PNG renderer and the watch Canvas draw the same scene. The attribution
+ * comes from the tile source ([TileSource.attribution]), not the scene.
+ */
 data class MapScene(
     val viewport: Viewport?,
     val route: List<Px>,
@@ -15,7 +18,6 @@ data class MapScene(
     val arrow: MapArrow?,
     val scale: ScaleBar?,
     val caption: String?,
-    val attribution: String = OSM_ATTRIBUTION,
 )
 
 object MapSceneBuilder {

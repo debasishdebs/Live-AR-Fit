@@ -32,6 +32,7 @@ import com.debasish.livefit.model.Sample
 import com.debasish.livefit.model.SessionSummary
 import com.debasish.livefit.model.formatElapsed
 import com.debasish.livefit.phone.ServiceGraph
+import com.debasish.livefit.phone.ui.components.MapAttributionRow
 import com.debasish.livefit.phone.ui.components.ScreenHeader
 import com.debasish.livefit.phone.ui.components.SectionLabel
 import com.debasish.livefit.phone.ui.components.SoftCard
@@ -107,6 +108,7 @@ fun SessionDetailScreen(services: ServiceGraph, sessionId: String, onBack: () ->
                     drawCircle(LiveFitColors.Mint, 5.dp.toPx(), Offset(px.last().x, px.last().y))
                 }
             }
+            MapAttributionRow(services.mapAttribution, Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         }
     }
 }

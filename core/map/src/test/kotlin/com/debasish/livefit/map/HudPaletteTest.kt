@@ -20,6 +20,22 @@ class HudPaletteTest {
     private val label = 0xFF333333.toInt()
     private val transparent = 0x00FFFFFF
 
+    /** Review fix: production tiles are MapTiler streets-v2, so its main colours must map the same way. */
+    @Test fun classifiesTheMapTilerStreetsV2Palette() {
+        val mtLand = 0xFFEAE4D3.toInt()
+        val mtBuilding = 0xFFDFD8CC.toInt()
+        val mtWater = 0xFF8DBEE3.toInt()
+        val mtPark = 0xFFC1DB9F.toInt()
+        val mtMinorRoad = 0xFFFFFFFF.toInt()
+        val mtPrimary = 0xFFFFE9A6.toInt()
+        val mtMotorway = 0xFFF7B46A.toInt()
+        for (c in listOf(mtLand, mtBuilding)) assertEquals(OsmClass.Background, HudPalette.classify(c), "%08x".format(c))
+        assertEquals(OsmClass.Water, HudPalette.classify(mtWater))
+        assertEquals(OsmClass.Park, HudPalette.classify(mtPark))
+        assertEquals(OsmClass.MinorRoad, HudPalette.classify(mtMinorRoad))
+        for (c in listOf(mtPrimary, mtMotorway)) assertEquals(OsmClass.MajorRoad, HudPalette.classify(c), "%08x".format(c))
+    }
+
     @Test fun classifiesTheOsmStandardPalette() {
         for (c in listOf(land, residential, building, label, transparent)) assertEquals(OsmClass.Background, HudPalette.classify(c), "%08x".format(c))
         assertEquals(OsmClass.Water, HudPalette.classify(water))
