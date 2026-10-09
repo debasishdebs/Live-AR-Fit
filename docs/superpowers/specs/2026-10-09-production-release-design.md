@@ -144,9 +144,10 @@ Success means:
 - Localisation
 - Wear tiles and complications
 
-## 11. Owner decisions needed
+## 11. Owner decisions (2026-10-09)
 
-1. Licence (Apache-2.0 recommended).
-2. Tile provider (MapTiler or Thunderforest) and creating its account and key.
-3. Create the upload keystore (the command will be in the README). Keep it and its passwords safe; it can't be recovered.
-4. Contact email for the privacy policy and Play listing (default `d.kanhar@gmail.com`).
+1. Licence: **Apache-2.0**.
+2. Tile provider: **MapTiler** (raster "streets-v2", 256 px PNG). The owner creates the account and key; `LIVEAR_TILES_KEY` is injected at build time.
+3. Upload keystore: the owner generates it locally with the JDK's `keytool` (README step) and keeps it and its passwords in a password manager, with an offline backup. Play App Signing holds the real app-signing key, so a lost upload key can be reset through Play support. The glasses APK on GitHub has no such reset: a lost key forces users to uninstall before they can update.
+4. Contact email: **d.kanhar@gmail.com**.
+5. Public repo hygiene: no device serials, adb names or MACs in tracked files. History was scrubbed before the first push.
