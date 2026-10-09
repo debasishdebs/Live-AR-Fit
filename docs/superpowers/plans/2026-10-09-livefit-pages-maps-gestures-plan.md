@@ -10,6 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-09-livefit-pages-maps-gestures-design.md` (approved). Base spec: `docs/superpowers/specs/2026-10-05-livefit-v1-design.md` (§4 protocol, §5.4 voice, §6.1 settings, §6.3 glasses touchpad). Read both alongside this plan.
 
+## Revision 2 (review 2026-10-09)
+
+Addresses all 12 findings of `reviews/2026-10-09-pages-maps-plan-review.md` (plan commit 630b34b). Each finding → the task(s) whose code and failing-first tests changed:
+
+| # | Finding | Resolution | Tasks |
+|---|---|---|---|
+| 1 | Route rows lost after ACK / failed write | `RoomSessionStore.storeDelta` writes the delta's route rows in the delta's transaction (before the ack); RouteHub retries its own writes from an unsaved queue (tick + next fix) and, on every session load, rebuilds rows missing from `route_point` out of the stored deltas; tombstoned sessions never get rows | 13, 14 (+18 wiring) |
+| 2 | Pre-calibration fixes stored with raw watch time, never repaired | `route_point` identity = (sessionId, source, device time), `phoneTimeMs` nullable/updatable; uncalibrated rows stored with `null`, not ordered/drawn/future-checked; any calibration change re-maps all rows, rebuilds the track and runs `normalizeWatchTimes`; future rejection only on calibrated times | 3, 13, 14, 20 |
+| 3 | A delayed batch manufactures a 10 s recovery run | Recovery run measured in observed (arrival) time; freshness/marker keep measurement time | 4 |
+| 4 | Append after a torn tail misaligns route.bin | `append` truncates to the last whole record first | 10 |
+| 5 | Renderer downloads 9 tiles sequentially before drawing | New `TileLoader` (bounded concurrency, independent tiles); `GlassesMapPlan` renders at once from loaded tiles or route-only | 8, 18 |
+| 6 | Watch retries missing tiles only on placement change | `TileLoader.start()` retries missing visible tiles every 5 s (fetcher backoff honoured), slot released in `finally`; `WatchTiles.show(visible)` | 8, 12 |
+| 7 | Watch marker moves to aged points | `WatchMapTracker`: only a fix usable-live on arrival (shared `Freshness`) moves the marker; restored route has no marker | 12 |
+| 8 | Missing accuracy became 30 m (usable) | `LocationFix.accuracyM: Float?` (null = unknown); one rule `FixQuality.accurate` used by `RouteTrack`, `Freshness`, RouteHub and the watch; HS and phone providers emit null | 1, 3, 4, 10, 11, 12, 14, 16 |
+| 9 | Idle timer exits Scroll after a long confirmation; timeout not keyed | `IdleGate` orders resume-then-deadline; timer effect keyed on the collected idle timeout | 21, 22 |
+| 10 | PageReporter drops failed sends | `send` returns Boolean (`sendMessage == 0`); latest unsent page kept and retried every second | 22 |
+| 11 | Tile cache caps at 7 days, no validators | `TileMeta` (expiry, ETag, Last-Modified); max-age / Expires honoured uncapped; `If-None-Match`/`If-Modified-Since`; 304 keeps bytes; 7 days only without headers | 8 |
+| 12 | Task 12 uses `:core:map` without depending on Task 9 | `api(project(":core:map"))` on `:services:sync` moved to Task 2; index/lanes updated | 2, 9, index |
+| — | Early raw-PNG-over-CXR check | Device check D1 (Task 22 Step 9) with the `map_probe` debug command (Task 15); decides `MAP_AS_BASE64` before Task 23 | 15, 22, 25 |
+
 ## Global Constraints
 
 - Build with JDK 17: prefix every Gradle command with `export JAVA_HOME=$(/usr/libexec/java_home -v 17) &&`.
@@ -19,14 +39,14 @@
 - **Page order (cycling): Glance → Workout → Stats → Playlist → Map → Music controls.** Same set on glasses and watch. Workout cannot be disabled. Map is skipped when no GPS workout is active. Workout start lands on Workout.
 - **Page transitions:** visible page becomes unavailable → switch to Workout immediately; any actual page change clears Scroll mode and any highlight/selector; Scroll mode stays after Play highlighted / Press selected; the idle timer restarts on every gesture handled in Scroll mode; confirmations pause it.
 - **Scroll mode** only on Playlist and Music controls; left by "Exit scroll", by the in-page **✕ Back** item, or after the **idle timeout (default 5 s, 3–15 s)**.
-- **Usable-live fix:** with calibrated time, **−2 s ≤ age ≤ 10 s** and **accuracyM ≤ 30**. Only usable-live fixes move the marker and drive source switching.
+- **Usable-live fix:** with calibrated time, **−2 s ≤ age ≤ 10 s** and **accuracyM ≤ 30**. Only usable-live fixes move the marker and drive source switching. A fix without accuracy is **unknown** (`accuracyM = null`) and never usable-live or routed; one shared predicate (`FixQuality` / `Freshness.isUsableLive`) on phone and watch. On the watch a fix must be usable-live when it **arrives** to move the marker.
 - **Degraded display:** no usable-live fix for **10–30 s** → hollow arrow + "GPS delayed"; **> 30 s** → "GPS lost", last point kept. No fix yet → "Waiting for GPS…".
-- **Phone fallback:** starts when no usable-live watch fix for **15 s** during a GPS workout; stops when watch fixes have been usable-live continuously for **10 s**; while both are usable-live, watch fixes win. Fallback benefits glasses and history only; the watch map always uses its own fixes.
+- **Phone fallback:** starts when no usable-live watch fix for **15 s** during a GPS workout; stops when watch fixes have been usable-live continuously for **10 s of observed (arrival) time**; while both are usable-live, watch fixes win. Fallback benefits glasses and history only; the watch map always uses its own fixes.
 - **Clock calibration:** on every watch connect/reconnect and **every 5 min**: offset = `tw − (t0 + t1)/2`, accepted only if **RTT `t1 − t0` ≤ 1 s**, else retried **up to 5 tries**. Until a sync succeeded in the current phone process, watch fixes are recorded but never live.
 - **Route merge:** points sorted by `fixTimeMs`; drop `accuracyM > 30`; drop a point **< 3 m** from its chronological neighbour of the same source; duplicates = same source + same `fixTimeMs` (**±50 ms**) + same position (**±1 m**); phone points within **±5 s** of a watch point hidden from the drawn route (kept in storage); points **> 2 min** in the future rejected; ties break watch-first.
-- **Storage:** Room `route_point(sessionId, fixTimeMs, source, lat, lon, accuracyM)` with unique key `(sessionId, source, fixTimeMs)`.
+- **Storage:** Room `route_point(sessionId, fixTimeMs, source, lat, lon, accuracyM)` with unique key `(sessionId, source, fixTimeMs)` — `fixTimeMs` is the measuring device's clock (identity, never changed) plus a nullable `phoneTimeMs` (ordering; null until calibrated, rewritten on calibration). A stored delta's route rows are written in the delta's transaction; Discarded/Cleared tombstones block route rows.
 - **Map math:** Web-Mercator slippy tiles, north-up, centred on the current position, **zoom 18 default (~270 m across 480 px at latitude 20°; ~1.08 km at zoom 16), zoom 17 for Cycle**; watch bezel zoom **14–18**.
-- **Tiles:** `https://tile.openstreetmap.org/{z}/{x}/{y}.png`, app-specific User-Agent, attribution **"© OpenStreetMap contributors" always visible**, disk LRU cache **50 MB phone / 20 MB watch**, **7-day max-age honoured**, no prefetch beyond the visible **3×3** tiles, provider behind a `TileSource` interface.
+- **Tiles:** `https://tile.openstreetmap.org/{z}/{x}/{y}.png`, app-specific User-Agent, attribution **"© OpenStreetMap contributors" always visible**, disk LRU cache **50 MB phone / 20 MB watch**, the server's cache lifetime honoured (max-age, else Expires; **7 days only when the server sends neither**), expired tiles revalidated with `If-None-Match`/`If-Modified-Since` (304 keeps the bytes), no prefetch beyond the visible **3×3** tiles, provider behind a `TileSource` interface. Rendering never waits for a tile; missing visible tiles load in the background and are retried while visible.
 - **Glasses map image:** **480×480** PNG, target **≤ 40 KB**, HUD palette (black background, streets dim green, water/park dropped, bright route, arrow, start marker, scale bar, attribution). Sent on `lf_map` **only while the glasses report the Map page visible**; cadence **every 3 s or after ≥ 25 m movement, never more than 1/s**; each image carries `{sessionId, renderEpoch, renderSeq}`; new random `renderEpoch` at phone process start and on every glasses (re)connect, announced first (epoch header, no image). Offline → "No map — route only".
 - **`lf_page_state{page, seq}`** sent by the glasses on every page change **and on every connect/reconnect**; the phone clears visibility on disconnect.
 - **FGS:** watch exercise service type **`health|location`** (location only with `ACCESS_FINE_LOCATION`; never crash on denial); phone hub adds type `location`, re-promoted with `CONNECTED_DEVICE | LOCATION` whenever LiveFit's Activity is visible and fine location is granted; otherwise "Phone GPS available after opening LiveFit"; denied → "Phone GPS off", hub still starts with `connectedDevice`.
@@ -37,13 +57,15 @@
 
 ## Review Focus
 
-Five real-world conditions the spec implies that are most likely to bite the owner; each line names the test that pins it and the task that owns it.
+Seven real-world conditions the spec implies that are most likely to bite the owner; each line names the test that pins it and the task that owns it.
 
-1. **Phone restarts mid-run; the watch's first replay (minutes-old fixes) arrives before the first time-sync, then again just after it** → the replay is stored and drawn in time order but never moves the marker, never shows "Live", and never stops the phone fallback. Pinned in Task 14 (`delayedFirstReplayAfterPhoneRestartDoesNotLookLive`).
-2. **Watch screen off + phone locked: Health Services delivers 30–40 s of location in one late batch** → the batch is inserted chronologically, status reads "GPS delayed" (not Live), and the burst cannot flip the source. Pinned in Task 4 (`lateBatchedBurstNeitherLiveNorFlipsSource`) and Task 3 (`lateBatchInsertsChronologically`).
+1. **Phone restarts mid-run; the watch's first replay (minutes-old fixes, watch clock possibly minutes off) arrives before the first time-sync, then again just after it** → the replay is stored by device time, then normalized and drawn in time order once calibrated (nothing rejected as "future"), but never moves the marker, never shows "Live", and never stops the phone fallback. Pinned in Task 14 (`delayedFirstReplayAfterPhoneRestartDoesNotLookLive`, `replayBeforeSyncThenCalibrationMoreThanTwoMinutesAhead`).
+2. **Watch screen off + phone locked: Health Services delivers 30–40 s of location in one late batch** → the batch is inserted chronologically, status reads "GPS delayed" (not Live), and the burst — even one spanning the whole 10 s live window — cannot flip the source. Pinned in Task 4 (`lateBatchedBurstNeitherLiveNorFlipsSource`, `oneBatchSpanningTheLiveWindowDoesNotStopFallback`), Task 3 (`lateBatchInsertsChronologically`) and on the watch in Task 12 (`agedBatchGrowsTheRouteButNeverMovesTheMarker`).
 3. **Glasses stay on the Map page while the phone process restarts or the CXR link drops and comes back (no page change)** → the phone announces a new epoch, the glasses re-report their page, images resume, and an in-flight image from the old epoch is rejected. Pinned in Task 9 (`reconnectWithoutPageChangeResumesAfterPageReport`, `restartedPhoneNewEpochResetsSequence`).
 4. **A gesture table arrives that leaves a page without Close app (older phone build, hand-edited prefs, or a bug)** → the glasses keep that page's last valid table (defaults initially) while applying the valid pages, so the wearer can always leave the app and change pages. Pinned in Task 6 (`brokenTableKeepsLastValidPerPage`).
 5. **The wearer is in Scroll mode on Playlist when that page is disabled on the phone (or is on Map when the GPS workout ends)** → the glasses jump to Workout in Page mode with no highlight, and the phone stops sending images. Pinned in Task 21 (`disablingVisibleScrollPageReturnsToWorkoutInPageMode`) and Task 9 (`leavingMapStopsImages`).
+6. **The phone process dies right after acking a watch delta (or a route write fails once)** → after restart the full route is back (rows stored with the delta, missing ones rebuilt from stored deltas, failed writes retried), never for a discarded session. Pinned in Task 13 (`storingADeltaStoresItsRouteRowsInTheSameTransaction`) and Task 14 (`routeRowsMissingAfterAnAckAreRebuiltFromStoredDeltas`, `aFailedRouteWriteIsRetriedAndReplayIsIdempotent`).
+7. **Tiles are slow or the network is down when the Map page opens, and the wearer does not move** → images keep their 3 s cadence (route, marker, "GPS delayed" / "No map — route only") and tiles fill in by themselves once the network returns, on glasses and watch. Pinned in Task 18 (`blockedTilesNeverHoldBackTheImage`), Task 8 (`missingVisibleTilesAreRetriedWithoutAViewportChange`) and Task 12 (`fixedViewportGetsItsTilesOnceTheNetworkReturns`).
 
 ---
 
@@ -63,35 +85,38 @@ core/model/src/main/kotlin/com/debasish/livefit/model/
   PageSet.kt       (create) page availability, cycling, fallback
   GestureRules.kt  (create) per-context catalogue, safety validation, sanitize, change
 core/map/ (new pure module, package com.debasish.livefit.map)
-  TileMath.kt, Viewport.kt, MapScene.kt, HudPalette.kt, MapCadence.kt, Tiles.kt (TileSource, OsmTileSource, TileDiskCache, HttpTileFetcher)
+  TileMath.kt, Viewport.kt, MapScene.kt, HudPalette.kt, MapCadence.kt, Tiles.kt (TileSource, OsmTileSource, TileMeta, TileDiskCache, HttpTileFetcher), TileLoader.kt
 core/services/.../Services.kt  (modify) RouteStore; GlassesLinkService.pushMap; GlassesEvent.PageVisible; WatchLinkService.pushSettings/pushQueue
 services/sync/  WatchClockSync.kt, Freshness.kt, LiveLocationSelector.kt, GlassesMapStreamer.kt, MapImageGate.kt, RouteHub.kt, WatchRouteFile.kt (create);
-                WatchSessionRecorder.kt, WatchExerciseController.kt, HubCommandRouter.kt (modify); build.gradle.kts (api :core:map)
+                WatchSessionRecorder.kt, WatchExerciseController.kt, HubCommandRouter.kt (modify); build.gradle.kts (api :core:map — Task 2)
 services/workout/ SessionAssembler.kt, HubWorkoutService.kt (modify: gps)
 services/history/ Entities.kt, HistoryDao.kt, HistoryDatabase.kt (v2 + migration), RoomSessionStore.kt (RouteStore)
 services/glasses-link/ GlassesInbound.kt (lf_page_state), CxrGlassesLink.kt (pushMap)
 services/watch-link/   WatchMessageCodec.kt (time_res), DataLayerWatchLink.kt (time-sync driver, settings, queue)
 services/voice/        CommandParser.kt, VoiceCommandGroup.kt
-phone/  AndroidManifest.xml, LiveFitHubService.kt, HubLocationPolicy.kt, location/PhoneLocationProvider.kt, map/GlassesMapRenderer.kt,
+phone/  AndroidManifest.xml, LiveFitHubService.kt, HubLocationPolicy.kt, location/PhoneLocationProvider.kt, map/{GlassesMapText,GlassesMapPlan,GlassesMapRenderer}.kt,
+        src/debug/.../DebugReceiver.kt (map_probe, device check D1),
         ServiceGraph.kt, SettingsStore.kt, setup/SetupFlow.kt, setup/SetupScreen.kt, ui/AppActivity.kt, ui/settings/SettingsScreen.kt,
         ui/list/ListSource.kt, ui/list/sources/{PagesSource,GestureSource,GestureMenu,PermissionSource}.kt, ui/history/SessionDetailScreen.kt
-watch/  AndroidManifest.xml, ExerciseService.kt, WatchFgs.kt, HealthServicesExercise.kt, TimeSyncResponder.kt, PhoneCommandListener.kt,
-        WatchRuntime.kt, WatchClient.kt, MainActivity.kt, map/{WatchTiles,WatchMapModel}.kt, ui/{WatchApp,WatchPages,WatchMap}.kt
-glasses/ hud/HudNav.kt (rewrite), hud/DoubleTap.kt (CloseConfirm.onClose), hud/HudController.kt, hud/PageReporter.kt, hud/MapPayload.kt,
+watch/  AndroidManifest.xml, build.gradle.kts (test deps), ExerciseService.kt, WatchFgs.kt, HealthServicesExercise.kt, TimeSyncResponder.kt, PhoneCommandListener.kt,
+        WatchRuntime.kt, WatchClient.kt, MainActivity.kt, map/{WatchTiles,WatchMapModel (+WatchMapTracker, WatchTilePolicy)}.kt, ui/{WatchApp,WatchPages,WatchMap}.kt
+glasses/ build.gradle.kts (test deps), hud/HudNav.kt (rewrite, + IdleGate), hud/DoubleTap.kt (CloseConfirm.onClose), hud/HudController.kt, hud/PageReporter.kt, hud/MapPayload.kt,
          hud/HudScreen.kt, hud/MusicScreen.kt, hud/HudPages.kt (Stats, Map, Music controls), MainActivity.kt
 tools/device-tests/map-cadence.sh (create)
 ```
 
 Decisions this plan makes where the spec is silent or ambiguous (each is also listed in the hand-off report):
 - **GPS workout** = "Use GPS outdoors" on, for every type including Walk (spec §2.1 lists Walk explicitly); off = no GPS for any type. The Started event records that GPS was *requested* (`Started.gps`, the phone's choice), so the hub, glasses and watch all derive Map eligibility from `WorkoutSnapshot.gps` + a recording phase — and the Map page and phone fallback stay available when the watch itself cannot get location (permission denied, no fix).
-- **`route_point.fixTimeMs` stores the source device's own clock** (watch clock for watch fixes) so the unique key stays replay-safe across re-calibrations; an extra `phoneTimeMs` column holds the mapped time used for ordering.
-- **"Continuously usable-live for 10 s"** = an unbroken run of usable-live watch fixes with no gap > 3 s; a fresh-but-inaccurate watch fix breaks the run; replayed (old) or uncalibrated fixes neither count nor break it.
+- **`route_point.fixTimeMs` stores the source device's own clock** (watch clock for watch fixes) so the unique key stays replay-safe across re-calibrations; an extra nullable `phoneTimeMs` column holds the mapped time used for ordering (null until the first successful calibration of this phone process; every calibration change re-maps all watch rows of the session). Uncalibrated watch fixes are durable but **not drawn** until calibrated (calibration runs on every connect, so this is normally about a second). History shows never-normalized rows at device time.
+- **"Continuously usable-live for 10 s"** = an unbroken run of usable-live watch fixes timed by **arrival** (observed time) with no arrival gap > 3 s, so a late batch is one observation; a fresh-but-unusable watch fix (inaccurate, unknown accuracy, too far ahead) breaks the run; replayed (old) or uncalibrated fixes neither count nor break it.
 - **Invalid gesture tables on the glasses** (spec §4.4 "fall back to defaults" vs §7 "keep the last valid mapping"): per page, the last valid table is kept; before any valid table it is the default.
 - **Playlist ✕ Back** is a final row after the queue rows; the Music-controls selector wraps (⏮ ⏯ ⏭ ✕), the Playlist highlight stops at the ends (V1 behaviour).
-- **lf_map payload:** PNG in the CXR `bytes` argument (spec "binary payload"); the glasses also accept a `pngBase64` field, switched on with `CxrGlassesLink.MAP_AS_BASE64` if the device test shows the bytes argument does not arrive (audio already needed Base64 text the other way).
+- **lf_map payload:** PNG in the CXR `bytes` argument (spec "binary payload"); the glasses also accept a `pngBase64` field, switched on with `CxrGlassesLink.MAP_AS_BASE64` if early device check D1 (Task 22 Step 9, as soon as sender and receiver exist) shows the bytes argument does not arrive intact (audio already needed Base64 text the other way).
 - **Uncalibrated retry:** while no sync has succeeded, the phone retries calibration every 30 s (5 tries each) instead of waiting 5 min.
 - **Location batching overrides:** Health Services 1.1.0-alpha05 names no location override, so the watch requests every supported override (today only `HEART_RATE_5_SECONDS`) and logs the list.
-- Missing Health Services location accuracy is treated as 30 m (borderline usable) and logged.
+- Missing location accuracy (Health Services or the phone) is **unknown** (`null`): recorded in the delta and route.bin, but never routed, stored in `route_point`, or usable-live; logged on the watch.
+- **Tile lifetime:** spec §2.4 "7-day max-age honoured" is read as "honour the server's lifetime; 7 days when it gives none" (OSM tile policy §3.2), never capped.
+- **Glasses page reports** are retried: the latest unsent `lf_page_state` is re-sent every second until the CXR bridge accepts it (`sendMessage == 0`).
 
 ---
 
@@ -106,36 +131,36 @@ Decisions this plan makes where the spec is silent or ambiguous (each is also li
 | 5 | Page set and transitions | 1 |
 | 6 | Gesture rules and safety validation | 1 |
 | 7 | Map scene, HUD palette, cadence | 2, 3 |
-| 8 | Tile source, disk cache, HTTP fetcher | 2 |
+| 8 | Tile source, validating disk cache, HTTP fetcher, non-blocking tile loader | 2 |
 | 9 | Glasses map stream (phone streamer + glasses image gate) | 3, 7 |
 | 10 | Watch recorder: fixes in deltas, `Started.gps`, route file | 1 |
 | 11 | Watch platform: HS location, FGS `health\|location`, time-sync responder, settings/queue intake | 10 |
-| 12 | Watch pages UI (Glance, Stats, Playlist, Map, Music controls, bezel) | 4, 5, 7, 8, 11 |
-| 13 | Route storage in Room | 3 |
-| 14 | RouteHub (merge, live source, fallback decision, persistence) | 4, 5, 13 |
-| 15 | Link plumbing (time-sync driver, watch settings/queue, `lf_map` send, `lf_page_state` inbound) | 4 |
+| 12 | Watch pages UI (Glance, Stats, Playlist, Map, Music controls, bezel) | 2, 4, 5, 7, 8, 11 (`:core:map` via `:services:sync` from Task 2) |
+| 13 | Route storage in Room (device-time identity, nullable phone time, rows with their delta) | 3 |
+| 14 | RouteHub (merge, live source, fallback, calibration normalization, durable retried rows) | 3, 4, 5, 13 |
+| 15 | Link plumbing (time-sync driver, watch settings/queue, `lf_map` send, `lf_page_state` inbound, `map_probe`) | 4 |
 | 16 | Phone GPS (LocationSource provider, hub re-promotion, setup step, status) | 1 |
 | 17 | Settings store pages + gestures, settings frames, voice page gate | 5, 6, 13, 15, 16 |
 | 18 | Map pipeline wiring (renderer + ServiceGraph) | 7, 8, 9, 14, 15, 17 |
 | 19 | Settings UI: Pages list, hierarchical Glasses gestures | 17 |
 | 20 | History detail route thumbnail | 2, 7, 17 |
 | 21 | Glasses HudNav v4 (pure) | 5, 6 |
-| 22 | Glasses controller + activity (settings, page-state, `lf_map`, dispatch) | 9, 21 |
-| 23 | Glasses pages UI (Stats, Map, Music controls, Playlist scroll) | 22 |
+| 22 | Glasses controller + activity (settings, page-state with retry, `lf_map`, dispatch) + **device check D1** | 9, 15, 21 |
+| 23 | Glasses pages UI (Stats, Map, Music controls, Playlist scroll) | 22 (incl. D1 outcome) |
 | 24 | Voice phrases | 1 |
 | 25 | Device acceptance | all |
 
 **Parallel lanes** (Task 1 first, alone — every lane needs protocol v4; within a lane run top to bottom; a lane waits for a cross-lane dependency listed above before starting that task):
-- **Lane A — map core:** 2 → 8 → 7 (7 also waits for 3)
+- **Lane A — map core:** 2 → 8 → 7 (7 also waits for 3). Task 2 also owns `services/sync/build.gradle.kts` (`api :core:map`).
 - **Lane B — route/location core:** 3 → 4 → 9 (9 also waits for 7)
-- **Lane C — pages/gestures core + glasses:** 5 → 6 → 21 → 22 (waits for 9) → 23
-- **Lane D — watch:** 10 → 11 → 12 (waits for 4, 5, 7, 8)
+- **Lane C — pages/gestures core + glasses:** 5 → 6 → 21 → 22 (waits for 9 and 15; ends with device check D1) → 23
+- **Lane D — watch:** 10 → 11 → 12 (waits for 2, 4, 5, 7, 8)
 - **Lane E — phone data/links:** 13 → 14 (waits for 4, 5) → 15
 - **Lane F — phone app:** 16 → 17 (waits for 5, 6, 13, 15) → 19 → 20 (waits for 7) → 18 (waits for 8, 9, 14)
 - **Lane G — voice:** 24
 - **Finish:** 25 after every lane.
 
-Files are owned by exactly one lane (e.g. `ServiceGraph.kt` and `SettingsScreen.kt` only in Lane F, all glasses files only in Lane C, all watch files only in Lane D), so lanes merge without conflicts.
+Files are owned by exactly one lane (e.g. `ServiceGraph.kt` and `SettingsScreen.kt` only in Lane F, the debug-only `DebugReceiver.kt` only in Lane E, `services/sync/build.gradle.kts` and `core/map/build.gradle.kts` only in Lane A, all glasses files only in Lane C, all watch files only in Lane D), so lanes merge without conflicts.
 
 ---
 
@@ -157,7 +182,7 @@ Files are owned by exactly one lane (e.g. `ServiceGraph.kt` and `SettingsScreen.
 - Produces (used by every later task):
   - `const val PROTOCOL_VERSION = 4`; `GlassesChannels.MAP = "lf_map"`, `GlassesChannels.PAGE_STATE = "lf_page_state"`; `WatchPaths.TIME_REQ = "/lf/time_req"`, `WatchPaths.TIME_RES = "/lf/time_res"`, `WatchPaths.QUEUE = "/lf/queue"`
   - `enum class HudPage(val label: String) { Glance, Workout, Stats, Playlist, Map, MusicControls }` (declaration order = cycle order)
-  - `enum class FixSource { Watch, Phone }`; `data class LocationFix(lat: Double, lon: Double, accuracyM: Float, bearingDeg: Float? = null, fixTimeMs: Long)`
+  - `enum class FixSource { Watch, Phone }`; `data class LocationFix(lat: Double, lon: Double, accuracyM: Float?, bearingDeg: Float? = null, fixTimeMs: Long)` — `accuracyM = null` means **unknown** (review #8; never a borderline number)
   - `SessionEvent.Started(tMs, type, gps: Boolean = false)`; `SessionDelta.locations: List<LocationFix> = emptyList()`; `WorkoutSnapshot.gps: Boolean = false`
   - `data class PageSettings(disabled: Set<HudPage> = emptySet()) { fun isEnabled(page: HudPage): Boolean }`
   - `enum class Gesture(label)`: `Tap, DoubleTap, ShortForward, ShortBack, LongForward, LongBack`; `enum class GestureMode { Page, Scroll }`; `enum class GestureAction(label)` (catalogue below); `data class GestureSettings(page: Map<HudPage, Map<Gesture, GestureAction>>, scroll: Map<HudPage, Map<Gesture, GestureAction>>, idleTimeoutS: Int = 5, askBeforeClose: Boolean = true)`; `object GestureDefaults { SCROLL_PAGES; IDLE_DEFAULT_S/IDLE_MIN_S/IDLE_MAX_S; fun pageTable(page); fun scrollTable(page); val page; val scroll }`
@@ -206,6 +231,13 @@ class WireV4Test {
             provenance = Provenance.Live("galaxy-watch/health-services"),
         ),
     )
+
+    /** Review #8: a fix without accuracy travels as an explicit null (unknown), never as a borderline number. */
+    @Test fun unknownAccuracyIsAnExplicitNull() {
+        val f = LocationFix(12.9716, 77.5946, null, null, 3_000)
+        roundTrip(f)
+        assertTrue(Wire.encode(f).contains("\"accuracyM\":null"))
+    }
 
     @Test fun olderDeltaJsonWithoutLocationsOrGpsStillDecodes() {
         val json = """{"protocolVersion":4,"sessionId":"s","seq":0,"events":[{"cmd":"com.debasish.livefit.model.SessionEvent.Started","tMs":1,"type":"Walk"}],"provenance":{"cmd":"com.debasish.livefit.model.Provenance.Fake"}}"""
@@ -336,13 +368,14 @@ enum class FixSource { Watch, Phone }
 
 /**
  * One position fix. [fixTimeMs] is the fix's own time on the clock of the device that measured it (watch clock for watch
- * fixes); the phone maps watch times to phone time with its calibrated offset (spec §2.1).
+ * fixes); the phone maps watch times to phone time with its calibrated offset (spec §2.1). [accuracyM] null = the
+ * platform reported no accuracy: unknown, which fails every accuracy gate (FixQuality, Task 3; review #8).
  */
 @Serializable
 data class LocationFix(
     val lat: Double,
     val lon: Double,
-    val accuracyM: Float,
+    val accuracyM: Float?,
     val bearingDeg: Float? = null,
     val fixTimeMs: Long,
 )
@@ -591,6 +624,7 @@ git commit -m "feat(model): protocol v4 — pages, gestures, map frames, page st
 
 **Files:**
 - Modify: `settings.gradle.kts`
+- Modify: `services/sync/build.gradle.kts`
 - Create: `core/map/build.gradle.kts`
 - Create: `core/map/src/main/kotlin/com/debasish/livefit/map/TileMath.kt`
 - Create: `core/map/src/main/kotlin/com/debasish/livefit/map/Viewport.kt`
@@ -600,6 +634,7 @@ git commit -m "feat(model): protocol v4 — pages, gestures, map frames, page st
 - Consumes: `WorkoutType` (Task 1 unchanged type).
 - Produces:
   - Gradle module `:core:map` (pure Kotlin JVM, `api(project(":core:model"))`).
+  - `:services:sync` exposes `:core:map` (`api(project(":core:map"))`), so phone, watch and glasses see it from here on (review #12: moved from Task 9 so Task 12 depends only on tasks it lists).
   - `const val OSM_ATTRIBUTION = "© OpenStreetMap contributors"`
   - `data class TileId(z: Int, x: Int, y: Int)`, `data class Px(x: Float, y: Float)`
   - `object TileMath { TILE_SIZE = 256; fun worldSize(z): Double; fun lonToWorldX(lon, z): Double; fun latToWorldY(lat, z): Double; fun worldXToLon(x, z): Double; fun worldYToLat(y, z): Double; fun tileFor(lat, lon, z): TileId; fun metersPerPixel(lat, z): Double }`
@@ -627,6 +662,12 @@ dependencies {
 }
 
 tasks.test { useJUnitPlatform() }
+```
+
+In `services/sync/build.gradle.kts` add inside `dependencies { … }`:
+
+```kotlin
+    api(project(":core:map"))
 ```
 
 - [ ] **Step 2: Write the failing test** — `core/map/src/test/kotlin/com/debasish/livefit/map/TileMathTest.kt`:
@@ -846,7 +887,7 @@ Expected: PASS (9 tests).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add settings.gradle.kts core/map
+git add settings.gradle.kts core/map services/sync/build.gradle.kts
 git commit -m "feat(map): :core:map module with slippy-tile math and viewport"
 ```
 
@@ -859,12 +900,15 @@ git commit -m "feat(map): :core:map module with slippy-tile math and viewport"
 - Test: `core/model/src/test/kotlin/com/debasish/livefit/model/RouteTrackTest.kt`
 
 **Interfaces:**
-- Consumes: `FixSource`, `WorkoutType` (Task 1).
+- Consumes: `FixSource`, `LocationFix`, `WorkoutType` (Task 1).
 - Produces:
+  - `object FixQuality { MAX_ACCURACY_M = 30f; fun accurate(accuracyM: Float?): Boolean }` — **the one accuracy rule** (route filter and usable-live on phone and watch): `null` (unknown) is never accurate (review #8).
+  - `@Serializable data class RouteFix(source: FixSource, lat: Double, lon: Double, accuracyM: Float, deviceTimeMs: Long, phoneTimeMs: Long?, bearingDeg: Float? = null) { fun point(): RoutePoint?; fun historyPoint(): RoutePoint }` — one durable `route_point` row: identity `(source, deviceTimeMs)`, `phoneTimeMs` null while uncalibrated (review #1/#2). `point()` is null until it has a phone time; `historyPoint()` falls back to device time (history display only).
+  - `fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?): RouteFix?` — null unless `FixQuality.accurate(accuracyM)`.
   - `object Geo { fun distanceM(lat1, lon1, lat2, lon2): Double; fun bearingDeg(lat1, lon1, lat2, lon2): Float }`
   - `@Serializable data class RoutePoint(source: FixSource, lat: Double, lon: Double, accuracyM: Float, deviceTimeMs: Long, fixTimeMs: Long, bearingDeg: Float? = null)` — `deviceTimeMs` = the measuring device's clock, `fixTimeMs` = phone time used for ordering.
   - `enum class RouteAdd { Added, Inaccurate, TooClose, Duplicate, Future }`
-  - `class RouteTrack { val points: List<RoutePoint>; fun add(p: RoutePoint, nowMs: Long): RouteAdd; fun drawn(): List<RoutePoint>; fun lastBearing(): Float?; companion { MAX_ACCURACY_M = 30f; MIN_SPACING_M = 3.0; DUP_TIME_MS = 50L; DUP_DISTANCE_M = 1.0; OVERLAP_MS = 5_000L; MAX_FUTURE_MS = 120_000L; fun of(points: List<RoutePoint>): RouteTrack } }`
+  - `class RouteTrack { val points: List<RoutePoint>; fun add(p: RoutePoint, nowMs: Long): RouteAdd; fun drawn(): List<RoutePoint>; fun lastBearing(): Float?; companion { MAX_ACCURACY_M = FixQuality.MAX_ACCURACY_M; MIN_SPACING_M = 3.0; DUP_TIME_MS = 50L; DUP_DISTANCE_M = 1.0; OVERLAP_MS = 5_000L; MAX_FUTURE_MS = 120_000L; fun of(points: List<RoutePoint>, nowMs: Long = Long.MAX_VALUE): RouteTrack } }` — `of(points, now)` rebuilds from scratch (after a calibration change); only points with a phone time ever reach a track.
   - `enum class GpsStatus { Waiting, Live, Delayed, Lost }`
   - `data class LivePosition(lat: Double, lon: Double, bearingDeg: Float?, source: FixSource, fixTimeMs: Long)`
   - `data class RouteState(sessionId: String? = null, type: WorkoutType = WorkoutType.Walk, route: List<RoutePoint> = emptyList(), start: RoutePoint? = null, live: LivePosition? = null, status: GpsStatus = GpsStatus.Waiting)`
@@ -877,6 +921,7 @@ package com.debasish.livefit.model
 import kotlin.math.cos
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -971,6 +1016,34 @@ class RouteTrackTest {
         assertEquals(90f, assertNotNull(t.lastBearing()), 0.5f)
     }
 
+    /** Review #8: unknown accuracy is never accurate — no route row, no route point, never live (one shared rule). */
+    @Test fun unknownAccuracyFailsTheAccuracyGate() {
+        assertFalse(FixQuality.accurate(null))
+        assertTrue(FixQuality.accurate(30f))
+        assertFalse(FixQuality.accurate(30.01f))
+        assertNull(LocationFix(lat0, lon0, null, null, 1_000).toRouteFix(FixSource.Watch, 1_000))
+        assertNull(LocationFix(lat0, lon0, 31f, null, 1_000).toRouteFix(FixSource.Watch, 1_000))
+    }
+
+    /** Review #2: an uncalibrated row keeps its device-time identity and takes no part in ordering until it has a phone time. */
+    @Test fun routeFixWithoutPhoneTimeIsNotARoutePointYet() {
+        val f = assertNotNull(LocationFix(lat0, lon0, 5f, 90f, 7_000).toRouteFix(FixSource.Watch, phoneTimeMs = null))
+        assertEquals(7_000L, f.deviceTimeMs)
+        assertNull(f.point())
+        val mapped = assertNotNull(f.copy(phoneTimeMs = 2_000).point())
+        assertEquals(2_000L, mapped.fixTimeMs)
+        assertEquals(7_000L, mapped.deviceTimeMs, "identity unchanged by calibration")
+        assertEquals(90f, mapped.bearingDeg)
+        assertEquals(7_000L, f.historyPoint().fixTimeMs, "history fallback: device time")
+    }
+
+    /** Review #2: a rebuild after calibration applies the future check with the real clock; history (no clock) never does. */
+    @Test fun ofWithNowRejectsOnlyFuturePoints() {
+        val pts = listOf(p(FixSource.Watch, now + 200_000, 0.0), p(FixSource.Watch, now - 1_000, 10.0))
+        assertEquals(listOf(now - 1_000), RouteTrack.of(pts, now).points.map { it.fixTimeMs })
+        assertEquals(2, RouteTrack.of(pts).points.size)
+    }
+
     @Test fun ofRestoresStoredPointsWhateverTheirAge() {
         val stored = listOf(p(FixSource.Watch, 2_000, 10.0), p(FixSource.Watch, 1_000, 0.0))
         assertEquals(listOf(1_000L, 2_000L), RouteTrack.of(stored).points.map { it.fixTimeMs })
@@ -1031,6 +1104,40 @@ data class RoutePoint(
     val bearingDeg: Float? = null,
 )
 
+/** The one accuracy rule (spec §2.1/§2.2): route filter and usable-live, phone and watch. Unknown (null) is never accurate. */
+object FixQuality {
+    const val MAX_ACCURACY_M = 30f
+    fun accurate(accuracyM: Float?): Boolean = accuracyM != null && accuracyM <= MAX_ACCURACY_M
+}
+
+/**
+ * One durable route row (route_point, spec §2.2). Identity = ([source], [deviceTimeMs]) on the measuring device's clock and
+ * never changes; [phoneTimeMs] is the calibrated phone time — null while the watch clock is uncalibrated, rewritten when a
+ * (re-)calibration normalizes the session (review #2). Only accurate fixes become rows.
+ */
+@Serializable
+data class RouteFix(
+    val source: FixSource,
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Float,
+    val deviceTimeMs: Long,
+    val phoneTimeMs: Long?,
+    val bearingDeg: Float? = null,
+) {
+    /** The ordered point once it has a phone time; uncalibrated rows stay out of ordering, overlap and future checks. */
+    fun point(): RoutePoint? = phoneTimeMs?.let { RoutePoint(source, lat, lon, accuracyM, deviceTimeMs, it, bearingDeg) }
+
+    /** History display only (a finished session whose rows were never normalized falls back to device time). */
+    fun historyPoint(): RoutePoint = RoutePoint(source, lat, lon, accuracyM, deviceTimeMs, phoneTimeMs ?: deviceTimeMs, bearingDeg)
+}
+
+/** A route row for this fix, or null when its accuracy is unknown or worse than 30 m. */
+fun LocationFix.toRouteFix(source: FixSource, phoneTimeMs: Long?): RouteFix? {
+    val acc = accuracyM?.takeIf { FixQuality.accurate(it) } ?: return null
+    return RouteFix(source, lat, lon, acc, fixTimeMs, phoneTimeMs, bearingDeg)
+}
+
 enum class RouteAdd { Added, Inaccurate, TooClose, Duplicate, Future }
 
 enum class GpsStatus { Waiting, Live, Delayed, Lost }
@@ -1059,7 +1166,7 @@ class RouteTrack {
     val points: List<RoutePoint> get() = sorted
 
     fun add(p: RoutePoint, nowMs: Long): RouteAdd {
-        if (p.accuracyM > MAX_ACCURACY_M) return RouteAdd.Inaccurate
+        if (!FixQuality.accurate(p.accuracyM)) return RouteAdd.Inaccurate
         if (p.fixTimeMs - nowMs > MAX_FUTURE_MS) return RouteAdd.Future
         val i = insertionIndex(p)
         val neighbours = listOfNotNull(neighbour(i - 1, -1, p.source), neighbour(i, 1, p.source))
@@ -1108,15 +1215,19 @@ class RouteTrack {
     private fun distance(a: RoutePoint, b: RoutePoint) = Geo.distanceM(a.lat, a.lon, b.lat, b.lon)
 
     companion object {
-        const val MAX_ACCURACY_M = 30f
+        const val MAX_ACCURACY_M = FixQuality.MAX_ACCURACY_M
         const val MIN_SPACING_M = 3.0
         const val DUP_TIME_MS = 50L
         const val DUP_DISTANCE_M = 1.0
         const val OVERLAP_MS = 5_000L
         const val MAX_FUTURE_MS = 120_000L
 
-        /** Rebuilds a track from storage (after a phone restart); stored points are never "future". */
-        fun of(points: List<RoutePoint>): RouteTrack = RouteTrack().also { t -> points.forEach { t.add(it, Long.MAX_VALUE) } }
+        /**
+         * Rebuilds a track from scratch: after a calibration change with the real [nowMs] (review #2: a rebuild, not an
+         * incremental repair, so the duplicate filter can never block corrected times), or from history without a clock.
+         */
+        fun of(points: List<RoutePoint>, nowMs: Long = Long.MAX_VALUE): RouteTrack =
+            RouteTrack().also { t -> points.sortedBy { it.fixTimeMs }.forEach { t.add(it, nowMs) } }
     }
 }
 ```
@@ -1130,7 +1241,7 @@ Expected: PASS.
 
 ```bash
 git add core/model
-git commit -m "feat(model): RouteTrack chronological merge with filtering, duplicates and watch precedence"
+git commit -m "feat(model): RouteTrack chronological merge, shared accuracy rule and RouteFix rows with device-time identity"
 ```
 
 ---
@@ -1144,11 +1255,11 @@ git commit -m "feat(model): RouteTrack chronological merge with filtering, dupli
 - Test: `services/sync/src/test/kotlin/com/debasish/livefit/sync/LocationTimingTest.kt`
 
 **Interfaces:**
-- Consumes: `LocationFix`, `FixSource` (Task 1); `GpsStatus`, `LivePosition` (Task 3); `Clock` (existing `:core:services`).
+- Consumes: `LocationFix`, `FixSource` (Task 1); `GpsStatus`, `LivePosition`, `FixQuality` (Task 3); `Clock` (existing `:core:services`).
 - Produces:
   - `class WatchClockSync(clock: Clock, maxRttMs: Long = 1_000, maxTries: Int = 5) { val offsetMs: StateFlow<Long?>; val calibrated: Boolean; suspend fun calibrate(ping: suspend (t0: Long) -> Long?): Boolean; fun toPhoneTime(watchMs: Long): Long?; companion { PERIOD_MS = 300_000L; RETRY_UNCALIBRATED_MS = 30_000L } }` — offset = watch − phone.
-  - `object Freshness { MAX_AGE_MS = 10_000L; FUTURE_TOLERANCE_MS = 2_000L; MAX_ACCURACY_M = 30f; DELAYED_UNTIL_MS = 30_000L; fun isUsableLive(phoneTimeMs: Long?, accuracyM: Float, nowMs: Long): Boolean; fun status(lastLivePhoneTimeMs: Long?, nowMs: Long): GpsStatus }`
-  - `class LiveLocationSelector(fallbackAfterMs = 15_000, watchStableMs = 10_000, continuityGapMs = 3_000) { val fallback: Boolean; fun begin(gpsWorkout: Boolean, nowMs: Long); fun setGpsWorkout(on: Boolean, nowMs: Long); fun onWatchFix(fix: LocationFix, phoneTimeMs: Long?, nowMs: Long); fun onPhoneFix(fix: LocationFix, nowMs: Long); fun update(nowMs: Long): Boolean; fun current(nowMs: Long): LivePosition?; fun status(nowMs: Long): GpsStatus }`
+  - `object Freshness { MAX_AGE_MS = 10_000L; FUTURE_TOLERANCE_MS = 2_000L; MAX_ACCURACY_M = FixQuality.MAX_ACCURACY_M; DELAYED_UNTIL_MS = 30_000L; fun isUsableLive(phoneTimeMs: Long?, accuracyM: Float?, nowMs: Long): Boolean; fun status(lastLivePhoneTimeMs: Long?, nowMs: Long): GpsStatus }` — the shared usable-live predicate (phone selector, RouteHub, watch map); unknown accuracy is never usable (review #8).
+  - `class LiveLocationSelector(fallbackAfterMs = 15_000, watchStableMs = 10_000, continuityGapMs = 3_000) { val fallback: Boolean; fun begin(gpsWorkout: Boolean, nowMs: Long); fun setGpsWorkout(on: Boolean, nowMs: Long); fun onWatchFix(fix: LocationFix, phoneTimeMs: Long?, nowMs: Long); fun onPhoneFix(fix: LocationFix, nowMs: Long); fun update(nowMs: Long): Boolean; fun current(nowMs: Long): LivePosition?; fun status(nowMs: Long): GpsStatus }` — freshness and the marker use measurement time; the 10 s recovery run uses **observed (arrival) time** (review #3).
 
 - [ ] **Step 1: Write the failing test** — `services/sync/src/test/kotlin/com/debasish/livefit/sync/LocationTimingTest.kt`:
 
@@ -1226,6 +1337,7 @@ class LocationTimingTest {
     @Test fun accuracyGate() {
         assertTrue(Freshness.isUsableLive(0, 30f, 0))
         assertFalse(Freshness.isUsableLive(0, 30.1f, 0))
+        assertFalse(Freshness.isUsableLive(0, null, 0), "unknown accuracy is never usable-live (review #8)")
     }
 
     @Test fun statusThresholds() {
@@ -1302,8 +1414,40 @@ class LocationTimingTest {
         assertEquals(GpsStatus.Delayed, sel.status(30_000))
         assertTrue(sel.update(30_000), "15 s without a live watch fix → phone fallback")
         for (s in 11..44L) sel.onWatchFix(fix(s * 1_000, northM = s * 5.0), s * 1_000, nowMs = 45_000) // whole batch at once
-        assertTrue(sel.fallback, "only the batch's last 9 s are live: not 10 continuous seconds")
+        assertTrue(sel.fallback, "one batch is one observation: no observed recovery run yet")
         assertEquals(FixSource.Watch, sel.current(45_000)?.source, "a live watch fix still wins the marker")
+    }
+
+    /** Review #3: a delayed batch stamped 35..45 s and delivered at 45 s spans the whole live window but is 0 s of recovery. */
+    @Test fun oneBatchSpanningTheLiveWindowDoesNotStopFallback() {
+        val sel = LiveLocationSelector().apply { begin(true, 0) }
+        assertTrue(sel.update(15_000))
+        for (s in 35..45L) sel.onWatchFix(fix(s * 1_000, northM = s * 5.0), s * 1_000, nowMs = 45_000)
+        assertTrue(sel.fallback, "10 s of measurement time, 0 s of observed time")
+        assertEquals(45_000L, sel.current(45_000)?.fixTimeMs, "the marker still takes the newest live fix")
+    }
+
+    /** Review #3: after that batch, 10 s of usable fixes arriving on time do stop the fallback. */
+    @Test fun tenObservedSecondsAfterTheBatchStopFallback() {
+        val sel = LiveLocationSelector().apply { begin(true, 0) }
+        sel.update(15_000)
+        for (s in 35..45L) sel.onWatchFix(fix(s * 1_000, northM = s * 5.0), s * 1_000, nowMs = 45_000)
+        for (s in 46..54L) sel.onWatchFix(fix(s * 1_000, northM = s * 5.0), s * 1_000, s * 1_000)
+        assertTrue(sel.fallback, "9 observed seconds")
+        sel.onWatchFix(fix(55_000, northM = 275.0), 55_000, 55_000)
+        assertFalse(sel.fallback)
+    }
+
+    /** Review #8: fresh fixes without accuracy can neither move the marker nor stop the phone fallback. */
+    @Test fun fixesWithoutAccuracyAreNeverLive() {
+        val sel = LiveLocationSelector().apply { begin(true, 0) }
+        assertTrue(sel.update(15_000))
+        for (s in 16..40L) sel.onWatchFix(LocationFix(12.9716 + s * 5.0 / 111_195.0, 77.5946, null, null, s * 1_000), s * 1_000, s * 1_000)
+        assertTrue(sel.fallback)
+        assertNull(sel.current(40_000), "no marker from unknown-accuracy watch fixes")
+        assertEquals(GpsStatus.Waiting, sel.status(40_000))
+        sel.onPhoneFix(LocationFix(12.9716, 77.5946, null, null, 40_000), 40_000)
+        assertNull(sel.current(40_000), "nor from unknown-accuracy phone fixes")
     }
 
     @Test fun watchWinsWhileBothAreLive() {
@@ -1387,18 +1531,22 @@ class WatchClockSync(private val clock: Clock, private val maxRttMs: Long = 1_00
 ```kotlin
 package com.debasish.livefit.sync
 
+import com.debasish.livefit.model.FixQuality
 import com.debasish.livefit.model.GpsStatus
 
-/** Spec §2.1 "usable live" and the degraded display thresholds. All times are phone time. */
+/**
+ * Spec §2.1 "usable live" and the degraded display thresholds. All times are phone time (the watch map passes its own
+ * clock). This is the one predicate used by the phone selector, RouteHub and the watch map (review #7/#8).
+ */
 object Freshness {
     const val MAX_AGE_MS = 10_000L
     const val FUTURE_TOLERANCE_MS = 2_000L
-    const val MAX_ACCURACY_M = 30f
+    const val MAX_ACCURACY_M = FixQuality.MAX_ACCURACY_M
     const val DELAYED_UNTIL_MS = 30_000L
 
-    /** −2 s ≤ age ≤ 10 s and accuracy ≤ 30 m; null time = uncalibrated = never live. */
-    fun isUsableLive(phoneTimeMs: Long?, accuracyM: Float, nowMs: Long): Boolean {
-        if (phoneTimeMs == null || accuracyM > MAX_ACCURACY_M) return false
+    /** −2 s ≤ age ≤ 10 s and accuracy known and ≤ 30 m; null time = uncalibrated = never live. */
+    fun isUsableLive(phoneTimeMs: Long?, accuracyM: Float?, nowMs: Long): Boolean {
+        if (phoneTimeMs == null || !FixQuality.accurate(accuracyM)) return false
         val age = nowMs - phoneTimeMs
         return age >= -FUTURE_TOLERANCE_MS && age <= MAX_AGE_MS
     }
@@ -1428,11 +1576,12 @@ import com.debasish.livefit.model.LocationFix
 
 /**
  * Which fix drives the marker and whether the phone fallback runs (spec §2.1). Only usable-live fixes count.
- * - Fallback starts after [fallbackAfterMs] without a usable-live watch fix during a GPS workout.
- * - It stops once watch fixes were usable-live continuously for [watchStableMs]: a run with no gap > [continuityGapMs];
- *   a fresh but unusable (inaccurate / too far in the future) watch fix breaks the run; replayed (old) and
- *   uncalibrated fixes neither count nor break it.
- * - While both are usable-live the watch wins the marker.
+ * - Fallback starts after [fallbackAfterMs] without a usable-live watch fix (measurement time) during a GPS workout.
+ * - It stops once watch fixes were usable-live continuously for [watchStableMs] of **observed** time (review #3): the run
+ *   is timed by arrival, with no arrival gap > [continuityGapMs], so one late batch — however long a stretch it covers —
+ *   is a single observation. A fresh but unusable (inaccurate, unknown accuracy, too far in the future) watch fix breaks
+ *   the run; replayed (old) and uncalibrated fixes neither count nor break it.
+ * - The marker and freshness use measurement time; while both are usable-live the watch wins the marker.
  */
 class LiveLocationSelector(
     private val fallbackAfterMs: Long = 15_000,
@@ -1442,7 +1591,9 @@ class LiveLocationSelector(
     private var gpsWorkout = false
     private var noWatchSinceMs = 0L
     private var watchLive: LivePosition? = null
-    private var watchRunStartMs: Long? = null
+    /** Arrival (observed) time of the first and of the latest usable-live watch fix of the current recovery run. */
+    private var runStartObservedMs: Long? = null
+    private var lastLiveObservedMs: Long? = null
     private var phoneLive: LivePosition? = null
 
     var fallback: Boolean = false
@@ -1452,7 +1603,8 @@ class LiveLocationSelector(
     fun begin(gpsWorkout: Boolean, nowMs: Long) {
         this.gpsWorkout = gpsWorkout
         noWatchSinceMs = nowMs
-        watchLive = null; watchRunStartMs = null; phoneLive = null
+        watchLive = null; phoneLive = null
+        runStartObservedMs = null; lastLiveObservedMs = null
         fallback = false
     }
 
@@ -1463,18 +1615,20 @@ class LiveLocationSelector(
         update(nowMs)
     }
 
-    /** [phoneTimeMs] = the fix time mapped with the calibrated offset; null while uncalibrated. */
+    /** [phoneTimeMs] = the fix time mapped with the calibrated offset; null while uncalibrated. [nowMs] = arrival time. */
     fun onWatchFix(fix: LocationFix, phoneTimeMs: Long?, nowMs: Long) {
         if (phoneTimeMs == null) return
         if (!Freshness.isUsableLive(phoneTimeMs, fix.accuracyM, nowMs)) {
-            if (nowMs - phoneTimeMs <= Freshness.MAX_AGE_MS) watchRunStartMs = null // fresh but poor: continuity broken
+            if (nowMs - phoneTimeMs <= Freshness.MAX_AGE_MS) { runStartObservedMs = null; lastLiveObservedMs = null } // fresh but poor
             update(nowMs)
             return
         }
-        val last = watchLive?.fixTimeMs
-        if (last != null && phoneTimeMs <= last) return
-        if (watchRunStartMs == null || last == null || phoneTimeMs - last > continuityGapMs) watchRunStartMs = phoneTimeMs
-        watchLive = LivePosition(fix.lat, fix.lon, fix.bearingDeg, FixSource.Watch, phoneTimeMs)
+        if (phoneTimeMs > (watchLive?.fixTimeMs ?: Long.MIN_VALUE)) {
+            watchLive = LivePosition(fix.lat, fix.lon, fix.bearingDeg, FixSource.Watch, phoneTimeMs)
+        }
+        val last = lastLiveObservedMs
+        if (runStartObservedMs == null || last == null || nowMs - last > continuityGapMs) runStartObservedMs = nowMs
+        lastLiveObservedMs = nowMs
         update(nowMs)
     }
 
@@ -1489,12 +1643,12 @@ class LiveLocationSelector(
     /** Re-evaluates the fallback at [nowMs]; returns whether the phone GPS should run. */
     fun update(nowMs: Long): Boolean {
         if (!gpsWorkout) { fallback = false; return false }
-        val lastWatch = watchLive?.fixTimeMs
         if (!fallback) {
-            if (nowMs - maxOf(lastWatch ?: Long.MIN_VALUE, noWatchSinceMs) >= fallbackAfterMs) fallback = true
+            if (nowMs - maxOf(watchLive?.fixTimeMs ?: Long.MIN_VALUE, noWatchSinceMs) >= fallbackAfterMs) fallback = true
         } else {
-            val start = watchRunStartMs
-            if (start != null && lastWatch != null && lastWatch - start >= watchStableMs && nowMs - lastWatch <= continuityGapMs) fallback = false
+            val start = runStartObservedMs
+            val last = lastLiveObservedMs
+            if (start != null && last != null && last - start >= watchStableMs && nowMs - last <= continuityGapMs) fallback = false
         }
         return fallback
     }
@@ -1513,13 +1667,13 @@ class LiveLocationSelector(
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test`
-Expected: PASS (new 18 tests plus the existing sync tests).
+Expected: PASS (new 21 tests plus the existing sync tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add services/sync
-git commit -m "feat(sync): watch clock calibration, fix freshness and live source selection with phone fallback"
+git commit -m "feat(sync): watch clock calibration, shared usable-live predicate and observed-time source selection"
 ```
 
 ---
@@ -2243,21 +2397,37 @@ git commit -m "feat(map): map scene builder, HUD palette conversion and glasses 
 
 ---
 
-### Task 8: Tile source, disk cache and HTTP fetcher
+### Task 8: Tile source, disk cache, HTTP fetcher and non-blocking tile loader
 
 **Files:**
+- Modify: `core/map/build.gradle.kts`
 - Create: `core/map/src/main/kotlin/com/debasish/livefit/map/Tiles.kt`
-- Test: `core/map/src/test/kotlin/com/debasish/livefit/map/TilesTest.kt`
+- Create: `core/map/src/main/kotlin/com/debasish/livefit/map/TileLoader.kt`
+- Test: `core/map/src/test/kotlin/com/debasish/livefit/map/TilesTest.kt`, `core/map/src/test/kotlin/com/debasish/livefit/map/TileLoaderTest.kt`
 
 **Interfaces:**
 - Consumes: `TileId`, `OSM_ATTRIBUTION` (Task 2).
 - Produces:
+  - `:core:map` gains `api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")` (TileLoader exposes `StateFlow`/`Job`).
   - `interface TileSource { val userAgent: String; val attribution: String; fun url(tile: TileId): String }`
   - `class OsmTileSource(userAgent = USER_AGENT) : TileSource` — `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
-  - `class TileDiskCache(dir: File, maxBytes: Long, nowMs: () -> Long = System::currentTimeMillis) { class Entry(bytes: ByteArray, fresh: Boolean); fun get(tile): Entry?; fun put(tile, bytes, maxAgeMs); fun sizeBytes(): Long; companion { PHONE_MAX_BYTES = 50 MB; WATCH_MAX_BYTES = 20 MB; MAX_AGE_MS = 7 days } }`
-  - `class HttpTileFetcher(source: TileSource, cache: TileDiskCache, nowMs: () -> Long = System::currentTimeMillis, open: (URL) -> HttpURLConnection = …, timeoutMs: Int = 5_000, retryAfterFailureMs: Long = 30_000) { fun fetch(tile: TileId): ByteArray? /* blocking: call on an IO thread */; companion { fun maxAgeOf(cacheControl: String?): Long } }`
+  - `data class TileMeta(expiresAtMs: Long, etag: String? = null, lastModified: String? = null)`
+  - `class TileDiskCache(dir: File, maxBytes: Long, nowMs: () -> Long = System::currentTimeMillis) { class Entry(bytes: ByteArray, fresh: Boolean, meta: TileMeta); fun get(tile): Entry?; fun put(tile, bytes, meta: TileMeta); fun refresh(tile, meta: TileMeta): Boolean; fun sizeBytes(): Long; companion { PHONE_MAX_BYTES = 50 MB; WATCH_MAX_BYTES = 20 MB; FALLBACK_LIFETIME_MS = 7 days } }`
+  - `class HttpTileFetcher(source: TileSource, cache: TileDiskCache, nowMs: () -> Long = System::currentTimeMillis, open: (URL) -> HttpURLConnection = …, timeoutMs: Int = 5_000, retryAfterFailureMs: Long = 30_000) { fun fetch(tile: TileId): ByteArray? /* blocking: call on an IO thread */; companion { fun lifetimeMs(cacheControl: String?, expires: String?, date: String?, nowMs: Long): Long } }` — server lifetime honoured (max-age, else Expires − Date), 7 days only when neither header is present; an expired entry is revalidated with `If-None-Match` / `If-Modified-Since`; `304` keeps the bytes and refreshes the metadata.
+  - `class TileLoader<T : Any>(scope: CoroutineScope, load: suspend (TileId) -> T?, maxConcurrent: Int = 4, retryEveryMs: Long = 5_000, maxCached: Int = 30, log: (String) -> Unit = {}) { val tiles: StateFlow<Map<TileId, T>>; fun show(visible: Collection<TileId>); fun start(): Job }` — `show` never waits; each missing visible tile loads on its own (at most `maxConcurrent` at once, slot released in `finally`); `start()` re-requests still-missing **visible** tiles every `retryEveryMs` (the fetcher's 30 s backoff decides whether the network is hit). Used by the phone renderer (Task 18) and the watch (Task 12).
 
-- [ ] **Step 1: Write the failing test** — `core/map/src/test/kotlin/com/debasish/livefit/map/TilesTest.kt`:
+- [ ] **Step 1: Coroutines for `:core:map`** — in `core/map/build.gradle.kts` replace the `dependencies { … }` block with:
+
+```kotlin
+dependencies {
+    api(project(":core:model"))
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+}
+```
+
+- [ ] **Step 2: Write the failing tests** — `core/map/src/test/kotlin/com/debasish/livefit/map/TilesTest.kt`:
 
 ```kotlin
 package com.debasish.livefit.map
@@ -2266,6 +2436,9 @@ import com.sun.net.httpserver.HttpServer
 import java.io.File
 import java.net.InetSocketAddress
 import java.nio.file.Files
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
@@ -2282,23 +2455,32 @@ class TilesTest {
     private lateinit var server: HttpServer
     private val requests = AtomicInteger()
     private val userAgents = CopyOnWriteArrayList<String>()
+    private val ifNoneMatch = CopyOnWriteArrayList<String?>()
+    private val ifModifiedSince = CopyOnWriteArrayList<String?>()
     @Volatile private var status = 200
-    @Volatile private var cacheControl = "max-age=60"
+    @Volatile private var cacheControl: String? = "max-age=60"
+    @Volatile private var expires: String? = null
+    @Volatile private var etag: String? = null
+    @Volatile private var lastModified: String? = null
     private val png = byteArrayOf(-119, 80, 78, 71, 1, 2, 3)
     private var now = 1_000_000L
     private val tile = TileId(18, 1, 2)
+    private val day = 24L * 3600 * 1000
 
     @BeforeTest fun up() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { ex ->
             requests.incrementAndGet()
             userAgents += ex.requestHeaders.getFirst("User-Agent").orEmpty()
-            if (status == 200) {
-                ex.responseHeaders.add("Cache-Control", cacheControl)
-                ex.sendResponseHeaders(200, png.size.toLong())
-                ex.responseBody.use { it.write(png) }
-            } else {
-                ex.sendResponseHeaders(status, -1); ex.close()
+            ifNoneMatch += ex.requestHeaders.getFirst("If-None-Match")
+            ifModifiedSince += ex.requestHeaders.getFirst("If-Modified-Since")
+            cacheControl?.let { ex.responseHeaders.add("Cache-Control", it) }
+            expires?.let { ex.responseHeaders.add("Expires", it) }
+            etag?.let { ex.responseHeaders.add("ETag", it) }
+            lastModified?.let { ex.responseHeaders.add("Last-Modified", it) }
+            when (status) {
+                200 -> { ex.sendResponseHeaders(200, png.size.toLong()); ex.responseBody.use { it.write(png) } }
+                else -> { ex.sendResponseHeaders(status, -1); ex.close() }
             }
         }
         server.start()
@@ -2312,8 +2494,9 @@ class TilesTest {
         override fun url(tile: TileId) = "http://127.0.0.1:${server.address.port}/${tile.z}/${tile.x}/${tile.y}.png"
     }
 
-    private fun fetcher(dir: File = Files.createTempDirectory("tiles").toFile()) =
-        HttpTileFetcher(source, TileDiskCache(dir, 1_000_000, { now }), { now })
+    private fun cache(dir: File = Files.createTempDirectory("tiles").toFile()) = TileDiskCache(dir, 1_000_000, { now })
+    private fun fetcher(c: TileDiskCache = cache()) = HttpTileFetcher(source, c, { now })
+    private fun http(ms: Long): String = DateTimeFormatter.RFC_1123_DATE_TIME.format(Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC))
 
     @Test fun osmSourceUrlAndAttribution() {
         val osm = OsmTileSource()
@@ -2328,6 +2511,7 @@ class TilesTest {
         assertContentEquals(png, f.fetch(tile))
         assertEquals(1, requests.get())
         assertEquals(listOf("RokidLiveFit/test"), userAgents.toList())
+        assertNull(ifNoneMatch.single(), "a first download carries no validators")
     }
 
     @Test fun honoursMaxAge() {
@@ -2339,11 +2523,71 @@ class TilesTest {
         assertEquals(2, requests.get())
     }
 
-    /** Spec §2.4: 7-day max-age honoured (and never cached longer). */
-    @Test fun maxAgeIsCappedAtSevenDays() {
-        assertEquals(60_000L, HttpTileFetcher.maxAgeOf("max-age=60"))
-        assertEquals(7L * 24 * 3600 * 1000, HttpTileFetcher.maxAgeOf("public, max-age=99999999"))
-        assertEquals(7L * 24 * 3600 * 1000, HttpTileFetcher.maxAgeOf(null))
+    /** Review #11 / OSM tile policy §3.2: a server lifetime longer than 7 days is honoured, not capped. */
+    @Test fun longMaxAgeIsPreserved() {
+        assertEquals(99_999_999_000L, HttpTileFetcher.lifetimeMs("public, max-age=99999999", null, null, now))
+        cacheControl = "max-age=1209600" // 14 days
+        val f = fetcher()
+        f.fetch(tile)
+        now += 8 * day; f.fetch(tile)
+        assertEquals(1, requests.get(), "still fresh after 8 days")
+        now += 7 * day; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun expiresIsHonouredWhenThereIsNoMaxAge() {
+        assertEquals(7_200_000L, HttpTileFetcher.lifetimeMs(null, http(now + 7_200_000), http(now), now))
+        assertEquals(0L, HttpTileFetcher.lifetimeMs(null, "0", null, now), "an invalid Expires means already expired")
+        assertEquals(30_000L, HttpTileFetcher.lifetimeMs("max-age=30", http(now + 7_200_000), null, now), "max-age wins over Expires")
+        // The test server stamps a real Date header, so this part runs on the real clock (100 s margins either side).
+        now = System.currentTimeMillis()
+        cacheControl = null; expires = http(now + 7_200_000)
+        val f = fetcher()
+        f.fetch(tile)
+        now += 7_100_000; f.fetch(tile)
+        assertEquals(1, requests.get())
+        now += 200_000; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    /** Spec §2.4: 7 days only when the server sends neither max-age nor Expires. */
+    @Test fun headerlessResponseFallsBackToSevenDays() {
+        assertEquals(7 * day, HttpTileFetcher.lifetimeMs(null, null, null, now))
+        assertEquals(7 * day, HttpTileFetcher.lifetimeMs("public", null, null, now))
+        cacheControl = null
+        val f = fetcher()
+        f.fetch(tile)
+        now += 7 * day - 1; f.fetch(tile)
+        assertEquals(1, requests.get())
+        now += 2; f.fetch(tile)
+        assertEquals(2, requests.get())
+    }
+
+    /** Review #11: an expired entry is revalidated with its ETag and Last-Modified. */
+    @Test fun expiredEntrySendsValidators() {
+        etag = "\"abc\""; lastModified = http(now - day)
+        val f = fetcher()
+        f.fetch(tile)
+        now += 61_000; f.fetch(tile)
+        assertEquals(listOf(null, "\"abc\""), ifNoneMatch.toList())
+        assertEquals(listOf(null, http(now - 61_000 - day)), ifModifiedSince.toList())
+    }
+
+    /** Review #11: 304 keeps the cached bytes and refreshes the lifetime (and validators) from the new headers. */
+    @Test fun notModifiedKeepsTheBytesAndRefreshesMetadata() {
+        etag = "\"abc\""
+        val c = cache()
+        val f = fetcher(c)
+        f.fetch(tile)
+        now += 61_000; status = 304; cacheControl = "max-age=120"; etag = "\"abd\""
+        assertContentEquals(png, f.fetch(tile))
+        assertEquals(2, requests.get())
+        val e = assertNotNull(c.get(tile))
+        assertTrue(e.fresh)
+        assertEquals("\"abd\"", e.meta.etag)
+        assertContentEquals(png, e.bytes)
+        now += 100_000; f.fetch(tile)
+        assertEquals(2, requests.get(), "fresh again for the new 120 s")
     }
 
     @Test fun offlineServesTheStaleCopy() {
@@ -2367,33 +2611,128 @@ class TilesTest {
 
     @Test fun lruEvictsTheLeastRecentlyUsed() {
         val dir = Files.createTempDirectory("lru").toFile()
-        val cache = TileDiskCache(dir, maxBytes = 2 * (8 + 100) + 50L, nowMs = { now })
+        val overhead = 8 + 2 + 2 // expiry + two empty validator strings
+        val cache = TileDiskCache(dir, maxBytes = 2 * (overhead + 100) + 50L, nowMs = { now })
         val a = TileId(18, 0, 0); val b = TileId(18, 0, 1); val c = TileId(18, 0, 2)
-        cache.put(a, ByteArray(100), 60_000); now += 10_000
-        cache.put(b, ByteArray(100), 60_000); now += 10_000
+        cache.put(a, ByteArray(100), TileMeta(now + 60_000)); now += 10_000
+        cache.put(b, ByteArray(100), TileMeta(now + 60_000)); now += 10_000
         assertNotNull(cache.get(a)); now += 10_000 // a is now more recent than b
-        cache.put(c, ByteArray(100), 60_000)
+        cache.put(c, ByteArray(100), TileMeta(now + 60_000))
         assertNull(cache.get(b), "least recently used evicted")
         assertNotNull(cache.get(a)); assertNotNull(cache.get(c))
-        assertTrue(cache.sizeBytes() <= 266)
+        assertTrue(cache.sizeBytes() <= 2 * (overhead + 100) + 50L)
     }
 
     @Test fun expiredEntryIsMarkedStale() {
         val cache = TileDiskCache(Files.createTempDirectory("exp").toFile(), 1_000_000, { now })
-        cache.put(tile, png, 1_000)
+        cache.put(tile, png, TileMeta(now + 1_000, etag = "\"e\""))
         assertTrue(cache.get(tile)!!.fresh)
         now += 1_001
-        assertFalse(cache.get(tile)!!.fresh)
+        val stale = cache.get(tile)!!
+        assertFalse(stale.fresh)
+        assertEquals("\"e\"", stale.meta.etag)
+        assertFalse(cache.refresh(TileId(18, 9, 9), TileMeta(now + 1_000)), "nothing to refresh")
     }
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+`core/map/src/test/kotlin/com/debasish/livefit/map/TileLoaderTest.kt`:
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :core:map:test --tests '*TilesTest*'`
-Expected: FAIL — `TileSource`, `TileDiskCache`, `HttpTileFetcher` unresolved.
+```kotlin
+package com.debasish.livefit.map
 
-- [ ] **Step 3: Implement `Tiles.kt`**
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import java.io.IOException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class TileLoaderTest {
+    private val a = TileId(18, 1, 1)
+    private val b = TileId(18, 1, 2)
+
+    /** Review #5: show() never waits for the network, and one slow tile never holds back another. */
+    @Test fun showNeverBlocksAndTilesArriveIndependently() = runTest {
+        val gates = mapOf(a to CompletableDeferred<String?>(), b to CompletableDeferred<String?>())
+        val loader = TileLoader(backgroundScope, load = { t: TileId -> gates.getValue(t).await() })
+        loader.show(listOf(a, b)); runCurrent()
+        assertTrue(loader.tiles.value.isEmpty())
+        gates.getValue(b).complete("B"); runCurrent()
+        assertEquals(setOf(b), loader.tiles.value.keys, "b does not wait for a")
+        gates.getValue(a).complete("A"); runCurrent()
+        assertEquals(mapOf(a to "A", b to "B"), loader.tiles.value)
+    }
+
+    @Test fun atMostMaxConcurrentLoadsRunAtOnce() = runTest {
+        var running = 0
+        var peak = 0
+        val release = CompletableDeferred<Unit>()
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> running++; peak = maxOf(peak, running); release.await(); running--; "x" }, maxConcurrent = 3)
+        loader.show((0 until 9).map { TileId(18, it, 0) }); runCurrent()
+        assertEquals(3, peak)
+        release.complete(Unit); runCurrent()
+        assertEquals(9, loader.tiles.value.size)
+        assertEquals(3, peak)
+    }
+
+    /** Review #6: a fixed viewport whose tiles failed is retried while visible; nothing else has to change. */
+    @Test fun missingVisibleTilesAreRetriedWithoutAViewportChange() = runTest {
+        var online = false
+        var calls = 0
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> calls++; if (online) "t" else null }, retryEveryMs = 5_000)
+        loader.start()
+        loader.show(listOf(a)); runCurrent()
+        assertTrue(loader.tiles.value.isEmpty())
+        assertEquals(1, calls)
+        online = true
+        advanceTimeBy(5_001); runCurrent()
+        assertEquals("t", loader.tiles.value[a])
+        val n = calls
+        advanceTimeBy(20_000); runCurrent()
+        assertEquals(n, calls, "a loaded tile is not loaded again")
+    }
+
+    @Test fun tilesThatLeftTheViewAreNotRetried() = runTest {
+        var calls = 0
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> calls++; null as String? }, retryEveryMs = 5_000)
+        loader.start()
+        loader.show(listOf(a)); runCurrent()
+        loader.show(emptyList())
+        advanceTimeBy(30_000); runCurrent()
+        assertEquals(1, calls)
+    }
+
+    /** A load that throws releases its slot and in-flight mark (finally), so the next retry runs. */
+    @Test fun aThrowingLoadIsRetried() = runTest {
+        var calls = 0
+        val loader = TileLoader(backgroundScope, load = { _: TileId -> if (calls++ == 0) throw IOException("reset") else "ok" }, maxConcurrent = 1, retryEveryMs = 1_000)
+        loader.start()
+        loader.show(listOf(a)); runCurrent()
+        advanceTimeBy(1_001); runCurrent()
+        assertEquals("ok", loader.tiles.value[a])
+    }
+
+    @Test fun visibleTilesAreNeverEvicted() = runTest {
+        val loader = TileLoader(backgroundScope, load = { t: TileId -> "t${t.x}" }, maxCached = 2)
+        loader.show(listOf(TileId(18, 0, 0))); runCurrent()
+        loader.show(listOf(TileId(18, 1, 0))); runCurrent()
+        loader.show(listOf(TileId(18, 2, 0), TileId(18, 3, 0), TileId(18, 4, 0))); runCurrent()
+        assertEquals(setOf(2, 3, 4), loader.tiles.value.keys.map { it.x }.toSet(), "over the cap only invisible tiles go")
+    }
+}
+```
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :core:map:test --tests '*TilesTest*' --tests '*TileLoaderTest*'`
+Expected: FAIL — `TileSource`, `TileDiskCache`, `TileMeta`, `HttpTileFetcher`, `TileLoader` unresolved.
+
+- [ ] **Step 4: Implement `Tiles.kt`**
 
 ```kotlin
 package com.debasish.livefit.map
@@ -2404,6 +2743,8 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
 /** Where tiles come from (spec §2.4): a constant URL behind an interface so the provider can be swapped. */
 interface TileSource {
@@ -2422,9 +2763,15 @@ class OsmTileSource(override val userAgent: String = USER_AGENT) : TileSource {
     }
 }
 
-/** On-disk LRU tile cache; each file = 8-byte expiry + PNG. Least recently used files go first once over [maxBytes]. */
+/** Cache metadata of one tile: absolute expiry and the validators for revalidation (OSM tile policy §3.2). */
+data class TileMeta(val expiresAtMs: Long, val etag: String? = null, val lastModified: String? = null)
+
+/**
+ * On-disk LRU tile cache; each file = expiry (Long) + ETag (UTF) + Last-Modified (UTF) + PNG. Least recently used files
+ * go first once over [maxBytes]. A stale entry is still returned (offline use, revalidation).
+ */
 class TileDiskCache(private val dir: File, private val maxBytes: Long, private val nowMs: () -> Long = System::currentTimeMillis) {
-    class Entry(val bytes: ByteArray, val fresh: Boolean)
+    class Entry(val bytes: ByteArray, val fresh: Boolean, val meta: TileMeta)
 
     init { dir.mkdirs() }
 
@@ -2434,10 +2781,10 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
         if (!f.exists()) return null
         return try {
             DataInputStream(f.inputStream().buffered()).use { input ->
-                val expires = input.readLong()
+                val meta = TileMeta(input.readLong(), input.readUTF().ifEmpty { null }, input.readUTF().ifEmpty { null })
                 val bytes = input.readBytes()
                 f.setLastModified(nowMs())
-                Entry(bytes, nowMs() < expires)
+                Entry(bytes, nowMs() < meta.expiresAtMs, meta)
             }
         } catch (e: IOException) {
             f.delete(); null
@@ -2445,23 +2792,37 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
     }
 
     @Synchronized
-    fun put(tile: TileId, bytes: ByteArray, maxAgeMs: Long) {
+    fun put(tile: TileId, bytes: ByteArray, meta: TileMeta) {
+        if (!write(tile, bytes, meta)) return
+        trim()
+    }
+
+    /** A 304: same bytes, new metadata. False when there is no entry to refresh. */
+    @Synchronized
+    fun refresh(tile: TileId, meta: TileMeta): Boolean {
+        val e = get(tile) ?: return false
+        return write(tile, e.bytes, meta)
+    }
+
+    fun sizeBytes(): Long = files().sumOf { it.length() }
+
+    private fun write(tile: TileId, bytes: ByteArray, meta: TileMeta): Boolean {
         val f = file(tile)
         val tmp = File(dir, f.name + ".tmp")
-        try {
+        return try {
             DataOutputStream(tmp.outputStream().buffered()).use { out ->
-                out.writeLong(nowMs() + maxAgeMs.coerceIn(0, MAX_AGE_MS))
+                out.writeLong(meta.expiresAtMs)
+                out.writeUTF(meta.etag.orEmpty())
+                out.writeUTF(meta.lastModified.orEmpty())
                 out.write(bytes)
             }
             if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
             f.setLastModified(nowMs())
+            true
         } catch (e: IOException) {
-            tmp.delete(); return
+            tmp.delete(); false
         }
-        trim()
     }
-
-    fun sizeBytes(): Long = files().sumOf { it.length() }
 
     private fun files(): List<File> = dir.listFiles { f -> f.name.endsWith(".tile") }.orEmpty().toList()
 
@@ -2480,13 +2841,16 @@ class TileDiskCache(private val dir: File, private val maxBytes: Long, private v
     companion object {
         const val PHONE_MAX_BYTES = 50L * 1024 * 1024
         const val WATCH_MAX_BYTES = 20L * 1024 * 1024
-        const val MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        /** Spec §2.4 "7-day max-age": the lifetime used only when the server gives none (plan ruling, review #11). */
+        const val FALLBACK_LIFETIME_MS = 7L * 24 * 60 * 60 * 1000
     }
 }
 
 /**
- * Fresh cache → network (User-Agent, max-age honoured, capped at 7 days) → stale cache → null. A failed tile is not
- * retried for [retryAfterFailureMs]. Blocking: call it on an IO thread. Only ever asked for the visible tiles (no prefetch).
+ * Fresh cache → network → stale cache → null (spec §2.4, OSM tile policy §3.2). The server's lifetime is honoured
+ * (max-age, else Expires − Date; 7 days only without either); an expired entry is revalidated with If-None-Match /
+ * If-Modified-Since and a 304 keeps the bytes with refreshed metadata. A failed tile is not retried for
+ * [retryAfterFailureMs]. Blocking: call it on an IO thread. Only ever asked for the visible tiles (no prefetch).
  */
 class HttpTileFetcher(
     private val source: TileSource,
@@ -2498,54 +2862,156 @@ class HttpTileFetcher(
 ) {
     private val failedUntil = HashMap<TileId, Long>()
 
+    private sealed interface Result {
+        class Ok(val bytes: ByteArray, val meta: TileMeta) : Result
+        class NotModified(val meta: TileMeta) : Result
+    }
+
     fun fetch(tile: TileId): ByteArray? {
         val cached = cache.get(tile)
         if (cached?.fresh == true) return cached.bytes
         val blocked = synchronized(failedUntil) { failedUntil[tile] }
         if (blocked != null && nowMs() < blocked) return cached?.bytes
-        val fetched = try { download(tile) } catch (e: IOException) { null }
-        if (fetched == null) {
-            synchronized(failedUntil) { failedUntil[tile] = nowMs() + retryAfterFailureMs }
-            return cached?.bytes
+        val result = try { download(tile, cached?.meta) } catch (e: IOException) { null }
+        return when (result) {
+            is Result.Ok -> { clearFailure(tile); cache.put(tile, result.bytes, result.meta); result.bytes }
+            is Result.NotModified -> if (cached != null) { clearFailure(tile); cache.refresh(tile, result.meta); cached.bytes } else fail(tile, null)
+            null -> fail(tile, cached?.bytes)
         }
-        synchronized(failedUntil) { failedUntil.remove(tile) }
-        cache.put(tile, fetched.first, fetched.second)
-        return fetched.first
     }
 
-    private fun download(tile: TileId): Pair<ByteArray, Long>? {
+    private fun fail(tile: TileId, fallback: ByteArray?): ByteArray? {
+        synchronized(failedUntil) { failedUntil[tile] = nowMs() + retryAfterFailureMs }
+        return fallback
+    }
+
+    private fun clearFailure(tile: TileId) = synchronized(failedUntil) { failedUntil.remove(tile) }
+
+    private fun download(tile: TileId, validators: TileMeta?): Result? {
         val c = open(URL(source.url(tile)))
         try {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
+            c.useCaches = false
             c.setRequestProperty("User-Agent", source.userAgent)
-            if (c.responseCode != 200) return null
-            val bytes = c.inputStream.use { it.readBytes() }
-            return bytes to maxAgeOf(c.getHeaderField("Cache-Control"))
+            validators?.etag?.let { c.setRequestProperty("If-None-Match", it) }
+            validators?.lastModified?.let { c.setRequestProperty("If-Modified-Since", it) }
+            val code = c.responseCode
+            val now = nowMs()
+            val lifetime = lifetimeMs(c.getHeaderField("Cache-Control"), c.getHeaderField("Expires"), c.getHeaderField("Date"), now)
+            val meta = TileMeta(now + lifetime, c.getHeaderField("ETag") ?: validators?.etag, c.getHeaderField("Last-Modified") ?: validators?.lastModified)
+            return when (code) {
+                200 -> Result.Ok(c.inputStream.use { it.readBytes() }, meta)
+                304 -> Result.NotModified(meta)
+                else -> null
+            }
         } finally {
             c.disconnect()
         }
     }
 
     companion object {
-        fun maxAgeOf(cacheControl: String?): Long {
-            val seconds = Regex("max-age=(\\d+)").find(cacheControl.orEmpty())?.groupValues?.get(1)?.toLongOrNull()
-            return (seconds?.times(1_000) ?: TileDiskCache.MAX_AGE_MS).coerceAtMost(TileDiskCache.MAX_AGE_MS)
+        private val MAX_AGE = Regex("(?:^|[,\\s])max-age=(\\d+)")
+
+        /** Server lifetime: Cache-Control max-age, else Expires − (Date or now); an unparsable Expires = expired; neither → 7 days. */
+        fun lifetimeMs(cacheControl: String?, expires: String?, date: String?, nowMs: Long): Long {
+            MAX_AGE.find(cacheControl.orEmpty())?.groupValues?.get(1)?.toLongOrNull()?.let { return it * 1_000 }
+            if (expires != null) {
+                val exp = httpDate(expires) ?: return 0
+                return (exp - (date?.let(::httpDate) ?: nowMs)).coerceAtLeast(0)
+            }
+            return TileDiskCache.FALLBACK_LIFETIME_MS
         }
+
+        private fun httpDate(s: String): Long? =
+            runCatching { ZonedDateTime.parse(s.trim(), DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() }.getOrNull()
     }
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Implement `TileLoader.kt`**
+
+```kotlin
+package com.debasish.livefit.map
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+/**
+ * Loads the visible tiles in the background (review #5/#6): [show] returns at once; each missing visible tile loads on
+ * its own, at most [maxConcurrent] at a time; a failed or throwing load frees its slot in `finally` and is retried every
+ * [retryEveryMs] while the tile stays visible ([load] is expected to honour HttpTileFetcher's backoff). Renderers draw
+ * whatever [tiles] holds right now. At most [maxCached] decoded tiles are kept; visible ones are never evicted.
+ */
+class TileLoader<T : Any>(
+    private val scope: CoroutineScope,
+    private val load: suspend (TileId) -> T?,
+    private val maxConcurrent: Int = 4,
+    private val retryEveryMs: Long = 5_000,
+    private val maxCached: Int = 30,
+    private val log: (String) -> Unit = {},
+) {
+    private val _tiles = MutableStateFlow<Map<TileId, T>>(emptyMap())
+    val tiles: StateFlow<Map<TileId, T>> = _tiles
+    private val lock = Any()
+    private var visible: Set<TileId> = emptySet()
+    private val inFlight = HashSet<TileId>()
+    private val slots = Semaphore(maxConcurrent)
+
+    /** The tiles on screen now (empty when the map is not shown). Never suspends or blocks. */
+    fun show(visible: Collection<TileId>) {
+        synchronized(lock) { this.visible = visible.toSet() }
+        launchMissing()
+    }
+
+    /** Retries still-missing visible tiles every [retryEveryMs]. */
+    fun start(): Job = scope.launch { while (isActive) { delay(retryEveryMs); launchMissing() } }
+
+    private fun launchMissing() {
+        val todo = synchronized(lock) { visible.filter { it !in _tiles.value && inFlight.add(it) } }
+        for (t in todo) scope.launch {
+            try {
+                val value = slots.withPermit { load(t) }
+                if (value != null) store(t, value)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("tile $t failed: $e")
+            } finally {
+                synchronized(lock) { inFlight.remove(t) }
+            }
+        }
+    }
+
+    private fun store(t: TileId, value: T) = synchronized(lock) {
+        val next = LinkedHashMap(_tiles.value)
+        next.remove(t)
+        next[t] = value
+        val keys = next.keys.iterator()
+        while (next.size > maxCached && keys.hasNext()) if (keys.next() !in visible) keys.remove()
+        _tiles.value = next
+    }
+}
+```
+
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :core:map:test`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add core/map
-git commit -m "feat(map): OSM tile source, LRU disk cache with max-age and backing-off HTTP fetcher"
+git commit -m "feat(map): OSM tile source, validating LRU disk cache, backing-off HTTP fetcher and non-blocking tile loader"
 ```
 
 ---
@@ -2553,7 +3019,6 @@ git commit -m "feat(map): OSM tile source, LRU disk cache with max-age and backi
 ### Task 9: Glasses map stream — phone streamer and glasses image gate
 
 **Files:**
-- Modify: `services/sync/build.gradle.kts`
 - Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/GlassesMapStreamer.kt`
 - Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/MapImageGate.kt`
 - Test: `services/sync/src/test/kotlin/com/debasish/livefit/sync/MapStreamTest.kt`
@@ -2561,17 +3026,10 @@ git commit -m "feat(map): OSM tile source, LRU disk cache with max-age and backi
 **Interfaces:**
 - Consumes: `MapFrame`, `MapFrameKind`, `HudPage` (Task 1); `RouteState`, `LivePosition` (Task 3); `MapCadence` (Task 7); `Clock`.
 - Produces:
-  - `services/sync` exposes `:core:map` (`api(project(":core:map"))`), so phone, watch and glasses see it.
   - `class GlassesMapStreamer(scope, clock, render: suspend (RouteState) -> ByteArray?, send: suspend (MapFrame, ByteArray?) -> Boolean, newEpoch: () -> Long = { Random.nextLong() }, tickMs: Long = 250, sendTimeoutMs: Long = 5_000, log: (String) -> Unit = {}) { val renderEpoch: Long; val mapVisible: Boolean; fun onConnected(); fun onDisconnected(); fun onPageState(page: HudPage, seq: Long); fun onRoute(state: RouteState); fun start(): Job; suspend fun step() }` — all calls on one thread (the hub's Main scope).
   - `class MapImageGate { val currentEpoch: Long?; fun accept(frame: MapFrame, sessionId: String?): Boolean }`
 
-- [ ] **Step 1: Expose `:core:map` from `:services:sync`** — in `services/sync/build.gradle.kts` add inside `dependencies { … }`:
-
-```kotlin
-    api(project(":core:map"))
-```
-
-- [ ] **Step 2: Write the failing test** — `services/sync/src/test/kotlin/com/debasish/livefit/sync/MapStreamTest.kt`:
+- [ ] **Step 1: Write the failing test** — `services/sync/src/test/kotlin/com/debasish/livefit/sync/MapStreamTest.kt` (`:core:map` is already visible through `:services:sync`, Task 2):
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -2758,12 +3216,12 @@ class MapStreamTest {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test --tests '*MapStreamTest*'`
 Expected: FAIL — `GlassesMapStreamer`, `MapImageGate` unresolved.
 
-- [ ] **Step 4: Implement `GlassesMapStreamer.kt`**
+- [ ] **Step 3: Implement `GlassesMapStreamer.kt`**
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -2867,7 +3325,7 @@ class GlassesMapStreamer(
 }
 ```
 
-- [ ] **Step 5: Implement `MapImageGate.kt`**
+- [ ] **Step 4: Implement `MapImageGate.kt`**
 
 ```kotlin
 package com.debasish.livefit.sync
@@ -2898,12 +3356,12 @@ class MapImageGate {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:sync:test`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add services/sync
@@ -2930,7 +3388,7 @@ git commit -m "feat(sync): glasses map streamer with render epochs and cadence, 
   - `ExerciseBackend.locationGranted(): Boolean` (default `true`; Health Services overrides in Task 11); `BackendUpdate.Locations(fixes: List<LocationFix>)`
   - `WatchSessionRecorder.begin(sessionId, type, tMs, gps: Boolean = false)`, `WatchSessionRecorder.locations(fixes: List<LocationFix>)`, constructor param `onFinalAcked: (String) -> Unit = {}` (last parameter)
   - `WatchExerciseController(…, routes: WatchRouteFile? = null)` (new last parameter); `val activeGps: Boolean`
-  - `class WatchRouteFile(root: File) { data class SessionRoute(sessionId: String, fixes: List<LocationFix>); val route: StateFlow<SessionRoute?>; fun open(sessionId); fun append(sessionId, fixes); fun load(sessionId): List<LocationFix>; fun markAcked(sessionId); fun markDismissed(sessionId); fun sweep() }` — `root/<sessionId>/route.bin`, 32-byte records.
+  - `class WatchRouteFile(root: File) { data class SessionRoute(sessionId: String, fixes: List<LocationFix>); val route: StateFlow<SessionRoute?>; fun open(sessionId); fun append(sessionId, fixes); fun load(sessionId): List<LocationFix>; fun markAcked(sessionId); fun markDismissed(sessionId); fun sweep(); companion { RECORD = 32 } }` — `root/<sessionId>/route.bin`, 32-byte records; `append` first truncates a torn tail to the last whole record (review #4); unknown accuracy is stored as NaN and read back as null.
   - `SessionAssembler.gps(): Boolean` (= Started.gps, GPS requested); `SessionAssembler.snapshot()` fills `gps`; `HubWorkoutService` Starting snapshot carries `gps = gpsFor(type)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3082,6 +3540,28 @@ class WatchLocationTest {
         assertEquals(10f, restored[0].bearingDeg)
     }
 
+    /** Review #4: an append after a torn tail must not misalign this and every later record. */
+    @Test fun appendAfterATornTailKeepsRecordsAligned() {
+        val root = tmp()
+        WatchRouteFile(root).append("s", listOf(fix(1_000), fix(2_000, 5.0)))
+        File(root, "s/route.bin").appendBytes(ByteArray(7) { 0x55 }) // process died mid-write
+        val reopened = WatchRouteFile(root).apply { open("s") }
+        reopened.append("s", listOf(fix(3_000, 10.0), fix(4_000, 15.0)))
+        assertEquals(4L * WatchRouteFile.RECORD, File(root, "s/route.bin").length(), "tail truncated to the record boundary")
+        val back = WatchRouteFile(root).load("s")
+        assertEquals(listOf(1_000L, 2_000L, 3_000L, 4_000L), back.map { it.fixTimeMs })
+        assertEquals(fix(4_000, 15.0), back.last(), "exact values after the append")
+        assertEquals(back, reopened.route.value!!.fixes, "the in-memory route matches the file")
+    }
+
+    @Test fun unknownAccuracyRoundTripsAsNull() {
+        val r = WatchRouteFile(tmp())
+        r.append("s", listOf(LocationFix(1.0, 2.0, null, 7f, 4)))
+        val back = r.load("s").single()
+        assertNull(back.accuracyM)
+        assertEquals(7f, back.bearingDeg)
+    }
+
     @Test fun missingBearingRoundTrips() {
         val r = WatchRouteFile(tmp())
         r.append("s", listOf(LocationFix(1.0, 2.0, 3f, null, 4)))
@@ -3155,15 +3635,16 @@ import com.debasish.livefit.model.LocationFix
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 
 /**
  * Watch-side full-session route (spec §2.6): `root/<sessionId>/route.bin`, append-only 32-byte records
- * (lat, lon: Double; accuracy, bearing (NaN = none): Float; fix time: Long), independent of delta resend retention.
- * Deleted once the session is finalized on the phone (final ack, [markAcked]) and the watch summary is dismissed
- * ([markDismissed]). A torn trailing record after process death is ignored.
+ * (lat, lon: Double; accuracy (NaN = unknown), bearing (NaN = none): Float; fix time: Long), independent of delta
+ * resend retention. Deleted once the session is finalized on the phone (final ack, [markAcked]) and the watch summary is
+ * dismissed ([markDismissed]). A torn trailing record after process death is ignored on load and cut off before the
+ * next append, so later records stay aligned (review #4).
  */
 class WatchRouteFile(private val root: File) {
     data class SessionRoute(val sessionId: String, val fixes: List<LocationFix>)
@@ -3183,7 +3664,12 @@ class WatchRouteFile(private val root: File) {
         try {
             val f = file(sessionId)
             f.parentFile?.mkdirs()
-            FileOutputStream(f, true).use { it.write(encode(fixes)) }
+            RandomAccessFile(f, "rw").use { raf ->
+                val whole = raf.length() / RECORD * RECORD
+                if (whole != raf.length()) raf.setLength(whole) // drop the torn tail first (review #4)
+                raf.seek(whole)
+                raf.write(encode(fixes))
+            }
         } catch (e: IOException) {
             java.util.logging.Logger.getLogger("WatchRouteFile").warning("route append failed: $e") // the deltas still carry the fixes
         }
@@ -3200,7 +3686,7 @@ class WatchRouteFile(private val root: File) {
         val out = ArrayList<LocationFix>(bytes.size / RECORD)
         while (buf.remaining() >= RECORD) {
             val lat = buf.double; val lon = buf.double; val acc = buf.float; val bearing = buf.float; val t = buf.long
-            out += LocationFix(lat, lon, acc, bearing.takeUnless { it.isNaN() }, t)
+            out += LocationFix(lat, lon, acc.takeUnless { it.isNaN() }, bearing.takeUnless { it.isNaN() }, t)
         }
         return out
     }
@@ -3232,7 +3718,7 @@ class WatchRouteFile(private val root: File) {
 
     private fun encode(fixes: List<LocationFix>): ByteArray {
         val b = ByteBuffer.allocate(RECORD * fixes.size)
-        for (f in fixes) b.putDouble(f.lat).putDouble(f.lon).putFloat(f.accuracyM).putFloat(f.bearingDeg ?: Float.NaN).putLong(f.fixTimeMs)
+        for (f in fixes) b.putDouble(f.lat).putDouble(f.lon).putFloat(f.accuracyM ?: Float.NaN).putFloat(f.bearingDeg ?: Float.NaN).putLong(f.fixTimeMs)
         return b.array()
     }
 
@@ -3612,14 +4098,13 @@ In the callback, after the line `batchSamples(hr, now, …)…` add:
             // Location points, each at its own time (screen-off batches arrive late, spec §2.1).
             val fixes = m.getData(DataType.LOCATION).map { dp ->
                 val v = dp.value
+                // No accuracy = unknown (null, review #8): kept in the delta and route.bin, never routed or live (FixQuality).
                 val acc = (dp.accuracy as? LocationAccuracy)?.horizontalPositionErrorMeters?.toFloat()
-                    ?: UNKNOWN_ACCURACY_M.also { Log.w(TAG, "location point without accuracy") }
+                    .also { if (it == null) Log.w(TAG, "location point without accuracy (unknown)") }
                 LocationFix(v.latitude, v.longitude, acc, v.bearing.takeIf { it.isFinite() && it >= 0 }?.toFloat(), dp.getTimeInstant(boot).toEpochMilli().coerceAtMost(now))
             }
             if (fixes.isNotEmpty()) queue.trySend(BackendUpdate.Locations(fixes))
 ```
-
-and in `private companion object` add `const val UNKNOWN_ACCURACY_M = 30f`.
 
 - [ ] **Step 8: `WatchRuntime.kt`** — add the import `com.debasish.livefit.sync.WatchRouteFile`, the field `lateinit var routes: WatchRouteFile; private set`, and in `init(context)` before `recorder = …`:
 
@@ -3736,22 +4221,27 @@ git commit -m "feat(watch): GPS fixes from Health Services, health|location FGS,
 - Create: `watch/src/main/java/com/debasish/livefit/watch/ui/WatchMap.kt`
 - Modify: `watch/src/main/java/com/debasish/livefit/watch/ui/WatchApp.kt`
 - Modify: `watch/src/main/java/com/debasish/livefit/watch/WatchRuntime.kt`
+- Modify: `watch/src/main/java/com/debasish/livefit/watch/WatchClient.kt`
 - Modify: `watch/src/main/java/com/debasish/livefit/watch/MainActivity.kt`
+- Modify: `watch/build.gradle.kts`
 - Test: `watch/src/test/java/com/debasish/livefit/watch/WatchPagesTest.kt`
 
 **Interfaces:**
-- Consumes: `PageSet` (Task 5); `Viewport`, `MapSceneBuilder`, `MapScene`, `MapArrow`, `HudPalette`, `HttpTileFetcher`, `TileDiskCache`, `OsmTileSource`, `TileId` (Tasks 2, 7, 8); `RouteTrack`, `RoutePoint`, `RouteState`, `LivePosition` (Task 3); `Freshness` (Task 4); `WatchUiState.pages/queue/route` (Task 11).
+- Consumes: `PageSet` (Task 5); `Viewport`, `MapSceneBuilder`, `MapScene`, `MapArrow`, `HudPalette`, `HttpTileFetcher`, `TileDiskCache`, `OsmTileSource`, `TileId`, `TileLoader` (Tasks 2, 7, 8); `RouteTrack`, `RoutePoint`, `RouteState`, `LivePosition`, `toRouteFix` (Task 3); `Freshness` (Task 4); `WatchRouteFile.SessionRoute` (Task 10); `WatchUiState.pages/queue/route`, `WatchClient` route collector (Task 11). `:core:map` reaches the watch through `:services:sync` (Task 2).
 - Produces:
   - `object WatchPageModel { fun pages(state: WatchUiState): List<HudPage>; fun initialIndex(pages: List<HudPage>, shown: HudPage): Int }`
-  - `object WatchMapModel { fun state(fixes: List<LocationFix>, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState; fun zoomStep(zoom: Int, scrollPixels: Float): Int }`
-  - `class WatchTiles(context, scope, tint = 0x14C3A2) { val bitmaps: StateFlow<Map<TileId, ImageBitmap>>; fun request(tile: TileId) }`; `WatchRuntime.tiles: WatchTiles`
-  - `WatchApp(state, onCommand, onVolume, onGrantPermissions, tiles: WatchTiles, ambient = false)`
+  - `class WatchMapTracker { val live: LivePosition?; fun onRoute(route: WatchRouteFile.SessionRoute?, nowMs: Long); fun liveFor(sessionId: String?): LivePosition? }` — the marker moves only on a fix that is usable-live **when it arrives** (`Freshness.isUsableLive` on the watch clock, the same predicate as the phone); aged batches still grow the route; a route restored after process death has no marker until a live fix (review #7).
+  - `object WatchMapModel { fun state(fixes: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState; fun zoomStep(zoom: Int, scrollPixels: Float): Int }`
+  - `object WatchTilePolicy { RETRY_MS = 5_000L; MAX_TILES = 30; MAX_CONCURRENT = 3; fun <T : Any> loader(scope, load: suspend (TileId) -> T?): TileLoader<T> }`
+  - `class WatchTiles(context, scope, tint = 0x14C3A2) { val bitmaps: StateFlow<Map<TileId, ImageBitmap>>; fun show(tiles: Collection<TileId>) }` — missing visible tiles are retried every 5 s while visible (review #6); `WatchRuntime.tiles: WatchTiles`
+  - `WatchUiState.live: LivePosition?`; `WatchApp(state, onCommand, onVolume, onGrantPermissions, tiles: WatchTiles, ambient = false)`
 
-- [ ] **Step 1: Write the failing test** — `watch/src/test/java/com/debasish/livefit/watch/WatchPagesTest.kt`:
+- [ ] **Step 1: Write the failing test** — in `watch/build.gradle.kts` add `testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")` next to the other test dependencies, then create `watch/src/test/java/com/debasish/livefit/watch/WatchPagesTest.kt`:
 
 ```kotlin
 package com.debasish.livefit.watch
 
+import com.debasish.livefit.map.TileId
 import com.debasish.livefit.model.GpsStatus
 import com.debasish.livefit.model.HudPage
 import com.debasish.livefit.model.LocationFix
@@ -3759,16 +4249,33 @@ import com.debasish.livefit.model.PageSettings
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.sync.WatchRouteFile.SessionRoute
 import com.debasish.livefit.watch.map.WatchMapModel
+import com.debasish.livefit.watch.map.WatchMapTracker
+import com.debasish.livefit.watch.map.WatchTilePolicy
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class WatchPagesTest {
-    private fun fix(t: Long, northM: Double, acc: Float = 5f) = LocationFix(12.9716 + northM / 111_195.0, 77.5946, acc, null, t)
+    private fun fix(t: Long, northM: Double, acc: Float? = 5f) = LocationFix(12.9716 + northM / 111_195.0, 77.5946, acc, null, t)
     private val gpsRun = WorkoutSnapshot(phase = WorkoutPhase.Active, type = WorkoutType.Run, sessionId = "s", gps = true)
+
+    /** Feeds route.bin growth to the tracker the way WatchClient does: each emission at its arrival time. */
+    private class Feed {
+        val tracker = WatchMapTracker()
+        val fixes = mutableListOf<LocationFix>()
+        init { tracker.onRoute(SessionRoute("s", emptyList()), 0) } // session opened (WatchRouteFile.open)
+        fun arrive(nowMs: Long, vararg batch: LocationFix) { fixes += batch; tracker.onRoute(SessionRoute("s", fixes.toList()), nowMs) }
+        fun state(nowMs: Long) = WatchMapModel.state(fixes, tracker.liveFor("s"), "s", WorkoutType.Walk, nowMs)
+    }
 
     /** Spec §3.1: the same page set as the glasses; Glance and Playlist are new on the watch. */
     @Test fun pagesFollowSettingsAndMapEligibility() {
@@ -3786,7 +4293,9 @@ class WatchPagesTest {
     /** Spec §2.6: the watch map draws its own fixes, start marker and live arrow. */
     @Test fun ownFixesBecomeTheRouteWithStartAndMarker() {
         val now = 100_000L
-        val s = WatchMapModel.state(listOf(fix(now - 3_000, 0.0), fix(now - 2_000, 10.0), fix(now - 1_000, 20.0)), "s", WorkoutType.Run, now)
+        val f = Feed()
+        f.arrive(now - 3_000, fix(now - 3_000, 0.0)); f.arrive(now - 2_000, fix(now - 2_000, 10.0)); f.arrive(now - 1_000, fix(now - 1_000, 20.0))
+        val s = f.state(now)
         assertEquals(3, s.route.size)
         assertEquals(s.route.first(), s.start)
         assertEquals(GpsStatus.Live, s.status)
@@ -3794,18 +4303,73 @@ class WatchPagesTest {
     }
 
     @Test fun staleOwnFixIsDelayedThenLost() {
-        val fixes = listOf(fix(0, 0.0))
-        assertEquals(GpsStatus.Delayed, WatchMapModel.state(fixes, "s", WorkoutType.Walk, 20_000).status)
-        val lost = WatchMapModel.state(fixes, "s", WorkoutType.Walk, 31_000)
+        val f = Feed()
+        f.arrive(0, fix(0, 0.0))
+        assertEquals(GpsStatus.Delayed, f.state(20_000).status)
+        val lost = f.state(31_000)
         assertEquals(GpsStatus.Lost, lost.status)
         assertNotNull(lost.live, "last point kept")
     }
 
+    /** Review #7: live A, then an aged batch B → the route grows, the marker stays on A and the status degrades; live C moves it. */
+    @Test fun agedBatchGrowsTheRouteButNeverMovesTheMarker() {
+        val f = Feed()
+        f.arrive(1_000, fix(1_000, 0.0))                                                   // A, live on arrival
+        f.arrive(25_000, fix(2_000, 10.0), fix(3_000, 20.0), fix(4_000, 30.0))             // B, measured 21–23 s ago
+        val s = f.state(25_000)
+        assertEquals(4, s.route.size, "B is drawn")
+        assertEquals(1_000L, assertNotNull(s.live).fixTimeMs, "the marker stays on A")
+        assertEquals(GpsStatus.Delayed, s.status, "from A's age, not B's")
+        f.arrive(26_000, fix(26_000, 40.0))                                                 // C, live
+        assertEquals(26_000L, f.state(26_000).live?.fixTimeMs)
+        assertEquals(GpsStatus.Live, f.state(26_000).status)
+    }
+
+    /** Review #7: a route reloaded from route.bin after process death is drawn but has no marker until a live fix arrives. */
+    @Test fun restoredRouteHasNoMarkerUntilALiveFix() {
+        val t = WatchMapTracker()
+        val cached = listOf(fix(1_000, 0.0), fix(2_000, 10.0))
+        t.onRoute(SessionRoute("s", cached), 2_500) // process restarted: route.bin reopened
+        assertNull(t.liveFor("s"))
+        val s = WatchMapModel.state(cached, t.liveFor("s"), "s", WorkoutType.Walk, 2_500)
+        assertEquals(2, s.route.size)
+        assertEquals(GpsStatus.Waiting, s.status)
+        t.onRoute(SessionRoute("s", cached + fix(3_000, 20.0)), 3_000)
+        assertEquals(3_000L, t.liveFor("s")?.fixTimeMs)
+        assertNull(t.liveFor("other"), "another session never shows this marker")
+    }
+
     @Test fun inaccurateFixesNeverBecomeTheMarker() {
-        val s = WatchMapModel.state(listOf(fix(1_000, 0.0, acc = 80f)), "s", WorkoutType.Walk, 1_000)
+        val f = Feed()
+        f.arrive(1_000, fix(1_000, 0.0, acc = 80f))
+        val s = f.state(1_000)
         assertNull(s.live)
         assertTrue(s.route.isEmpty())
         assertEquals(GpsStatus.Waiting, s.status)
+    }
+
+    /** Review #8: fresh watch fixes without accuracy neither draw nor move the marker. */
+    @Test fun unknownAccuracyFixesNeverBecomeTheMarker() {
+        val f = Feed()
+        f.arrive(1_000, fix(1_000, 0.0, acc = null))
+        f.arrive(2_000, fix(2_000, 10.0, acc = null))
+        val s = f.state(2_000)
+        assertNull(s.live)
+        assertTrue(s.route.isEmpty())
+        assertEquals(GpsStatus.Waiting, s.status)
+    }
+
+    /** Review #6: the Map page's viewport does not move; the first fetch fails, the network returns, tiles appear. */
+    @Test fun fixedViewportGetsItsTilesOnceTheNetworkReturns() = runTest {
+        var online = false
+        val loader = WatchTilePolicy.loader(backgroundScope) { t: TileId -> if (online) "tile ${t.x}" else null }
+        loader.start()
+        val visible = listOf(TileId(18, 5, 5), TileId(18, 6, 5))
+        loader.show(visible); runCurrent()
+        assertTrue(loader.tiles.value.isEmpty())
+        online = true
+        advanceTimeBy(WatchTilePolicy.RETRY_MS + 1); runCurrent()
+        assertEquals(visible.toSet(), loader.tiles.value.keys, "no navigation or zoom needed")
     }
 
     /** Spec §2.6: bezel zoom 14–18. */
@@ -3822,7 +4386,7 @@ class WatchPagesTest {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :watch:testDebugUnitTest --tests '*WatchPagesTest*'`
-Expected: FAIL — `WatchPageModel`, `WatchMapModel` unresolved.
+Expected: FAIL — `WatchPageModel`, `WatchMapModel`, `WatchMapTracker`, `WatchTilePolicy` unresolved.
 
 - [ ] **Step 3: Implement the pure models**
 
@@ -3848,38 +4412,80 @@ object WatchPageModel {
 ```kotlin
 package com.debasish.livefit.watch.map
 
+import com.debasish.livefit.map.TileId
+import com.debasish.livefit.map.TileLoader
 import com.debasish.livefit.map.Viewport
 import com.debasish.livefit.model.FixSource
 import com.debasish.livefit.model.LivePosition
 import com.debasish.livefit.model.LocationFix
-import com.debasish.livefit.model.RoutePoint
 import com.debasish.livefit.model.RouteState
 import com.debasish.livefit.model.RouteTrack
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.model.toRouteFix
 import com.debasish.livefit.sync.Freshness
+import com.debasish.livefit.sync.WatchRouteFile
+import kotlinx.coroutines.CoroutineScope
+
+/**
+ * The watch marker (spec §2.1/§2.6, review #7). Fed every route.bin emission at its arrival time: only a fix that is
+ * usable-live when it arrives ([Freshness.isUsableLive] on the watch's own clock — the phone's predicate) moves it; aged
+ * batches still grow the route. A route restored after process death (or first seen mid-session) has no marker until
+ * the next live fix.
+ */
+class WatchMapTracker {
+    private var sessionId: String? = null
+    private var seen = 0
+
+    var live: LivePosition? = null
+        private set
+
+    fun onRoute(route: WatchRouteFile.SessionRoute?, nowMs: Long) {
+        if (route == null || route.sessionId != sessionId || route.fixes.size < seen) {
+            sessionId = route?.sessionId
+            seen = route?.fixes?.size ?: 0
+            live = null
+            return
+        }
+        for (f in route.fixes.subList(seen, route.fixes.size)) {
+            if (Freshness.isUsableLive(f.fixTimeMs, f.accuracyM, nowMs) && f.fixTimeMs > (live?.fixTimeMs ?: Long.MIN_VALUE)) {
+                live = LivePosition(f.lat, f.lon, f.bearingDeg, FixSource.Watch, f.fixTimeMs)
+            }
+        }
+        seen = route.fixes.size
+    }
+
+    fun liveFor(sessionId: String?): LivePosition? = live?.takeIf { sessionId != null && sessionId == this.sessionId }
+}
 
 /** The watch map from the watch's own fixes only (spec §2.6); its clock is its own, so no offset. */
 object WatchMapModel {
-    fun state(fixes: List<LocationFix>, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState {
-        val sorted = fixes.sortedBy { it.fixTimeMs }
-        val track = RouteTrack()
-        for (f in sorted) track.add(RoutePoint(FixSource.Watch, f.lat, f.lon, f.accuracyM, f.fixTimeMs, f.fixTimeMs, f.bearingDeg), nowMs)
-        val newest = sorted.lastOrNull { it.accuracyM <= Freshness.MAX_ACCURACY_M && it.fixTimeMs - nowMs <= Freshness.FUTURE_TOLERANCE_MS }
-        val live = newest?.let { LivePosition(it.lat, it.lon, it.bearingDeg ?: track.lastBearing(), FixSource.Watch, it.fixTimeMs) }
+    fun state(fixes: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, nowMs: Long): RouteState {
+        val track = RouteTrack.of(fixes.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = it.fixTimeMs)?.point() }, nowMs)
         val drawn = track.drawn()
-        return RouteState(sessionId, type, drawn, drawn.firstOrNull(), live, Freshness.status(newest?.fixTimeMs, nowMs))
+        val marker = live?.let { it.copy(bearingDeg = it.bearingDeg ?: track.lastBearing()) }
+        return RouteState(sessionId, type, drawn, drawn.firstOrNull(), marker, Freshness.status(live?.fixTimeMs, nowMs))
     }
 
     /** One bezel detent = one zoom level, 14–18; the map always re-centres on the current position. */
     fun zoomStep(zoom: Int, scrollPixels: Float): Int =
         (zoom + when { scrollPixels > 0 -> 1; scrollPixels < 0 -> -1; else -> 0 }).coerceIn(Viewport.MIN_ZOOM, Viewport.MAX_ZOOM)
 }
+
+/** The watch's tile loading policy (review #6): 3 at a time, missing visible tiles retried every 5 s, 30 kept. */
+object WatchTilePolicy {
+    const val RETRY_MS = 5_000L
+    const val MAX_TILES = 30
+    const val MAX_CONCURRENT = 3
+
+    fun <T : Any> loader(scope: CoroutineScope, load: suspend (TileId) -> T?): TileLoader<T> =
+        TileLoader(scope, load, maxConcurrent = MAX_CONCURRENT, retryEveryMs = RETRY_MS, maxCached = MAX_TILES)
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :watch:testDebugUnitTest --tests '*WatchPagesTest*'`
-Expected: PASS (6 tests).
+Expected: PASS (10 tests).
 
 - [ ] **Step 5: Tiles on the watch** — `watch/src/main/java/com/debasish/livefit/watch/map/WatchTiles.kt`:
 
@@ -3898,30 +4504,24 @@ import com.debasish.livefit.map.TileDiskCache
 import com.debasish.livefit.map.TileId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
  * Watch tiles over the watch's own connection (spec §2.4/§2.6): 20 MB LRU disk cache, palette-converted with the
- * watch mint so it matches the glasses look; only the visible tiles are ever requested. Call [request] on Main.
+ * watch mint so it matches the glasses look; only the visible tiles are ever requested. A visible tile that failed is
+ * retried every 5 s while it stays visible (the fetcher's 30 s backoff limits real requests), so a fixed viewport fills
+ * in when the network returns (review #6).
  */
-class WatchTiles(context: Context, private val scope: CoroutineScope, private val tint: Int = 0x14C3A2) {
+class WatchTiles(context: Context, scope: CoroutineScope, private val tint: Int = 0x14C3A2) {
     private val fetcher = HttpTileFetcher(OsmTileSource(), TileDiskCache(File(context.cacheDir, "tiles"), TileDiskCache.WATCH_MAX_BYTES))
-    private val _bitmaps = MutableStateFlow<Map<TileId, ImageBitmap>>(emptyMap())
-    val bitmaps: StateFlow<Map<TileId, ImageBitmap>> = _bitmaps
-    private val inFlight = HashSet<TileId>()
+    private val loader = WatchTilePolicy.loader(scope) { t -> withContext(Dispatchers.IO) { fetcher.fetch(t)?.let(::decode) } }
+        .also { it.start() }
+    val bitmaps: StateFlow<Map<TileId, ImageBitmap>> = loader.tiles
 
-    fun request(tile: TileId) {
-        if (tile in _bitmaps.value || !inFlight.add(tile)) return
-        scope.launch {
-            val bmp = withContext(Dispatchers.IO) { fetcher.fetch(tile)?.let(::decode) }
-            inFlight.remove(tile)
-            if (bmp != null) _bitmaps.value = (_bitmaps.value + (tile to bmp)).entries.toList().takeLast(MAX_TILES).associate { it.key to it.value }
-        }
-    }
+    /** The tiles of the current viewport, on every viewport change; empty when the Map page is not shown. */
+    fun show(tiles: Collection<TileId>) = loader.show(tiles)
 
     private fun decode(bytes: ByteArray): ImageBitmap? {
         val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
@@ -3930,8 +4530,6 @@ class WatchTiles(context: Context, private val scope: CoroutineScope, private va
         HudPalette.convertAll(px, tint)
         return Bitmap.createBitmap(px, src.width, src.height, Bitmap.Config.ARGB_8888).asImageBitmap()
     }
-
-    private companion object { const val MAX_TILES = 30 }
 }
 ```
 
@@ -3941,6 +4539,21 @@ In `WatchRuntime.kt` add `import com.debasish.livefit.watch.map.WatchTiles` and:
     /** Map tiles for the watch Map page (created on first use). */
     val tiles: WatchTiles by lazy { WatchTiles(app, scope) }
 ```
+
+In `WatchClient.kt` (the marker, review #7) add the imports `com.debasish.livefit.model.LivePosition`, `com.debasish.livefit.watch.map.WatchMapTracker`; extend `WatchUiState` with
+
+```kotlin
+    /** The watch Map marker: last fix that was usable-live on arrival (WatchMapTracker). */
+    val live: LivePosition? = null,
+```
+
+add the field `private val mapTracker = WatchMapTracker()`, replace the Task 11 collector line in `start()` with
+
+```kotlin
+        WatchRuntime.scope.launch { WatchRuntime.routes.route.collect { mapTracker.onRoute(it, System.currentTimeMillis()); refresh() } }
+```
+
+and in `refresh()` add `live = mapTracker.liveFor(snap.sessionId),` to the offline `WatchUiState(...)` and `live = mapTracker.liveFor(f?.workout?.sessionId),` to the online one.
 
 - [ ] **Step 6: Map page** — `watch/src/main/java/com/debasish/livefit/watch/ui/WatchMap.kt`:
 
@@ -3956,6 +4569,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -3984,6 +4598,7 @@ import androidx.wear.compose.material.Text
 import com.debasish.livefit.map.MapArrow
 import com.debasish.livefit.map.MapSceneBuilder
 import com.debasish.livefit.map.Viewport
+import com.debasish.livefit.model.LivePosition
 import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.watch.map.WatchMapModel
@@ -3992,7 +4607,7 @@ import kotlinx.coroutines.delay
 
 /** Watch Map page (spec §2.6): own fixes over tiles, bezel = zoom 14–18, offline = route only on black. */
 @Composable
-internal fun WatchMapPage(route: List<LocationFix>, sessionId: String?, type: WorkoutType, tiles: WatchTiles) {
+internal fun WatchMapPage(route: List<LocationFix>, live: LivePosition?, sessionId: String?, type: WorkoutType, tiles: WatchTiles) {
     var zoom by remember(type) { mutableIntStateOf(Viewport.zoomFor(type)) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val focus = remember { FocusRequester() }
@@ -4000,7 +4615,8 @@ internal fun WatchMapPage(route: List<LocationFix>, sessionId: String?, type: Wo
         runCatching { focus.requestFocus() }
         while (true) { delay(1_000); now = System.currentTimeMillis() } // status ages even without new fixes
     }
-    val state = remember(route.size, route.lastOrNull(), sessionId, now / 1_000) { WatchMapModel.state(route, sessionId, type, now) }
+    val state = remember(route.size, route.lastOrNull(), live, sessionId, now / 1_000) { WatchMapModel.state(route, live, sessionId, type, now) }
+    DisposableEffect(Unit) { onDispose { tiles.show(emptyList()) } } // off the Map page: nothing visible, nothing retried
     val bitmaps by tiles.bitmaps.collectAsState()
     BoxWithConstraints(
         Modifier.fillMaxSize().background(Color.Black)
@@ -4011,7 +4627,7 @@ internal fun WatchMapPage(route: List<LocationFix>, sessionId: String?, type: Wo
         val h = constraints.maxHeight
         val scene = remember(state, zoom, w, h) { MapSceneBuilder.build(state, zoom, w, h) }
         val visible = remember(scene.viewport) { scene.viewport?.tiles().orEmpty() }
-        LaunchedEffect(visible) { visible.forEach { tiles.request(it.tile) } }
+        LaunchedEffect(visible) { tiles.show(visible.map { it.tile }) } // missing ones keep retrying while visible (review #6)
         val anyTile = visible.any { it.tile in bitmaps }
         Canvas(Modifier.fillMaxSize()) {
             for (t in visible) bitmaps[t.tile]?.let { drawImage(it, topLeft = Offset(t.left, t.top)) }
@@ -4197,7 +4813,7 @@ private fun Live(s: WorkoutSnapshot, state: WatchUiState, onCommand: (Command) -
                     HudPage.Workout -> HeartPage(s, state.hrHistory, onCommand)
                     HudPage.Stats -> StatsPage(s)
                     HudPage.Playlist -> PlaylistPage(state.queue, onCommand)
-                    HudPage.Map -> WatchMapPage(state.route, s.sessionId, s.type, tiles)
+                    HudPage.Map -> WatchMapPage(state.route, state.live, s.sessionId, s.type, tiles)
                     HudPage.MusicControls -> MusicPage(state.music, onCommand, onVolume)
                 }
             }
@@ -4245,7 +4861,7 @@ Expected: BUILD SUCCESSFUL, tests PASS.
 
 ```bash
 git add watch
-git commit -m "feat(watch): shared page set with Glance, Stats, Playlist, live Map (bezel zoom) and Music controls"
+git commit -m "feat(watch): shared page set, live Map with arrival-gated marker and retrying tiles, bezel zoom"
 ```
 
 ---
@@ -4263,11 +4879,11 @@ git commit -m "feat(watch): shared page set with Glance, Stats, Playlist, live M
 - Test: `services/history/src/test/kotlin/com/debasish/livefit/history/RoomRouteStoreTest.kt`
 
 **Interfaces:**
-- Consumes: `RoutePoint`, `FixSource` (Tasks 1, 3).
+- Consumes: `RouteFix`, `FixSource`, `LocationFix.toRouteFix`, `FixQuality` (Tasks 1, 3).
 - Produces:
-  - `interface RouteStore { suspend fun storeRoutePoints(sessionId: String, points: List<RoutePoint>); suspend fun routePoints(sessionId: String): List<RoutePoint> }` in `:core:services` — ordered by phone time, watch first on ties; idempotent by `(sessionId, source, device fix time)`.
-  - `RoomSessionStore : HistoryStore, RouteStore`; `HistoryDatabase` version 2 with `HistoryDatabase.MIGRATION_1_2`; `discard` and `clearFinished` also delete route points.
-  - Table `route_point(sessionId, source, fixTimeMs /* device clock */, phoneTimeMs, lat, lon, accuracyM, bearingDeg)` PK `(sessionId, source, fixTimeMs)`.
+  - `interface RouteStore { suspend fun storeRouteFixes(sessionId: String, fixes: List<RouteFix>); suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long); suspend fun routeFixes(sessionId: String): List<RouteFix> }` in `:core:services` — identity `(sessionId, source, deviceTimeMs)`, insert-or-ignore; nothing is written for a Discarded or Cleared session (tombstone); `normalizeWatchTimes` sets `phoneTimeMs = deviceTimeMs − offset` on every Watch row of the session that is null or mapped with another offset; `routeFixes` is ordered by phone time (watch first on ties) with uncalibrated rows last by device time.
+  - `RoomSessionStore : HistoryStore, RouteStore`; **`storeDelta` writes the delta's accurate location fixes as route rows (phoneTimeMs = null) in the same transaction as the delta** — so once a delta is stored (and therefore acked) its route rows exist (review #1). `HistoryDatabase` version 2 with `HistoryDatabase.MIGRATION_1_2`; `discard` and `clearFinished` also delete route rows.
+  - Table `route_point(sessionId, source, fixTimeMs /* device clock */, phoneTimeMs /* nullable */, lat, lon, accuracyM, bearingDeg)` PK `(sessionId, source, fixTimeMs)`.
 
 - [ ] **Step 1: Write the failing test** — `services/history/src/test/kotlin/com/debasish/livefit/history/RoomRouteStoreTest.kt`:
 
@@ -4279,14 +4895,16 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.debasish.livefit.model.FixSource
+import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.Provenance
-import com.debasish.livefit.model.RoutePoint
+import com.debasish.livefit.model.RouteFix
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.SessionStatus
 import com.debasish.livefit.model.SessionSummary
 import com.debasish.livefit.model.WorkoutType
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -4296,48 +4914,84 @@ import org.robolectric.RobolectricTestRunner
 class RoomRouteStoreTest {
     private val ctx: Context = ApplicationProvider.getApplicationContext()
     private fun store() = RoomSessionStore(HistoryDatabase.create(ctx, inMemory = true))
-    private fun pt(src: FixSource, device: Long, phone: Long, northM: Double = 0.0) =
-        RoutePoint(src, 12.9716 + northM / 111_195.0, 77.5946, 5f, deviceTimeMs = device, fixTimeMs = phone, bearingDeg = 90f)
+    private fun row(src: FixSource, device: Long, phone: Long?, northM: Double = 0.0) =
+        RouteFix(src, 12.9716 + northM / 111_195.0, 77.5946, 5f, deviceTimeMs = device, phoneTimeMs = phone, bearingDeg = 90f)
 
-    @Test fun storesAndReturnsPointsInPhoneTimeOrder() = runTest {
+    @Test fun returnsRowsInPhoneTimeOrderWithUncalibratedRowsLast() = runTest {
         val s = store()
-        s.storeRoutePoints("s", listOf(pt(FixSource.Watch, 10_000, 5_000), pt(FixSource.Phone, 1_000, 1_000), pt(FixSource.Watch, 2_000, -3_000)))
-        val back = s.routePoints("s")
-        assertEquals(listOf(-3_000L, 1_000L, 5_000L), back.map { it.fixTimeMs })
-        assertEquals(listOf(2_000L, 1_000L, 10_000L), back.map { it.deviceTimeMs })
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 10_000, 5_000), row(FixSource.Phone, 1_000, 1_000), row(FixSource.Watch, 2_000, -3_000), row(FixSource.Watch, 900, null)))
+        val back = s.routeFixes("s")
+        assertEquals(listOf(-3_000L, 1_000L, 5_000L, null), back.map { it.phoneTimeMs })
+        assertEquals(listOf(2_000L, 1_000L, 10_000L, 900L), back.map { it.deviceTimeMs })
         assertEquals(90f, back.first().bearingDeg!!, 0f)
     }
 
-    /** Spec §2.2: unique key (sessionId, source, fixTimeMs) — a replay re-mapped with a newer offset is not a second row. */
-    @Test fun uniqueKeyMakesReplaysIdempotent() = runTest {
+    /** Spec §2.2: unique key (sessionId, source, device fix time) — a replay re-mapped with a newer offset is not a second row. */
+    @Test fun deviceTimeIdentityMakesReplaysIdempotent() = runTest {
         val s = store()
-        s.storeRoutePoints("s", listOf(pt(FixSource.Watch, 10_000, 5_000)))
-        s.storeRoutePoints("s", listOf(pt(FixSource.Watch, 10_000, 5_300)))
-        assertEquals(listOf(5_000L), s.routePoints("s").map { it.fixTimeMs })
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 10_000, null)))
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 10_000, 5_300)))
+        assertEquals(1, s.routeFixes("s").size)
+        assertNull("insert never overwrites; normalizeWatchTimes does", s.routeFixes("s").single().phoneTimeMs)
+    }
+
+    /** Review #2: calibration rewrites the phone time of every watch row (null or older offset) without touching identity. */
+    @Test fun normalizeRewritesWatchPhoneTimesOnly() = runTest {
+        val s = store()
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 10_000, null), row(FixSource.Watch, 11_000, 9_000), row(FixSource.Phone, 7_000, 7_000)))
+        s.storeRouteFixes("t", listOf(row(FixSource.Watch, 10_000, null)))
+        s.normalizeWatchTimes("s", watchOffsetMs = 3_000)
+        val back = s.routeFixes("s")
+        assertEquals(listOf(10_000L to 7_000L, 7_000L to 7_000L, 11_000L to 8_000L), back.map { it.deviceTimeMs to it.phoneTimeMs })
+        assertEquals(listOf(FixSource.Watch, FixSource.Phone, FixSource.Watch), back.map { it.source }, "watch first on the 7 s tie; the phone row is untouched")
+        assertNull("another session is untouched", s.routeFixes("t").single().phoneTimeMs)
     }
 
     @Test fun sameTimeDifferentSourceKeepsBothWatchFirst() = runTest {
         val s = store()
-        s.storeRoutePoints("s", listOf(pt(FixSource.Phone, 1_000, 1_000), pt(FixSource.Watch, 1_000, 1_000)))
-        assertEquals(listOf(FixSource.Watch, FixSource.Phone), s.routePoints("s").map { it.source })
+        s.storeRouteFixes("s", listOf(row(FixSource.Phone, 1_000, 1_000), row(FixSource.Watch, 1_000, 1_000)))
+        assertEquals(listOf(FixSource.Watch, FixSource.Phone), s.routeFixes("s").map { it.source })
     }
 
-    @Test fun discardDeletesTheRoute() = runTest {
+    /** Review #1: a stored (so acked) delta already has its route rows — nothing can be lost between ack and route insert. */
+    @Test fun storingADeltaStoresItsRouteRowsInTheSameTransaction() = runTest {
         val s = store()
-        s.storeRoutePoints("s", listOf(pt(FixSource.Watch, 1, 1)))
-        s.discard("s")
-        assertTrue(s.routePoints("s").isEmpty())
+        val fixes = listOf(
+            LocationFix(12.9716, 77.5946, 4f, 10f, 5_000),
+            LocationFix(12.9717, 77.5946, 50f, null, 6_000),   // inaccurate: no row
+            LocationFix(12.9718, 77.5946, null, null, 7_000),  // unknown accuracy: no row
+            LocationFix(12.9719, 77.5946, 6f, null, 8_000),
+        )
+        s.storeDelta(SessionDelta(sessionId = "s", seq = 0, locations = fixes, provenance = Provenance.Fake))
+        val back = s.routeFixes("s")
+        assertEquals(listOf(5_000L, 8_000L), back.map { it.deviceTimeMs })
+        assertTrue(back.all { it.source == FixSource.Watch && it.phoneTimeMs == null })
+        s.storeDelta(SessionDelta(sessionId = "s", seq = 0, locations = fixes, provenance = Provenance.Fake)) // resend
+        assertEquals(2, s.routeFixes("s").size)
     }
 
-    @Test fun clearHistoryDeletesFinishedRoutesOnly() = runTest {
+    /** A Discarded session's tombstone also blocks late route rows (from RouteHub or from a late delta). */
+    @Test fun discardDeletesTheRouteAndTheTombstoneBlocksLateRows() = runTest {
+        val s = store()
+        s.storeDelta(SessionDelta(sessionId = "s", seq = 0, locations = listOf(LocationFix(1.0, 2.0, 3f, null, 4)), provenance = Provenance.Fake))
+        s.discard("s")
+        assertTrue(s.routeFixes("s").isEmpty())
+        s.storeRouteFixes("s", listOf(row(FixSource.Watch, 1, 1)))
+        s.storeDelta(SessionDelta(sessionId = "s", seq = 1, locations = listOf(LocationFix(1.0, 2.0, 3f, null, 5)), provenance = Provenance.Fake))
+        assertTrue(s.routeFixes("s").isEmpty())
+    }
+
+    @Test fun clearHistoryDeletesFinishedRoutesOnlyAndKeepsThemDeleted() = runTest {
         val s = store()
         s.storeDelta(SessionDelta(sessionId = "done", seq = 0, provenance = Provenance.Fake))
         s.finalize(SessionSummary(id = "done", type = WorkoutType.Run, startMs = 0, activeMs = 1, provenance = Provenance.Fake, status = SessionStatus.Complete))
-        s.storeRoutePoints("done", listOf(pt(FixSource.Watch, 1, 1)))
-        s.storeRoutePoints("open", listOf(pt(FixSource.Watch, 1, 1)))
+        s.storeRouteFixes("done", listOf(row(FixSource.Watch, 1, 1)))
+        s.storeRouteFixes("open", listOf(row(FixSource.Watch, 1, 1)))
         s.clearFinished()
-        assertTrue(s.routePoints("done").isEmpty())
-        assertEquals(1, s.routePoints("open").size)
+        assertTrue(s.routeFixes("done").isEmpty())
+        assertEquals(1, s.routeFixes("open").size)
+        s.storeRouteFixes("done", listOf(row(FixSource.Watch, 2, 2))) // a late replay of a cleared session
+        assertTrue(s.routeFixes("done").isEmpty())
     }
 
     /** The owner's phone already has a v1 history database: the upgrade keeps it and adds route_point. */
@@ -4358,8 +5012,8 @@ class RoomRouteStoreTest {
             .addMigrations(HistoryDatabase.MIGRATION_1_2).allowMainThreadQueries().build()
         val s = RoomSessionStore(room)
         assertEquals(listOf("old"), s.openSessionIds())
-        s.storeRoutePoints("old", listOf(pt(FixSource.Watch, 1, 1)))
-        assertEquals(1, s.routePoints("old").size)
+        s.storeRouteFixes("old", listOf(row(FixSource.Watch, 1, null)))
+        assertNull(s.routeFixes("old").single().phoneTimeMs)
         room.close()
     }
 }
@@ -4368,15 +5022,22 @@ class RoomRouteStoreTest {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:history:testDebugUnitTest --tests '*RoomRouteStoreTest*'`
-Expected: FAIL — `storeRoutePoints`, `routePoints`, `MIGRATION_1_2` unresolved.
+Expected: FAIL — `storeRouteFixes`, `routeFixes`, `normalizeWatchTimes`, `MIGRATION_1_2` unresolved.
 
 - [ ] **Step 3: `Services.kt`** — add after `interface HistoryStore`:
 
 ```kotlin
-/** Durable route points per session (spec §2.2). Idempotent by (sessionId, source, device fix time); read back in phone-time order. */
+/**
+ * Durable route rows per session (spec §2.2, route_point). Identity (sessionId, source, deviceTimeMs) never changes;
+ * phoneTimeMs is null until the watch clock is calibrated and is rewritten by [normalizeWatchTimes] (review #2).
+ */
 interface RouteStore {
-    suspend fun storeRoutePoints(sessionId: String, points: List<com.debasish.livefit.model.RoutePoint>)
-    suspend fun routePoints(sessionId: String): List<com.debasish.livefit.model.RoutePoint>
+    /** Insert-or-ignore by identity; nothing is written for a Discarded (or Cleared) session — its tombstone wins. */
+    suspend fun storeRouteFixes(sessionId: String, fixes: List<com.debasish.livefit.model.RouteFix>)
+    /** phoneTimeMs = deviceTimeMs − [watchOffsetMs] for every Watch row of [sessionId] that is null or mapped with another offset. */
+    suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long)
+    /** Phone-time order, watch first on ties; rows without a phone time last, by device time. */
+    suspend fun routeFixes(sessionId: String): List<com.debasish.livefit.model.RouteFix>
 }
 ```
 
@@ -4384,15 +5045,15 @@ interface RouteStore {
 
 ```kotlin
 /**
- * One kept route point (spec §2.2). [fixTimeMs] is the measuring device's own clock (the replay-safe unique key);
- * [phoneTimeMs] is the calibrated phone time used for ordering.
+ * One route row (spec §2.2). [fixTimeMs] is the measuring device's own clock — the replay-safe identity, never changed;
+ * [phoneTimeMs] is the calibrated phone time used for ordering, null until the watch clock is calibrated.
  */
 @Entity(tableName = "route_point", primaryKeys = ["sessionId", "source", "fixTimeMs"], indices = [Index("sessionId")])
 data class RoutePointEntity(
     val sessionId: String,
     val source: String,
     val fixTimeMs: Long,
-    val phoneTimeMs: Long,
+    val phoneTimeMs: Long?,
     val lat: Double,
     val lon: Double,
     val accuracyM: Float,
@@ -4404,10 +5065,35 @@ data class RoutePointEntity(
 
 ```kotlin
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertRoutePoints(p: List<RoutePointEntity>)
-    /** "Watch" sorts after "Phone", so DESC puts the watch first on equal times (spec §2.2 ties). */
-    @Query("SELECT * FROM route_point WHERE sessionId = :id ORDER BY phoneTimeMs, source DESC") suspend fun routePoints(id: String): List<RoutePointEntity>
+    /** Phone-time order; "Watch" sorts after "Phone", so DESC puts the watch first on equal times (spec §2.2); NULL phone times last. */
+    @Query("SELECT * FROM route_point WHERE sessionId = :id ORDER BY phoneTimeMs IS NULL, phoneTimeMs, source DESC, fixTimeMs") suspend fun routePoints(id: String): List<RoutePointEntity>
+    /** Review #2: only rows that are null or mapped with another offset are written. */
+    @Query("UPDATE route_point SET phoneTimeMs = fixTimeMs - :offsetMs WHERE sessionId = :id AND source = 'Watch' AND (phoneTimeMs IS NULL OR phoneTimeMs != fixTimeMs - :offsetMs)")
+    suspend fun normalizeWatchTimes(id: String, offsetMs: Long)
     @Query("DELETE FROM route_point WHERE sessionId = :id") suspend fun deleteRoute(id: String)
     @Query("DELETE FROM route_point WHERE sessionId IN (SELECT id FROM session WHERE summaryJson IS NOT NULL)") suspend fun clearFinishedRoutes()
+
+    /** Route rows are never written for a Discarded or Cleared session: its tombstone wins, even after a restart. */
+    @Transaction
+    suspend fun storeRoutePoints(id: String, rows: List<RoutePointEntity>) {
+        if (rows.isEmpty()) return
+        val status = session(id)?.status
+        if (status == DISCARDED || status == CLEARED) return
+        insertRoutePoints(rows)
+    }
+```
+
+Replace `storeDelta(...)` with (route rows in the same transaction as the delta, review #1; `RoomSessionStore` is its only caller):
+
+```kotlin
+    @Transaction
+    suspend fun storeDelta(session: SessionEntity, delta: DeltaEntity, samples: List<SampleEntity>, routes: List<RoutePointEntity>): List<Long> {
+        insertSession(session)
+        insertDelta(delta)
+        insertSamples(samples)
+        storeRoutePoints(delta.sessionId, routes)
+        return seqs(delta.sessionId)
+    }
 ```
 
 In `discard(id, now)` change the first line to `deleteDeltas(id); deleteSamples(id); deleteRoute(id)`, and replace `clearFinished()` with:
@@ -4434,12 +5120,12 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun dao(): HistoryDao
 
     companion object {
-        /** v2: route_point (spec §2.2). Existing history is kept. */
+        /** v2: route_point (spec §2.2), phoneTimeMs nullable (review #2). Existing history is kept. */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "CREATE TABLE IF NOT EXISTS `route_point` (`sessionId` TEXT NOT NULL, `source` TEXT NOT NULL, `fixTimeMs` INTEGER NOT NULL, " +
-                        "`phoneTimeMs` INTEGER NOT NULL, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `accuracyM` REAL NOT NULL, `bearingDeg` REAL, " +
+                        "`phoneTimeMs` INTEGER, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `accuracyM` REAL NOT NULL, `bearingDeg` REAL, " +
                         "PRIMARY KEY(`sessionId`, `source`, `fixTimeMs`))",
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_route_point_sessionId` ON `route_point` (`sessionId`)")
@@ -4460,41 +5146,56 @@ abstract class HistoryDatabase : RoomDatabase() {
 }
 ```
 
-- [ ] **Step 7: `RoomSessionStore.kt`** — add imports `com.debasish.livefit.model.FixSource`, `com.debasish.livefit.model.RoutePoint`, `com.debasish.livefit.services.RouteStore`; change the class header to `class RoomSessionStore(db: HistoryDatabase, private val now: () -> Long = System::currentTimeMillis) : HistoryStore, RouteStore {` and add:
+- [ ] **Step 7: `RoomSessionStore.kt`** — add imports `com.debasish.livefit.model.FixSource`, `com.debasish.livefit.model.RouteFix`, `com.debasish.livefit.model.toRouteFix`, `com.debasish.livefit.services.RouteStore`; change the class header to `class RoomSessionStore(db: HistoryDatabase, private val now: () -> Long = System::currentTimeMillis) : HistoryStore, RouteStore {`. In `storeDelta` add the argument after `samples = …,`:
 
 ```kotlin
-    override suspend fun storeRoutePoints(sessionId: String, points: List<RoutePoint>) {
-        if (points.isEmpty()) return
-        dao.insertRoutePoints(points.map { RoutePointEntity(sessionId, it.source.name, it.deviceTimeMs, it.fixTimeMs, it.lat, it.lon, it.accuracyM, it.bearingDeg) })
+            // Review #1: the delta's accurate fixes become route rows in the same transaction (uncalibrated: phoneTimeMs = null).
+            routes = delta.locations.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null) }.map { entity(delta.sessionId, it) },
+```
+
+and add:
+
+```kotlin
+    override suspend fun storeRouteFixes(sessionId: String, fixes: List<RouteFix>) = dao.storeRoutePoints(sessionId, fixes.map { entity(sessionId, it) })
+
+    override suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long) = dao.normalizeWatchTimes(sessionId, watchOffsetMs)
+
+    override suspend fun routeFixes(sessionId: String): List<RouteFix> = dao.routePoints(sessionId).map {
+        RouteFix(FixSource.valueOf(it.source), it.lat, it.lon, it.accuracyM, deviceTimeMs = it.fixTimeMs, phoneTimeMs = it.phoneTimeMs, bearingDeg = it.bearingDeg)
     }
 
-    override suspend fun routePoints(sessionId: String): List<RoutePoint> =
-        dao.routePoints(sessionId).map { RoutePoint(FixSource.valueOf(it.source), it.lat, it.lon, it.accuracyM, deviceTimeMs = it.fixTimeMs, fixTimeMs = it.phoneTimeMs, bearingDeg = it.bearingDeg) }
+    private fun entity(sessionId: String, f: RouteFix) =
+        RoutePointEntity(sessionId, f.source.name, f.deviceTimeMs, f.phoneTimeMs, f.lat, f.lon, f.accuracyM, f.bearingDeg)
 ```
 
 - [ ] **Step 8: Run tests to verify they pass**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:history:testDebugUnitTest`
-Expected: PASS (new 6 tests and the existing RoomSessionStore tests).
+Expected: PASS (new 8 tests and the existing RoomSessionStore tests).
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git add core/services services/history
-git commit -m "feat(history): route_point table with replay-safe key, v1→v2 migration and RouteStore"
+git commit -m "feat(history): route_point with device-time identity, nullable phone time, tombstones and rows stored with their delta"
 ```
 
 ---
 
-### Task 14: RouteHub — merge, live source, fallback decision and persistence
+### Task 14: RouteHub — merge, live source, fallback decision, calibration normalization and durable route rows
 
 **Files:**
 - Create: `services/sync/src/main/kotlin/com/debasish/livefit/sync/RouteHub.kt`
 - Test: `services/sync/src/test/kotlin/com/debasish/livefit/sync/RouteHubTest.kt`
 
 **Interfaces:**
-- Consumes: `RouteTrack`, `RoutePoint`, `RouteAdd`, `RouteState`, `GpsStatus` (Task 3); `WatchClockSync`, `LiveLocationSelector` (Task 4); `PageSet.mapEligible` (Task 5); `RouteStore` (Task 13); `SessionDelta.locations` (Task 1).
-- Produces: `class RouteHub(scope, clock, clockSync: WatchClockSync, store: RouteStore, tickMs: Long = 1_000, log: (String) -> Unit = {}) { val state: StateFlow<RouteState>; val fallbackWanted: StateFlow<Boolean>; fun start(): Job; suspend fun onWorkout(snapshot: WorkoutSnapshot); suspend fun onWatchDelta(d: SessionDelta); suspend fun onPhoneFix(f: LocationFix) }`
+- Consumes: `RouteTrack`, `RoutePoint`, `RouteFix`, `LocationFix.toRouteFix`, `RouteState`, `GpsStatus` (Task 3); `WatchClockSync`, `LiveLocationSelector` (Task 4); `PageSet.mapEligible` (Task 5); `RouteStore` (Task 13); `SessionStore.deltas` (existing `:core:services`); `InMemorySessionStore` (existing `:services:workout`, tests); `SessionDelta.locations` (Task 1).
+- Produces: `class RouteHub(scope, clock, clockSync: WatchClockSync, store: RouteStore, sessions: SessionStore, tickMs: Long = 1_000, log: (String) -> Unit = {}) { val state: StateFlow<RouteState>; val fallbackWanted: StateFlow<Boolean>; fun start(): Job; suspend fun onWorkout(snapshot: WorkoutSnapshot); suspend fun onWatchDelta(d: SessionDelta); suspend fun onPhoneFix(f: LocationFix) }`
+
+Design (review #1/#2, one coherent rule set):
+- **Identity vs order.** Every accurate fix is a `RouteFix` keyed by `(source, deviceTimeMs)`. Watch rows get `phoneTimeMs = deviceTimeMs − offset` once calibrated, `null` before. Only rows with a phone time take part in ordering, the ±5 s overlap rule and the 2-min future rejection; uncalibrated rows are stored but not drawn yet (plan ruling), and never live.
+- **Calibration.** Whenever `clockSync.offsetMs` differs from the offset the in-memory rows were mapped with, every watch row of the current session (and every unsaved row) is re-mapped, the `RouteTrack` is rebuilt chronologically from scratch (so the duplicate filter can never block a repair), and `normalizeWatchTimes` is queued for every session that received watch rows. The selector is *not* replayed: re-mapped old fixes never become live.
+- **Durability.** `RoomSessionStore.storeDelta` already writes a delta's rows before the ack (Task 13). RouteHub additionally (a) writes its own rows (phone fixes, watch rows with phone times, another session's replay) through an unsaved queue that is retried on every tick and every new fix until the store accepts it, and (b) on loading a session (every phone restart) rebuilds rows missing from `route_point` out of the session's stored deltas. The store's tombstone check drops rows for Discarded/Cleared sessions, so retries never resurrect them.
 
 - [ ] **Step 1: Write the failing test** — `services/sync/src/test/kotlin/com/debasish/livefit/sync/RouteHubTest.kt`:
 
@@ -4505,13 +5206,14 @@ import com.debasish.livefit.model.FixSource
 import com.debasish.livefit.model.GpsStatus
 import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.Provenance
-import com.debasish.livefit.model.RoutePoint
+import com.debasish.livefit.model.RouteFix
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.RouteStore
+import com.debasish.livefit.services.workout.InMemorySessionStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -4526,24 +5228,33 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RouteHubTest {
+    /** route_point in memory, with the same identity, ordering, normalization and tombstone rules as Room (Task 13). */
     private class MemoryRoutes : RouteStore {
-        val rows = LinkedHashMap<Triple<String, FixSource, Long>, RoutePoint>()
+        val rows = LinkedHashMap<Triple<String, FixSource, Long>, RouteFix>()
+        val discarded = mutableSetOf<String>()
         var fail = false
-        override suspend fun storeRoutePoints(sessionId: String, points: List<RoutePoint>) {
+        var failNextWrites = 0
+        override suspend fun storeRouteFixes(sessionId: String, fixes: List<RouteFix>) {
             if (fail) error("disk full")
-            for (p in points) rows.putIfAbsent(Triple(sessionId, p.source, p.deviceTimeMs), p)
+            if (failNextWrites > 0) { failNextWrites--; error("disk busy") }
+            if (sessionId in discarded) return
+            for (f in fixes) rows.putIfAbsent(Triple(sessionId, f.source, f.deviceTimeMs), f)
         }
-        override suspend fun routePoints(sessionId: String) = rows.filterKeys { it.first == sessionId }.values.sortedBy { it.fixTimeMs }
+        override suspend fun normalizeWatchTimes(sessionId: String, watchOffsetMs: Long) {
+            if (fail) error("disk full")
+            rows.replaceAll { k, f -> if (k.first == sessionId && f.source == FixSource.Watch) f.copy(phoneTimeMs = f.deviceTimeMs - watchOffsetMs) else f }
+        }
+        override suspend fun routeFixes(sessionId: String): List<RouteFix> = rows.filterKeys { it.first == sessionId }.values
+            .sortedWith(compareBy<RouteFix>({ it.phoneTimeMs == null }, { it.phoneTimeMs }, { it.source != FixSource.Watch }, { it.deviceTimeMs }))
     }
 
-    private class Rig(scope: TestScope) {
+    private class Rig(scope: TestScope, val sessions: InMemorySessionStore = InMemorySessionStore(), val store: MemoryRoutes = MemoryRoutes()) {
         val clock = Clock { scope.testScheduler.currentTime }
         val sync = WatchClockSync(clock)
-        val store = MemoryRoutes()
-        val hub = RouteHub(scope.backgroundScope, clock, sync, store)
+        val hub = RouteHub(scope.backgroundScope, clock, sync, store, sessions)
     }
 
-    private fun fix(t: Long, northM: Double, acc: Float = 5f) = LocationFix(12.9716 + northM / 111_195.0, 77.5946, acc, null, t)
+    private fun fix(t: Long, northM: Double, acc: Float? = 5f) = LocationFix(12.9716 + northM / 111_195.0, 77.5946, acc, null, t)
     private fun delta(fixes: List<LocationFix>, session: String = "s", seq: Long = 1) =
         SessionDelta(sessionId = session, seq = seq, locations = fixes, provenance = Provenance.Fake)
     private val running = WorkoutSnapshot(phase = WorkoutPhase.Active, type = WorkoutType.Run, sessionId = "s", gps = true)
@@ -4560,15 +5271,16 @@ class RouteHubTest {
         assertEquals(GpsStatus.Live, s.status)
         assertEquals(FixSource.Watch, s.live?.source)
         assertEquals(0f, s.live?.bearingDeg ?: -1f, 0.5f, "bearing from the last two points")
-        assertEquals(2, r.store.routePoints("s").size)
+        assertEquals(listOf(9_000L, 10_000L), r.store.routeFixes("s").map { it.phoneTimeMs })
     }
 
-    @Test fun uncalibratedWatchFixesAreRecordedButNeverLive() = runTest {
+    @Test fun uncalibratedWatchFixesAreStoredButNeitherDrawnNorLive() = runTest {
         val r = Rig(this)
         advanceTimeBy(1_000)
         r.hub.onWorkout(running)
         r.hub.onWatchDelta(delta(listOf(fix(1_000, 0.0), fix(2_000, 10.0))))
-        assertEquals(2, r.hub.state.value.route.size)
+        assertTrue(r.hub.state.value.route.isEmpty(), "no phone time yet: not ordered, not drawn")
+        assertEquals(listOf(null, null), r.store.routeFixes("s").map { it.phoneTimeMs }, "durable by device time")
         assertNull(r.hub.state.value.live)
         assertEquals(GpsStatus.Waiting, r.hub.state.value.status)
         advanceTimeBy(15_000)
@@ -4576,10 +5288,46 @@ class RouteHubTest {
         assertTrue(r.hub.fallbackWanted.value, "uncalibrated fixes can't stop the phone fallback")
     }
 
+    /**
+     * Review #2: the watch replays before the first sync, the phone then calibrates (small and > 2 min offsets),
+     * the replay continues — nothing is lost or rejected as "future", the order is corrected (phone fallback points
+     * under the replay get hidden), every stored row gets its phone time, and no marker appears until a live fix.
+     */
+    @Test fun replayBeforeSyncThenCalibrationSmallOffset() = runTest { replayAcrossCalibration(offsetMs = 1_000) }
+
+    @Test fun replayBeforeSyncThenCalibrationMoreThanTwoMinutesAhead() = runTest { replayAcrossCalibration(offsetMs = 180_000) }
+
+    private suspend fun TestScope.replayAcrossCalibration(offsetMs: Long) {
+        val r = Rig(this)
+        advanceTimeBy(600_000)
+        r.hub.onWorkout(running)
+        fun watchAt(phoneT: Long, n: Int) = fix(phoneT + offsetMs, 100.0 + n * 5) // measured at phone time phoneT
+        r.hub.onPhoneFix(fix(530_000, 252.0)) // a fallback point recorded while the watch was away
+        r.hub.onWatchDelta(delta((0 until 60).map { watchAt(500_000L + it * 1_000, it) }))
+        assertEquals(listOf(FixSource.Phone), r.hub.state.value.route.map { it.source }, "uncalibrated replay not drawn yet")
+        assertNull(r.hub.state.value.live)
+
+        r.sync.calibrate { it + offsetMs }
+        r.hub.onWatchDelta(delta((60 until 90).map { watchAt(500_000L + it * 1_000, it) }, seq = 2))
+        val s = r.hub.state.value
+        assertEquals(90, s.route.size, "no fix lost, none rejected as future")
+        assertTrue(s.route.all { it.source == FixSource.Watch }, "the phone point under the replay is now hidden")
+        assertEquals((0 until 90).map { 500_000L + it * 1_000 }, s.route.map { it.fixTimeMs }, "corrected chronological order")
+        assertNull(s.live, "replayed fixes never move the marker")
+        assertNotEquals(GpsStatus.Live, s.status)
+        val stored = r.store.routeFixes("s")
+        assertEquals(91, stored.size, "phone row kept for diagnostics")
+        assertTrue(stored.filter { it.source == FixSource.Watch }.all { it.phoneTimeMs == it.deviceTimeMs - offsetMs }, "normalized")
+
+        r.hub.onWatchDelta(delta(listOf(watchAt(600_000, 200)), seq = 3)) // first fix that is live on arrival
+        assertEquals(FixSource.Watch, r.hub.state.value.live?.source)
+        assertEquals(600_000L, r.hub.state.value.live?.fixTimeMs)
+    }
+
     /** Review Focus #1: phone restart; the watch's minutes-old replay arrives before, and right after, the first time-sync. */
     @Test fun delayedFirstReplayAfterPhoneRestartDoesNotLookLive() = runTest {
         val r = Rig(this)
-        r.store.storeRoutePoints("s", listOf(RoutePoint(FixSource.Watch, 12.9716, 77.5946, 5f, 1_000, 1_000))) // before the restart
+        r.store.storeRouteFixes("s", listOf(RouteFix(FixSource.Watch, 12.9716, 77.5946, 5f, 1_000, 1_000))) // before the restart
         advanceTimeBy(600_000)
         r.hub.onWorkout(running)
         assertEquals(1, r.hub.state.value.route.size, "stored route reloaded")
@@ -4597,6 +5345,52 @@ class RouteHubTest {
         assertTrue(r.hub.fallbackWanted.value, "replay never stopped the fallback")
     }
 
+    /** Review #1: the phone died after a delta was stored and acked but before RouteHub wrote any row; a restart rebuilds them. */
+    @Test fun routeRowsMissingAfterAnAckAreRebuiltFromStoredDeltas() = runTest {
+        val sessions = InMemorySessionStore()
+        val fixes = (0 until 30).map { fix(1_000L + it * 1_000, it * 5.0) }
+        sessions.storeDelta(delta(fixes.take(15), seq = 0))
+        sessions.storeDelta(delta(fixes.drop(15), seq = 1))
+        val r = Rig(this, sessions) // a fresh phone process: empty route_point
+        r.sync.calibrate { it }
+        advanceTimeBy(60_000)
+        r.hub.onWorkout(running)
+        assertEquals(30, r.hub.state.value.route.size, "full route after the restart")
+        val stored = r.store.routeFixes("s")
+        assertEquals(30, stored.size, "missing rows written back")
+        assertTrue(stored.all { it.phoneTimeMs == it.deviceTimeMs })
+        assertNull(r.hub.state.value.live, "rebuilt fixes are history, not live")
+    }
+
+    /** Review #1: a route write fails once; it is retried by the ticker (no new fix needed) and a replay stays idempotent. */
+    @Test fun aFailedRouteWriteIsRetriedAndReplayIsIdempotent() = runTest {
+        val r = Rig(this)
+        r.sync.calibrate { it }
+        r.hub.start()
+        r.hub.onWorkout(running)
+        r.store.failNextWrites = 1
+        val d = delta(listOf(fix(0, 0.0), fix(1_000, 10.0)))
+        r.hub.onWatchDelta(d)
+        assertTrue(r.store.routeFixes("s").isEmpty(), "first write failed")
+        assertEquals(2, r.hub.state.value.route.size, "tracking unaffected")
+        advanceTimeBy(1_100); runCurrent()
+        assertEquals(2, r.store.routeFixes("s").size, "retried by the ticker")
+        r.hub.onWatchDelta(d) // the watch resends after a lost ack
+        assertEquals(2, r.store.routeFixes("s").size)
+        assertEquals(2, r.hub.state.value.route.size)
+    }
+
+    @Test fun aFailedWriteIsAlsoRecoveredByTheNextReplay() = runTest {
+        val r = Rig(this)
+        r.sync.calibrate { it }
+        r.hub.onWorkout(running)
+        r.store.failNextWrites = 1
+        val d = delta(listOf(fix(0, 0.0), fix(1_000, 10.0)))
+        r.hub.onWatchDelta(d)
+        r.hub.onWatchDelta(d)
+        assertEquals(listOf(0L, 1_000L), r.store.routeFixes("s").map { it.deviceTimeMs })
+    }
+
     @Test fun phoneFallbackFixesDriveTheMarkerWhileTheWatchIsSilent() = runTest {
         val r = Rig(this)
         r.sync.calibrate { it }
@@ -4610,16 +5404,42 @@ class RouteHubTest {
         assertEquals(listOf(FixSource.Phone), s.route.map { it.source })
     }
 
+    /** Review #8: fixes without accuracy are neither stored, drawn nor live (phone or watch). */
+    @Test fun unknownAccuracyIsIgnoredEverywhere() = runTest {
+        val r = Rig(this)
+        r.sync.calibrate { it }
+        r.hub.onWorkout(running)
+        advanceTimeBy(16_000)
+        r.hub.onPhoneFix(fix(16_000, 0.0, acc = null))
+        r.hub.onWatchDelta(delta(listOf(fix(16_000, 5.0, acc = null))))
+        assertTrue(r.hub.state.value.route.isEmpty())
+        assertNull(r.hub.state.value.live)
+        assertTrue(r.store.routeFixes("s").isEmpty())
+        assertTrue(r.hub.fallbackWanted.value)
+    }
+
     @Test fun anotherSessionsReplayIsStoredNotDrawn() = runTest {
         val r = Rig(this)
         r.hub.onWorkout(running)
         r.hub.onWatchDelta(delta(listOf(fix(1_000, 0.0), fix(2_000, 9.0, acc = 50f)), session = "old"))
         assertTrue(r.hub.state.value.route.isEmpty())
-        assertEquals(1, r.store.routePoints("old").size, "inaccurate fix not stored")
+        assertEquals(1, r.store.routeFixes("old").size, "inaccurate fix not stored")
+    }
+
+    /** A discarded session's tombstone: its late replay is dropped by the store, and RouteHub does not keep retrying it. */
+    @Test fun discardedSessionsReplayIsNeverStored() = runTest {
+        val r = Rig(this)
+        r.store.discarded += "gone"
+        r.hub.start()
+        r.hub.onWorkout(running)
+        r.hub.onWatchDelta(delta(listOf(fix(1_000, 0.0)), session = "gone"))
+        advanceTimeBy(5_000); runCurrent()
+        assertTrue(r.store.routeFixes("gone").isEmpty())
     }
 
     @Test fun storageFailureDoesNotBreakTracking() = runTest {
         val r = Rig(this)
+        r.sync.calibrate { it }
         r.store.fail = true
         r.hub.onWorkout(running)
         r.hub.onWatchDelta(delta(listOf(fix(0, 0.0), fix(1_000, 10.0))))
@@ -4637,8 +5457,10 @@ class RouteHubTest {
 
     @Test fun idleClearsTheRoute() = runTest {
         val r = Rig(this)
+        r.sync.calibrate { it }
         r.hub.onWorkout(running)
         r.hub.onWatchDelta(delta(listOf(fix(0, 0.0))))
+        assertEquals(1, r.hub.state.value.route.size)
         r.hub.onWorkout(WorkoutSnapshot())
         assertNull(r.hub.state.value.sessionId)
         assertTrue(r.hub.state.value.route.isEmpty())
@@ -4671,16 +5493,17 @@ package com.debasish.livefit.sync
 import com.debasish.livefit.model.FixSource
 import com.debasish.livefit.model.LocationFix
 import com.debasish.livefit.model.PageSet
-import com.debasish.livefit.model.RouteAdd
-import com.debasish.livefit.model.RoutePoint
+import com.debasish.livefit.model.RouteFix
 import com.debasish.livefit.model.RouteState
 import com.debasish.livefit.model.RouteTrack
 import com.debasish.livefit.model.SessionDelta
 import com.debasish.livefit.model.WorkoutPhase
 import com.debasish.livefit.model.WorkoutSnapshot
 import com.debasish.livefit.model.WorkoutType
+import com.debasish.livefit.model.toRouteFix
 import com.debasish.livefit.services.Clock
 import com.debasish.livefit.services.RouteStore
+import com.debasish.livefit.services.SessionStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -4692,17 +5515,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+private typealias FixKey = Pair<FixSource, Long>
+
+private val RouteFix.key: FixKey get() = source to deviceTimeMs
+
 /**
- * Phone hub `LocationSource` (spec §2.1/§2.2): merges the current session's watch fixes (mapped to phone time with the
- * calibrated offset; uncalibrated = raw time, never live) and phone fallback fixes into one [RouteTrack], persists the
- * kept points, decides whether the phone GPS should run, and publishes what the glasses map draws. Replays of another
- * session are stored only. A phone restart reloads the stored route of the current session.
+ * Phone hub `LocationSource` (spec §2.1/§2.2): merges the current session's watch fixes and phone fallback fixes into one
+ * [RouteTrack], decides whether the phone GPS should run, and publishes what the glasses map draws.
+ * - Rows are identified by device time; watch rows get a phone time only once calibrated, and every calibration change
+ *   re-maps all of them and rebuilds the track (review #2). Uncalibrated rows are durable but not drawn, never live.
+ * - Writes go through an unsaved queue retried on every tick and new fix; loading a session rebuilds rows missing from
+ *   the store out of its stored deltas (review #1). The store's tombstones drop rows of discarded sessions.
  */
 class RouteHub(
     private val scope: CoroutineScope,
     private val clock: Clock,
     private val clockSync: WatchClockSync,
     private val store: RouteStore,
+    private val sessions: SessionStore,
     private val tickMs: Long = 1_000,
     private val log: (String) -> Unit = {},
 ) {
@@ -4715,11 +5545,19 @@ class RouteHub(
     private var sessionId: String? = null
     private var type = WorkoutType.Walk
     private var gpsActive = false
+    /** Every accurate fix of the current session, by identity — the in-memory copy of its route_point rows. */
+    private val fixes = LinkedHashMap<FixKey, RouteFix>()
+    /** The watch offset [fixes] are mapped with; null = not mapped by this process yet. */
+    private var appliedOffset: Long? = null
     private var track = RouteTrack()
     private val selector = LiveLocationSelector()
+    /** Rows the store has not accepted yet, per session, oldest session first. */
+    private val unsaved = LinkedHashMap<String, LinkedHashMap<FixKey, RouteFix>>()
+    /** Sessions with watch rows that may lack the current offset's phone time (normalized after the inserts). */
+    private val unnormalized = LinkedHashSet<String>()
 
-    /** Re-publishes every [tickMs] so "GPS delayed / lost" and the fallback timer advance without new fixes. */
-    fun start(): Job = scope.launch { while (isActive) { delay(tickMs); mutex.withLock { publish() } } }
+    /** Every [tickMs]: apply a new calibration, retry unsaved rows, and re-publish so status and fallback timers advance. */
+    fun start(): Job = scope.launch { while (isActive) { delay(tickMs); mutex.withLock { applyOffset(); flush(); publish() } } }
 
     suspend fun onWorkout(snapshot: WorkoutSnapshot) = mutex.withLock {
         val id = snapshot.sessionId?.takeIf { snapshot.phase != WorkoutPhase.Idle }
@@ -4727,55 +5565,109 @@ class RouteHub(
         val now = clock.nowMs()
         if (id != sessionId) {
             sessionId = id
-            track = RouteTrack.of(if (id != null) load(id) else emptyList())
+            load(id)
             selector.begin(active, now)
         } else if (active != gpsActive) {
             selector.setGpsWorkout(active, now)
         }
         type = snapshot.type
         gpsActive = active
+        applyOffset()
+        flush()
         publish()
     }
 
     suspend fun onWatchDelta(d: SessionDelta) {
         if (d.locations.isEmpty()) return
         mutex.withLock {
+            applyOffset()
             val now = clock.nowMs()
-            val points = d.locations.map { f ->
-                RoutePoint(FixSource.Watch, f.lat, f.lon, f.accuracyM, deviceTimeMs = f.fixTimeMs, fixTimeMs = clockSync.toPhoneTime(f.fixTimeMs) ?: f.fixTimeMs, bearingDeg = f.bearingDeg)
-            }
+            val offset = appliedOffset
+            val rows = d.locations.mapNotNull { f -> f.toRouteFix(FixSource.Watch, offset?.let { f.fixTimeMs - it }) }
             if (d.sessionId == sessionId) {
-                val kept = points.filter { track.add(it, now) == RouteAdd.Added }
+                for (r in rows) if (fixes.putIfAbsent(r.key, r) == null) r.point()?.let { track.add(it, now) }
                 for (f in d.locations) selector.onWatchFix(f, clockSync.toPhoneTime(f.fixTimeMs), now)
-                persist(d.sessionId, kept)
-                publish()
-            } else {
-                persist(d.sessionId, points.filter { it.accuracyM <= RouteTrack.MAX_ACCURACY_M }) // an older session's replay: history only
             }
+            enqueue(d.sessionId, rows) // another session's replay: history only
+            unnormalized += d.sessionId // its delta may have stored the same rows with phoneTimeMs = null
+            flush()
+            publish()
         }
     }
 
     suspend fun onPhoneFix(f: LocationFix) = mutex.withLock {
         val id = sessionId ?: return@withLock
         if (!gpsActive) return@withLock
+        applyOffset()
         val now = clock.nowMs()
         selector.onPhoneFix(f, now)
-        val p = RoutePoint(FixSource.Phone, f.lat, f.lon, f.accuracyM, deviceTimeMs = f.fixTimeMs, fixTimeMs = f.fixTimeMs, bearingDeg = f.bearingDeg)
-        if (track.add(p, now) == RouteAdd.Added) persist(id, listOf(p))
+        val r = f.toRouteFix(FixSource.Phone, phoneTimeMs = f.fixTimeMs)
+        if (r != null && fixes.putIfAbsent(r.key, r) == null) {
+            r.point()?.let { track.add(it, now) }
+            enqueue(id, listOf(r))
+        }
+        flush()
         publish()
     }
 
-    private suspend fun load(id: String): List<RoutePoint> = try {
-        store.routePoints(id)
+    /** Stored rows, plus rows rebuilt from the session's stored deltas that never reached route_point (review #1). */
+    private suspend fun load(id: String?) {
+        fixes.clear()
+        appliedOffset = null
+        if (id != null) {
+            guard("route load") { store.routeFixes(id) }?.forEach { fixes[it.key] = it }
+            val fromDeltas = guard("delta load") { sessions.deltas(id) }.orEmpty()
+                .flatMap { it.locations }.mapNotNull { it.toRouteFix(FixSource.Watch, phoneTimeMs = null) }
+            val missing = fromDeltas.filter { fixes.putIfAbsent(it.key, it) == null }
+            if (missing.isNotEmpty()) {
+                log("rebuilt ${missing.size} route rows from stored deltas")
+                enqueue(id, missing)
+            }
+            unnormalized += id
+        }
+        rebuild()
+    }
+
+    /** A new (or first) calibration: re-map every watch row, rebuild the track chronologically (review #2). */
+    private fun applyOffset() {
+        val offset = clockSync.offsetMs.value ?: return
+        if (offset == appliedOffset) return
+        appliedOffset = offset
+        val remap = { _: FixKey, r: RouteFix -> if (r.source == FixSource.Watch) r.copy(phoneTimeMs = r.deviceTimeMs - offset) else r }
+        fixes.replaceAll(remap)
+        unsaved.values.forEach { it.replaceAll(remap) }
+        sessionId?.let { unnormalized += it }
+        rebuild()
+    }
+
+    private fun rebuild() { track = RouteTrack.of(fixes.values.mapNotNull { it.point() }, clock.nowMs()) }
+
+    private fun enqueue(id: String, rows: List<RouteFix>) {
+        if (rows.isEmpty()) return
+        val q = unsaved.getOrPut(id) { LinkedHashMap() }
+        for (r in rows) q[r.key] = r
+    }
+
+    /** Inserts first, then normalization (so rows a concurrent storeDelta wrote with null get their phone time). */
+    private suspend fun flush() {
+        for (id in unsaved.keys.toList()) {
+            val rows = unsaved.getValue(id).values.toList()
+            if (guard("route store") { store.storeRouteFixes(id, rows) } == null) return
+            unsaved.remove(id)
+        }
+        val offset = appliedOffset ?: return
+        for (id in unnormalized.toList()) {
+            if (guard("route normalize") { store.normalizeWatchTimes(id, offset) } == null) return
+            unnormalized.remove(id)
+        }
+    }
+
+    private suspend fun <T> guard(what: String, block: suspend () -> T): T? = try {
+        block()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        log("route load failed: $e"); emptyList()
-    }
-
-    private suspend fun persist(id: String, points: List<RoutePoint>) {
-        if (points.isEmpty()) return
-        try { store.storeRoutePoints(id, points) } catch (e: CancellationException) { throw e } catch (e: Exception) { log("route store failed: $e") }
+        log("$what failed: $e"); null
     }
 
     private fun publish() {
@@ -4797,7 +5689,7 @@ Expected: PASS.
 
 ```bash
 git add services/sync
-git commit -m "feat(sync): RouteHub merges watch and phone fixes, decides the phone fallback and persists the route"
+git commit -m "feat(sync): RouteHub with device-time identity, calibration normalization, durable retried route rows and phone fallback"
 ```
 
 ---
@@ -4811,6 +5703,7 @@ git commit -m "feat(sync): RouteHub merges watch and phone fixes, decides the ph
 - Modify: `services/watch-link/build.gradle.kts`
 - Modify: `services/watch-link/src/main/kotlin/com/debasish/livefit/services/watch/WatchMessageCodec.kt`
 - Modify: `services/watch-link/src/main/kotlin/com/debasish/livefit/services/watch/DataLayerWatchLink.kt`
+- Modify: `phone/src/debug/java/com/debasish/livefit/phone/DebugReceiver.kt` (debug build only; no other task touches it)
 - Test: `services/glasses-link/src/test/kotlin/com/debasish/livefit/services/glasses/GlassesPageStateTest.kt`, `services/watch-link/src/test/kotlin/com/debasish/livefit/services/watch/WatchMessageCodecV4Test.kt`
 
 **Interfaces:**
@@ -4822,6 +5715,7 @@ git commit -m "feat(sync): RouteHub merges watch and phone fixes, decides the ph
   - `WatchInbound.TimeRes(response: TimeSyncResponse)`
   - `DataLayerWatchLink.clockSync: WatchClockSync` — calibrated on every Connected transition, then every 5 min (every 30 s while never calibrated).
   - `CxrGlassesLink.MAP_AS_BASE64 = false` switch.
+  - Debug-only `DebugReceiver` command `map_probe` (extras `kb`, `b64`): sends an epoch header and one PNG-sized payload on `lf_map` and logs `LiveFitMap: map_probe … bytes=… crc=…` — the phone half of device check D1 (Task 22 Step 9).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5009,15 +5903,35 @@ In `onMessage`'s `when` add:
             is WatchInbound.TimeRes -> pendingSync.remove(m.response.id)?.complete(m.response)
 ```
 
-- [ ] **Step 9: Run tests and build the phone**
+- [ ] **Step 9: Map probe for device check D1** — in `phone/src/debug/java/com/debasish/livefit/phone/DebugReceiver.kt` add the imports `com.debasish.livefit.model.MapFrame`, `com.debasish.livefit.model.MapFrameKind`, and inside `when (cmd)`:
+
+```kotlin
+            // Device check D1 (plan Task 22): one PNG-sized payload on lf_map over CXR — raw bytes, or Base64 in the JSON (b64).
+            // adb shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver --es cmd map_probe --ei kb 38 [--ez b64 true]
+            "map_probe" -> CoroutineScope(Dispatchers.Main).launch {
+                val size = intent.getIntExtra("kb", 38) * 1024
+                val b64 = intent.getBooleanExtra("b64", false)
+                val payload = ByteArray(size).also { java.util.Random(42).nextBytes(it); byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10).copyInto(it) }
+                val crc = java.util.zip.CRC32().apply { update(payload) }.value.toString(16)
+                val glasses = app.services.glasses
+                val epoch = MapFrame(kind = MapFrameKind.Epoch, renderEpoch = 4242)
+                val image = MapFrame(kind = MapFrameKind.Image, renderEpoch = 4242, sessionId = "probe", renderSeq = System.currentTimeMillis() / 1_000)
+                val sentEpoch = glasses.pushMap(epoch, null)
+                val sentImage = if (b64) glasses.pushMap(image.copy(pngBase64 = java.util.Base64.getEncoder().encodeToString(payload)), null)
+                else glasses.pushMap(image, payload)
+                android.util.Log.i("LiveFitMap", "map_probe kb=${size / 1024} b64=$b64 epochSent=$sentEpoch imageSent=$sentImage bytes=$size crc=$crc")
+            }
+```
+
+- [ ] **Step 10: Run tests and build the phone**
 
 Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :services:glasses-link:testDebugUnitTest :services:watch-link:testDebugUnitTest :phone:assembleDebug`
 Expected: PASS and BUILD SUCCESSFUL (the new interface members have defaults; nothing in the phone uses them yet).
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add core/services services/glasses-link services/watch-link
+git add core/services services/glasses-link services/watch-link phone/src/debug
 git commit -m "feat(links): watch time-sync driver, watch settings and queue, lf_map send and lf_page_state inbound"
 ```
 
@@ -5178,7 +6092,7 @@ class PhoneLocationProvider(context: Context, private val onFix: (LocationFix) -
                 onFix(
                     LocationFix(
                         loc.latitude, loc.longitude,
-                        accuracyM = if (loc.hasAccuracy()) loc.accuracy else NO_ACCURACY_M,
+                        accuracyM = if (loc.hasAccuracy()) loc.accuracy else null, // unknown: never usable-live (review #8)
                         bearingDeg = if (loc.hasBearing()) loc.bearing else null,
                         fixTimeMs = HubLocationPolicy.fixTimeMs(System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos(), loc.elapsedRealtimeNanos),
                     ),
@@ -5208,8 +6122,6 @@ class PhoneLocationProvider(context: Context, private val onFix: (LocationFix) -
 
     companion object {
         const val TAG = "LiveFitPhoneGps"
-        /** No accuracy reported: never usable-live (> 30 m). */
-        const val NO_ACCURACY_M = 99f
     }
 }
 ```
@@ -5462,18 +6374,20 @@ git commit -m "feat(phone): pages and gesture settings in the settings frames, w
 
 **Files:**
 - Create: `phone/src/main/java/com/debasish/livefit/phone/map/GlassesMapText.kt`
+- Create: `phone/src/main/java/com/debasish/livefit/phone/map/GlassesMapPlan.kt`
 - Create: `phone/src/main/java/com/debasish/livefit/phone/map/GlassesMapRenderer.kt`
 - Modify: `phone/src/main/java/com/debasish/livefit/phone/ServiceGraph.kt`
-- Test: `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapTextTest.kt`
+- Test: `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapTextTest.kt`, `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapPlanTest.kt`
 
 **Interfaces:**
-- Consumes: `RouteHub` (Task 14); `GlassesMapStreamer` (Task 9); `MapSceneBuilder`, `MapScene`, `HudPalette`, `Viewport`, `HttpTileFetcher`, `TileDiskCache`, `OsmTileSource` (Tasks 2, 7, 8); `PhoneLocationProvider`, `LiveFitHubService.locationCapable` (Task 16); `DataLayerWatchLink.clockSync`, `GlassesLinkService.pushMap/pageStates` (Task 15); `ServiceGraph.routes` (Task 17).
+- Consumes: `RouteHub(…, store, sessions, …)` (Task 14); `GlassesMapStreamer` (Task 9); `MapSceneBuilder`, `MapScene`, `HudPalette`, `Viewport`, `PlacedTile`, `TileId`, `HttpTileFetcher`, `TileDiskCache`, `OsmTileSource`, `TileLoader` (Tasks 2, 7, 8); `PhoneLocationProvider`, `LiveFitHubService.locationCapable` (Task 16); `DataLayerWatchLink.clockSync`, `GlassesLinkService.pushMap/pageStates` (Task 15); `ServiceGraph.routes`, `ServiceGraph.history` (Task 17). (Device check D1, Task 22 Step 9, may flip `CxrGlassesLink.MAP_AS_BASE64`; nothing in this task depends on its outcome.)
 - Produces:
   - `object GlassesMapText { fun captionLines(scene: MapScene, drewTile: Boolean): List<String> }`
-  - `class GlassesMapRenderer(tiles: HttpTileFetcher, sizePx: Int = 480) { suspend fun render(state: RouteState): ByteArray? }` — logs `LiveFitMap` when a PNG exceeds 40 KB.
-  - `ServiceGraph.routeHub: RouteHub`; the phone GPS runs exactly while `routeHub.fallbackWanted && LiveFitHubService.locationCapable`; images stream only while the glasses report Map.
+  - `data class GlassesMapPlan<T>(scene: MapScene, wanted: List<TileId>, drawn: List<Pair<PlacedTile, T>>, captions: List<String>) { companion fun <T> of(state: RouteState, sizePx: Int, loaded: Map<TileId, T>): GlassesMapPlan<T> }` — pure: what one image shows from the tiles loaded **right now**.
+  - `class GlassesMapRenderer(tiles: TileLoader<Bitmap>, sizePx: Int = 480) { suspend fun render(state: RouteState): ByteArray?; companion { fun tileLoader(scope, fetcher: HttpTileFetcher): TileLoader<Bitmap> } }` — never waits for the network: draws the cached/loaded tiles (or route only) with the latest state and asks the loader for the missing ones (review #5); logs `LiveFitMap` when a PNG exceeds 40 KB.
+  - `ServiceGraph.routeHub: RouteHub`; the phone GPS runs exactly while `routeHub.fallbackWanted && LiveFitHubService.locationCapable`; images stream only while the glasses report Map; leaving Map (or disconnecting) empties the loader's visible set.
 
-- [ ] **Step 1: Write the failing test** — `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapTextTest.kt`:
+- [ ] **Step 1: Write the failing tests** — `phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapTextTest.kt`:
 
 ```kotlin
 package com.debasish.livefit.phone.map
@@ -5503,12 +6417,82 @@ class GlassesMapTextTest {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+`phone/src/test/java/com/debasish/livefit/phone/map/GlassesMapPlanTest.kt`:
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:testDebugUnitTest --tests '*GlassesMapTextTest*'`
-Expected: FAIL — `GlassesMapText` unresolved.
+```kotlin
+package com.debasish.livefit.phone.map
 
-- [ ] **Step 3: `GlassesMapText.kt`**
+import com.debasish.livefit.map.TileId
+import com.debasish.livefit.map.TileLoader
+import com.debasish.livefit.model.FixSource
+import com.debasish.livefit.model.GpsStatus
+import com.debasish.livefit.model.HudPage
+import com.debasish.livefit.model.LivePosition
+import com.debasish.livefit.model.MapFrameKind
+import com.debasish.livefit.model.RouteState
+import com.debasish.livefit.services.Clock
+import com.debasish.livefit.sync.GlassesMapStreamer
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class GlassesMapPlanTest {
+    private val live = LivePosition(12.9716, 77.5946, null, FixSource.Watch, 0)
+
+    /**
+     * Review #5: every tile response hangs. Images still go out on the 3 s cadence with route, marker and captions
+     * ("GPS delayed", "No map — route only"); once the tiles are released they appear in the next image, no restart.
+     */
+    @Test fun blockedTilesNeverHoldBackTheImage() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val loader = TileLoader(backgroundScope, load = { t: TileId -> gate.await(); "tile ${t.x}/${t.y}" }, maxConcurrent = 4)
+        val plans = mutableListOf<GlassesMapPlan<String>>()
+        var images = 0
+        val streamer = GlassesMapStreamer(
+            backgroundScope, Clock { testScheduler.currentTime },
+            render = { s -> GlassesMapPlan.of(s, 480, loader.tiles.value).also { plans += it; loader.show(it.wanted) }; byteArrayOf(1) },
+            send = { f, _ -> if (f.kind == MapFrameKind.Image) images++; true },
+            newEpoch = { 1L },
+        )
+        streamer.start()
+        streamer.onRoute(RouteState(sessionId = "s", live = live, status = GpsStatus.Delayed))
+        streamer.onConnected()
+        streamer.onPageState(HudPage.Map, 1)
+        advanceTimeBy(6_500); runCurrent()
+        assertEquals(3, images, "t = 0, 3, 6 s although no tile has arrived")
+        assertTrue(plans.all { it.drawn.isEmpty() && it.scene.arrow != null }, "marker drawn without tiles")
+        assertEquals(listOf("GPS delayed", "No map — route only"), plans.last().captions)
+        gate.complete(Unit); runCurrent()
+        advanceTimeBy(3_000); runCurrent()
+        assertEquals(4, images)
+        assertEquals(plans.last().wanted.size, plans.last().drawn.size, "every visible tile drawn once loaded")
+        assertEquals(listOf("GPS delayed"), plans.last().captions)
+    }
+
+    @Test fun planOnlyUsesLoadedTilesOfTheViewport() {
+        val state = RouteState(sessionId = "s", live = live, status = GpsStatus.Live)
+        val first = GlassesMapPlan.of(state, 480, emptyMap<TileId, String>())
+        assertTrue(first.wanted.size in 4..9)
+        val one = first.wanted.first()
+        val p = GlassesMapPlan.of(state, 480, mapOf(one to "a", TileId(3, 0, 0) to "elsewhere"))
+        assertEquals(listOf(one to "a"), p.drawn.map { it.first.tile to it.second })
+        assertEquals(emptyList(), p.captions)
+    }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:testDebugUnitTest --tests '*GlassesMapTextTest*' --tests '*GlassesMapPlanTest*'`
+Expected: FAIL — `GlassesMapText`, `GlassesMapPlan` unresolved.
+
+- [ ] **Step 3: `GlassesMapText.kt` and `GlassesMapPlan.kt`**
 
 ```kotlin
 package com.debasish.livefit.phone.map
@@ -5523,10 +6507,38 @@ object GlassesMapText {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+`phone/src/main/java/com/debasish/livefit/phone/map/GlassesMapPlan.kt`:
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:testDebugUnitTest --tests '*GlassesMapTextTest*'`
-Expected: PASS.
+```kotlin
+package com.debasish.livefit.phone.map
+
+import com.debasish.livefit.map.MapScene
+import com.debasish.livefit.map.MapSceneBuilder
+import com.debasish.livefit.map.PlacedTile
+import com.debasish.livefit.map.TileId
+import com.debasish.livefit.map.Viewport
+import com.debasish.livefit.model.RouteState
+
+/**
+ * What one glasses image shows (pure, review #5): the scene for the latest state, the visible tiles it [wanted], the ones
+ * already [loaded] that get [drawn], and the caption lines. Nothing here waits for a tile.
+ */
+data class GlassesMapPlan<T>(val scene: MapScene, val wanted: List<TileId>, val drawn: List<Pair<PlacedTile, T>>, val captions: List<String>) {
+    companion object {
+        fun <T> of(state: RouteState, sizePx: Int, loaded: Map<TileId, T>): GlassesMapPlan<T> {
+            val scene = MapSceneBuilder.build(state, Viewport.zoomFor(state.type), sizePx, sizePx)
+            val visible = scene.viewport?.tiles().orEmpty()
+            val drawn = visible.mapNotNull { pt -> loaded[pt.tile]?.let { pt to it } }
+            return GlassesMapPlan(scene, visible.map { it.tile }, drawn, GlassesMapText.captionLines(scene, drewTile = drawn.isNotEmpty()))
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:testDebugUnitTest --tests '*GlassesMapTextTest*' --tests '*GlassesMapPlanTest*'`
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: `GlassesMapRenderer.kt`**
 
@@ -5544,19 +6556,20 @@ import com.debasish.livefit.map.HttpTileFetcher
 import com.debasish.livefit.map.HudPalette
 import com.debasish.livefit.map.MapArrow
 import com.debasish.livefit.map.MapScene
-import com.debasish.livefit.map.MapSceneBuilder
-import com.debasish.livefit.map.Viewport
+import com.debasish.livefit.map.TileLoader
 import com.debasish.livefit.model.RouteState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 /**
  * The glasses map image (spec §2.5): 480×480 PNG on black, tiles converted to the HUD palette, bright route, position
- * arrow (hollow while degraded), start marker, scale bar and the always-visible attribution. No tiles → route only
- * with "No map — route only". Runs on IO (tile fetches block).
+ * arrow (hollow while degraded), start marker, scale bar and the always-visible attribution. It never waits for a tile
+ * (review #5): it draws what [tiles] holds now — or route only with "No map — route only" — and asks the loader for the
+ * missing visible tiles, which then appear in a later image.
  */
-class GlassesMapRenderer(private val tiles: HttpTileFetcher, private val sizePx: Int = SIZE_PX) {
+class GlassesMapRenderer(private val tiles: TileLoader<Bitmap>, private val sizePx: Int = SIZE_PX) {
     private val green = 0xFF000000.toInt() or HudPalette.HUD_GREEN
     private val dim = HudPalette.scaled(HudPalette.HUD_GREEN, 0.6f)
     private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green; style = Paint.Style.STROKE; strokeWidth = 6f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
@@ -5567,28 +6580,20 @@ class GlassesMapRenderer(private val tiles: HttpTileFetcher, private val sizePx:
     private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f }
     private val attribution = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 16f; textAlign = Paint.Align.RIGHT }
 
-    suspend fun render(state: RouteState): ByteArray? = withContext(Dispatchers.IO) {
-        val scene = MapSceneBuilder.build(state, Viewport.zoomFor(state.type), sizePx, sizePx)
+    suspend fun render(state: RouteState): ByteArray? = withContext(Dispatchers.Default) {
+        val plan = GlassesMapPlan.of(state, sizePx, tiles.tiles.value)
+        tiles.show(plan.wanted) // returns at once; missing tiles load (and retry) in the background
         val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         c.drawColor(Color.BLACK)
-        var drewTile = false
-        for (pt in scene.viewport?.tiles().orEmpty()) {
-            val bytes = tiles.fetch(pt.tile) ?: continue
-            val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
-            val px = IntArray(src.width * src.height)
-            src.getPixels(px, 0, src.width, 0, 0, src.width, src.height)
-            HudPalette.convertAll(px)
-            c.drawBitmap(Bitmap.createBitmap(px, src.width, src.height, Bitmap.Config.ARGB_8888), pt.left, pt.top, null)
-            drewTile = true
-        }
-        drawOverlay(c, scene, drewTile)
+        for ((pt, tile) in plan.drawn) c.drawBitmap(tile, pt.left, pt.top, null)
+        drawOverlay(c, plan.scene, plan.captions)
         val out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
         out.toByteArray().also { if (it.size > MAX_PNG_BYTES) Log.w(TAG, "map PNG ${it.size} B exceeds the ${MAX_PNG_BYTES} B target") }
     }
 
-    private fun drawOverlay(c: Canvas, scene: MapScene, drewTile: Boolean) {
+    private fun drawOverlay(c: Canvas, scene: MapScene, captions: List<String>) {
         if (scene.route.size >= 2) {
             val path = Path().apply { moveTo(scene.route[0].x, scene.route[0].y); for (p in scene.route.drop(1)) lineTo(p.x, p.y) }
             c.drawPath(path, routePaint)
@@ -5600,7 +6605,7 @@ class GlassesMapRenderer(private val tiles: HttpTileFetcher, private val sizePx:
             c.drawLine(16f, y, 16f + s.lengthPx, y, dimStroke)
             c.drawText(s.label, 16f, y - 8f, small)
         }
-        GlassesMapText.captionLines(scene, drewTile).forEachIndexed { i, line -> c.drawText(line, sizePx / 2f, 40f + i * 34f, caption) }
+        captions.forEachIndexed { i, line -> c.drawText(line, sizePx / 2f, 40f + i * 34f, caption) }
         c.drawText(scene.attribution, sizePx - 12f, sizePx - 14f, attribution)
     }
 
@@ -5621,6 +6626,18 @@ class GlassesMapRenderer(private val tiles: HttpTileFetcher, private val sizePx:
         const val TAG = "LiveFitMap"
         const val SIZE_PX = 480
         const val MAX_PNG_BYTES = 40 * 1024
+
+        /** Up to 4 tiles at once, missing visible tiles retried every 5 s (the fetcher's backoff limits real requests). */
+        fun tileLoader(scope: CoroutineScope, fetcher: HttpTileFetcher): TileLoader<Bitmap> =
+            TileLoader(scope, load = { t -> withContext(Dispatchers.IO) { fetcher.fetch(t)?.let(::toHud) } }, maxConcurrent = 4, retryEveryMs = 5_000, maxCached = 30)
+
+        private fun toHud(bytes: ByteArray): Bitmap? {
+            val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            val px = IntArray(src.width * src.height)
+            src.getPixels(px, 0, src.width, 0, 0, src.width, src.height)
+            HudPalette.convertAll(px)
+            return Bitmap.createBitmap(px, src.width, src.height, Bitmap.Config.ARGB_8888)
+        }
     }
 }
 ```
@@ -5643,9 +6660,11 @@ After the `val workout = HubWorkoutService(...)` declaration add:
 
 ```kotlin
     // ---- Live map (spec §2) ----
-    val routeHub = RouteHub(scope, clock, dataLayer?.clockSync ?: WatchClockSync(clock), routes, log = { Log.d("LiveFitMap", it) })
+    /** Route rows in `routes`; missing rows are rebuilt from the deltas in `history` on every session load (review #1). */
+    val routeHub = RouteHub(scope, clock, dataLayer?.clockSync ?: WatchClockSync(clock), routes, history, log = { Log.d("LiveFitMap", it) })
     private val phoneGps = PhoneLocationProvider(app) { fix -> scope.launch { routeHub.onPhoneFix(fix) } }
-    private val mapRenderer = GlassesMapRenderer(HttpTileFetcher(OsmTileSource(), TileDiskCache(File(app.cacheDir, "tiles"), TileDiskCache.PHONE_MAX_BYTES)))
+    private val mapTiles = GlassesMapRenderer.tileLoader(scope, HttpTileFetcher(OsmTileSource(), TileDiskCache(File(app.cacheDir, "tiles"), TileDiskCache.PHONE_MAX_BYTES)))
+    private val mapRenderer = GlassesMapRenderer(mapTiles)
     private val mapStreamer = GlassesMapStreamer(scope, clock, render = mapRenderer::render, send = { f, png -> glasses.pushMap(f, png) }, log = { Log.i("LiveFitMap", it) })
 ```
 
@@ -5654,6 +6673,7 @@ In `start()`, before `// ---- Link wiring ----`, add:
 ```kotlin
         // ---- Live map: route merge, phone fallback, glasses images (spec §2) ----
         routeHub.start()
+        mapTiles.start()
         mapStreamer.start()
         scope.launch { workout.snapshot.collect { routeHub.onWorkout(it) } }
         scope.launch { watchGateway.deltas.collect { routeHub.onWatchDelta(it) } }
@@ -5663,10 +6683,16 @@ In `start()`, before `// ---- Link wiring ----`, add:
                 .collect { on -> if (on) phoneGps.start() else phoneGps.stop() }
         }
         scope.launch {
-            glasses.status.map { it.link == LinkState.Connected }.distinctUntilChanged()
-                .collect { connected -> if (connected) mapStreamer.onConnected() else mapStreamer.onDisconnected() }
+            glasses.status.map { it.link == LinkState.Connected }.distinctUntilChanged().collect { connected ->
+                if (connected) mapStreamer.onConnected() else { mapStreamer.onDisconnected(); mapTiles.show(emptyList()) }
+            }
         }
-        scope.launch { glasses.pageStates.collect { mapStreamer.onPageState(it.page, it.seq) } }
+        scope.launch {
+            glasses.pageStates.collect {
+                mapStreamer.onPageState(it.page, it.seq)
+                if (!mapStreamer.mapVisible) mapTiles.show(emptyList()) // off the Map page nothing is fetched or retried
+            }
+        }
 ```
 
 - [ ] **Step 7: Build and test**
@@ -5678,7 +6704,7 @@ Expected: BUILD SUCCESSFUL, tests PASS. (Rendering, size and cadence are verifie
 
 ```bash
 git add phone
-git commit -m "feat(phone): glasses map renderer and wiring of route hub, phone fallback and lf_map stream"
+git commit -m "feat(phone): non-blocking glasses map renderer and wiring of route hub, phone fallback and lf_map stream"
 ```
 
 ---
@@ -6088,7 +7114,7 @@ git commit -m "feat(phone): Settings → Pages and hierarchical Glasses gestures
 - Test: `core/map/src/test/kotlin/com/debasish/livefit/map/RouteThumbnailTest.kt`
 
 **Interfaces:**
-- Consumes: `Viewport.fit` (Task 2), `MapSceneBuilder.decimate` (Task 7), `RouteTrack.of(...).drawn()` (Task 3), `ServiceGraph.routes` (Task 17).
+- Consumes: `Viewport.fit` (Task 2), `MapSceneBuilder.decimate` (Task 7), `RouteTrack.of(...).drawn()`, `RouteFix.historyPoint()` (Task 3), `RouteStore.routeFixes` (Task 13), `ServiceGraph.routes` (Task 17).
 - Produces: `object RouteThumbnail { fun project(points: List<RoutePoint>, widthPx: Int, heightPx: Int, paddingPx: Int = 8): List<Px> }`
 
 - [ ] **Step 1: Write the failing test** — `core/map/src/test/kotlin/com/debasish/livefit/map/RouteThumbnailTest.kt`:
@@ -6150,7 +7176,8 @@ Expected: PASS.
 inside the `LaunchedEffect`'s `runCatching { … }` add:
 
 ```kotlin
-            route = RouteTrack.of(services.routes.routePoints(sessionId)).drawn()
+            // Rows never normalized (no successful time sync before the session ended) fall back to device time here only.
+            route = RouteTrack.of(services.routes.routeFixes(sessionId).map { it.historyPoint() }).drawn()
 ```
 
 and after the heart-rate `SoftCard { … }` add:
@@ -6203,6 +7230,7 @@ git commit -m "feat(history): static route thumbnail on the workout detail scree
   - `data class NavContext(queue: QueueWindow, gestures: GestureSettings, available: List<HudPage>)`
   - `data class NavOutcome(nav: HudNav, command: Command? = null, talk: Boolean = false, close: Boolean = false)`
   - `data class HudNav(page = Workout, mode = GestureMode.Page, highlightId: Long? = null, highlightBack = false, selector = MusicControl.PlayPause, lastInputMs = 0) { fun onGesture(g, ctx, nowMs): NavOutcome; fun go(target): HudNav; fun show(target, available): HudNav; fun reconcile(available): HudNav; fun timedOut(nowMs, idleMs): HudNav; fun resumeIdle(nowMs): HudNav; fun highlightRow(queue): Int?; fun visibleSelector(): MusicControl? }` — `highlightRow` = queue row index, or `queue.items.size` for the ✕ Back row, null outside Playlist scroll mode.
+  - `data class IdleGate(paused: Boolean = false) { fun onOverlay(up: Boolean, nav: HudNav, nowMs: Long): Pair<IdleGate, HudNav>; fun deadlineMs(nav: HudNav, idleMs: Long): Long?; fun tick(nav: HudNav, idleMs: Long, nowMs: Long): HudNav }` — the scroll idle timer in one ordered path: a dismissed overlay restarts the timer **before** any deadline is computed; the deadline is a function of the current `idleMs`, so a new timeout applies without a gesture (review #9).
   - `CloseConfirm.onClose(phase: WorkoutPhase?, ask: Boolean, nowMs: Long): Pair<CloseConfirm, DoubleTapAction>`
   - `fun visibleRows(size, highlight, rows): IntRange` (unchanged)
 
@@ -6358,6 +7386,30 @@ class HudNavTest {
         val n = scrollOn(HudPage.MusicControls, now = 0).resumeIdle(20_000)
         assertEquals(GestureMode.Scroll, n.timedOut(24_999, 5_000).mode)
         assertEquals(HudNav(page = HudPage.Workout), HudNav().resumeIdle(20_000), "no timer in page mode")
+    }
+
+    /** Review #9: a confirmation longer than the idle timeout; after it closes Scroll mode lasts the full resumed interval. */
+    @Test fun confirmationLongerThanTheTimeoutResumesTheFullInterval() {
+        var nav = scrollOn(HudPage.Playlist, now = 0)
+        var gate = IdleGate()
+        gate.onOverlay(true, nav, 1_000).let { (g, n) -> gate = g; nav = n }
+        assertNull(gate.deadlineMs(nav, 5_000), "paused while the confirmation is up")
+        assertEquals(GestureMode.Scroll, gate.tick(nav, 5_000, 19_999).mode)
+        gate.onOverlay(false, nav, 20_000).let { (g, n) -> gate = g; nav = n }
+        assertEquals(25_000L, gate.deadlineMs(nav, 5_000), "deadline computed after the resume")
+        assertEquals(GestureMode.Scroll, gate.tick(nav, 5_000, 20_000).mode, "not dropped at the moment of dismissal")
+        assertEquals(GestureMode.Scroll, gate.tick(nav, 5_000, 24_999).mode)
+        assertEquals(HudNav(page = HudPage.Playlist), gate.tick(nav, 5_000, 25_000))
+    }
+
+    /** Review #9: the phone changes the idle timeout while the wearer scrolls; it applies without another gesture. */
+    @Test fun changingTheTimeoutWhileScrollingAppliesWithoutAGesture() {
+        val nav = scrollOn(HudPage.MusicControls, now = 0)
+        val gate = IdleGate()
+        assertEquals(GestureMode.Scroll, gate.tick(nav, 15_000, 6_000).mode)
+        assertEquals(HudNav(page = HudPage.MusicControls), gate.tick(nav, 5_000, 6_000), "a shorter timeout has already elapsed")
+        assertEquals(10_000L, gate.deadlineMs(nav, 10_000), "a longer one moves the deadline out")
+        assertNull(IdleGate().deadlineMs(HudNav(page = HudPage.MusicControls), 5_000), "no timer in page mode")
     }
 
     /** Review Focus #5 / spec §3.3: the visible page disappears → Workout immediately, page mode, nothing highlighted. */
@@ -6569,6 +7621,24 @@ fun visibleRows(size: Int, highlight: Int?, rows: Int): IntRange {
     val start = ((highlight ?: 0) - rows / 2).coerceIn(0, maxOf(0, size - rows))
     return start until minOf(size, start + rows)
 }
+
+/**
+ * Scroll-mode idle timer with confirmation pauses (spec §3.3), as one ordered path (review #9): an overlay change goes
+ * through [onOverlay] first — a dismissal restarts the timer via [HudNav.resumeIdle] — and only then is a deadline
+ * computed, from the gate and the *current* idle timeout. So a long confirmation never drops the wearer out of Scroll
+ * mode at dismissal, and a new timeout from the phone applies without another gesture.
+ */
+data class IdleGate(val paused: Boolean = false) {
+    fun onOverlay(up: Boolean, nav: HudNav, nowMs: Long): Pair<IdleGate, HudNav> =
+        IdleGate(paused = up) to if (paused && !up) nav.resumeIdle(nowMs) else nav
+
+    /** When Scroll mode times out with [idleMs]; null in page mode or while an overlay pauses the timer. */
+    fun deadlineMs(nav: HudNav, idleMs: Long): Long? = if (!paused && nav.mode == GestureMode.Scroll) nav.lastInputMs + idleMs else null
+
+    /** [nav] after the timer at [nowMs]. */
+    fun tick(nav: HudNav, idleMs: Long, nowMs: Long): HudNav =
+        deadlineMs(nav, idleMs)?.takeIf { nowMs >= it }?.let { nav.timedOut(nowMs, idleMs) } ?: nav
+}
 ```
 
 - [ ] **Step 4: `DoubleTap.kt`** — add to `data class CloseConfirm` (after `onDoubleTap`):
@@ -6587,6 +7657,7 @@ Expected: PASS.
 - [ ] **Step 6: `MainActivity.kt` — dispatch every gesture through the table.** Add imports:
 
 ```kotlin
+import com.debasish.livefit.glasses.hud.IdleGate
 import com.debasish.livefit.glasses.hud.NavContext
 import com.debasish.livefit.glasses.hud.gesture
 import com.debasish.livefit.model.Gesture
@@ -6603,6 +7674,8 @@ Add these members (Task 22 replaces the bodies of `gestures()` and `pageSettings
 ```kotlin
     private fun gestures(): GestureSettings = GestureSettings()
     private fun pageSettings(): PageSettings = PageSettings()
+    /** Scroll idle timer pause state (review #9); changed only through IdleGate.onOverlay. */
+    private var idleGate by mutableStateOf(IdleGate())
     private fun availablePages(): List<HudPage> =
         PageSet.available(pageSettings(), PageSet.mapEligible(controller.frame.value?.workout ?: WorkoutSnapshot()))
     private fun navContext() = NavContext(controller.queue.value, gestures(), availablePages())
@@ -6666,19 +7739,20 @@ In `closeApp()` replace `nav = HudNav()` with `updateNav(HudNav())`. In the `Hud
 Inside `setContent { … }` replace the `LaunchedEffect(nav.highlightId, nav.lastInputMs) { … }` block with:
 
 ```kotlin
-            // Scroll-mode idle timeout (spec §4.2), paused while a confirmation or our close prompt is up (spec §3.3).
+            // Scroll-mode idle timeout (spec §4.2/§3.3), one ordered path (review #9): an overlay change updates the gate
+            // (a dismissal restarts the timer) before the timer effect — keyed on the gate, the input time and the
+            // timeout — computes its deadline. Task 22 makes idleMs collected state, so a new timeout re-keys the effect.
             val overlayUp = frame?.confirmation != null || closeConfirm.shown
-            androidx.compose.runtime.LaunchedEffect(nav.mode, nav.lastInputMs, overlayUp) {
-                if (nav.mode == GestureMode.Scroll && !overlayUp) {
-                    val idleMs = gestures().idleTimeoutS * 1_000L
-                    kotlinx.coroutines.delay((nav.lastInputMs + idleMs - System.currentTimeMillis()).coerceAtLeast(0))
-                    updateNav(nav.timedOut(System.currentTimeMillis(), idleMs))
-                }
-            }
-            var wasOverlay by androidx.compose.runtime.remember { mutableStateOf(false) }
+            val idleMs = gestures().idleTimeoutS * 1_000L
             androidx.compose.runtime.LaunchedEffect(overlayUp) {
-                if (wasOverlay && !overlayUp) updateNav(nav.resumeIdle(System.currentTimeMillis()))
-                wasOverlay = overlayUp
+                val (gate, resumed) = idleGate.onOverlay(overlayUp, nav, System.currentTimeMillis())
+                idleGate = gate
+                updateNav(resumed)
+            }
+            androidx.compose.runtime.LaunchedEffect(nav.mode, nav.lastInputMs, idleGate, idleMs) {
+                val deadline = idleGate.deadlineMs(nav, idleMs) ?: return@LaunchedEffect
+                kotlinx.coroutines.delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
+                updateNav(idleGate.tick(nav, idleMs, System.currentTimeMillis()))
             }
             // The visible page disappears (disabled, GPS workout ended) → Workout at once (spec §3.3).
             val available = PageSet.available(pageSettings(), PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()))
@@ -6708,17 +7782,19 @@ git commit -m "feat(glasses): resolve every touchpad gesture through the per-pag
 - Create: `glasses/src/main/java/com/debasish/livefit/glasses/hud/MapPayload.kt`
 - Modify: `glasses/src/main/java/com/debasish/livefit/glasses/hud/HudController.kt`
 - Modify: `glasses/src/main/java/com/debasish/livefit/glasses/MainActivity.kt`
-- Test: `glasses/src/test/java/com/debasish/livefit/glasses/hud/PageReporterTest.kt`, `glasses/src/test/java/com/debasish/livefit/glasses/hud/MapPayloadTest.kt`
+- Modify: `glasses/build.gradle.kts`
+- Test: `glasses/src/test/java/com/debasish/livefit/glasses/hud/PageReporterTest.kt`, `glasses/src/test/java/com/debasish/livefit/glasses/hud/PageReportRetryTest.kt`, `glasses/src/test/java/com/debasish/livefit/glasses/hud/MapPayloadTest.kt`
 
 **Interfaces:**
-- Consumes: `HudSettingsFrame.pages/gestures`, `PageState`, `MapFrame`, `MapFrameKind`, `GlassesChannels.MAP/PAGE_STATE` (Task 1); `GestureRules.sanitized/problems` (Task 6); `MapImageGate` (Task 9); `HudNav`, `NavContext` and the `gestures()`/`pageSettings()`/`updateNav()` members of `MainActivity` (Task 21).
+- Consumes: `HudSettingsFrame.pages/gestures`, `PageState`, `MapFrame`, `MapFrameKind`, `GlassesChannels.MAP/PAGE_STATE` (Task 1); `GestureRules.sanitized/problems` (Task 6); `MapImageGate`, `GlassesMapStreamer` (Task 9, the latter in tests); `HudNav`, `NavContext`, `IdleGate` and the `gestures()`/`pageSettings()`/`updateNav()` members of `MainActivity` (Task 21); `CxrGlassesLink.pushMap` and the `map_probe` debug command (Task 15) for device check D1.
 - Produces:
-  - `class PageReporter(send: (String) -> Unit) { val page: HudPage; fun onPage(p: HudPage); fun resend() }`
-  - `object MapPayload { fun png(frame: MapFrame, bytes: ByteArray?): ByteArray? }`
+  - `class PageReporter(send: (String) -> Boolean) { val page: HudPage; val hasPending: Boolean; fun onPage(p: HudPage); fun resend(); fun retryPending() }` — `send` returns false when the bridge refused the message; the latest unsent state is kept (replacing any older pending one) and re-sent by `retryPending()` every second on the same connection (review #10).
+  - `HudController.sendRaw(channel, text): Boolean` (= `CXRServiceBridge.sendMessage(...) == 0`, CXR-S docs: 0 = sent).
+  - `object MapPayload { fun png(frame: MapFrame, bytes: ByteArray?): ByteArray?; fun crc(bytes: ByteArray?): String }` (`crc` for the D1 arrival log).
   - `class MapImage(sessionId: String, png: ByteArray, seq: Long)`
   - `HudController.pages: StateFlow<PageSettings>`, `.gestures: StateFlow<GestureSettings>` (sanitized against the last valid table), `.mapImage: StateFlow<MapImage?>`, `fun reportPage(page: HudPage)`, `fun onPhoneConnected()`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing tests** — in `glasses/build.gradle.kts` add `testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")` next to the other test dependencies.
 
 `glasses/src/test/java/com/debasish/livefit/glasses/hud/PageReporterTest.kt`:
 
@@ -6730,12 +7806,14 @@ import com.debasish.livefit.model.PageState
 import com.debasish.livefit.model.Wire
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class PageReporterTest {
     /** Spec §2.5: lf_page_state on every page change and on every connect/reconnect. */
     @Test fun reportsEveryChangeAndEveryResendWithAGrowingSeq() {
         val sent = mutableListOf<PageState>()
-        val r = PageReporter { sent += Wire.decode<PageState>(it) }
+        val r = PageReporter { sent += Wire.decode<PageState>(it); true }
         r.onPage(HudPage.Workout)
         r.onPage(HudPage.Workout)
         r.onPage(HudPage.Map)
@@ -6744,7 +7822,119 @@ class PageReporterTest {
         assertEquals(HudPage.Map, r.page)
     }
 
-    @Test fun aFailingSendNeverThrows() = PageReporter { error("not connected") }.onPage(HudPage.Map)
+    @Test fun aFailingSendNeverThrows() {
+        val r = PageReporter { error("not connected") }
+        r.onPage(HudPage.Map)
+        assertTrue(r.hasPending, "a throwing send counts as unsent")
+    }
+
+    /** Review #10: only the latest unsent state is retried (older pending ones are obsolete), and one success clears it. */
+    @Test fun onlyTheLatestUnsentPageIsRetried() {
+        val sent = mutableListOf<PageState>()
+        var up = false
+        val r = PageReporter { if (up) { sent += Wire.decode<PageState>(it); true } else false }
+        r.onPage(HudPage.Map); r.onPage(HudPage.Stats); r.onPage(HudPage.Glance)
+        up = true
+        r.retryPending(); r.retryPending()
+        assertEquals(listOf(HudPage.Glance), sent.map { it.page })
+        assertFalse(r.hasPending)
+    }
+
+    /** Review #10: a failed report of the same page is re-sent even though the page did not change. */
+    @Test fun samePageIsReReportedWhileItsLastSendFailed() {
+        var ok = false
+        val sent = mutableListOf<HudPage>()
+        val r = PageReporter { if (ok) { sent += Wire.decode<PageState>(it).page; true } else false }
+        r.onPage(HudPage.Map)
+        ok = true
+        r.onPage(HudPage.Map)
+        assertEquals(listOf(HudPage.Map), sent)
+        r.onPage(HudPage.Map)
+        assertEquals(listOf(HudPage.Map), sent, "once sent, an unchanged page is not repeated")
+    }
+}
+```
+
+`glasses/src/test/java/com/debasish/livefit/glasses/hud/PageReportRetryTest.kt` (the glasses reporter against the real phone streamer):
+
+```kotlin
+package com.debasish.livefit.glasses.hud
+
+import com.debasish.livefit.model.FixSource
+import com.debasish.livefit.model.GpsStatus
+import com.debasish.livefit.model.HudPage
+import com.debasish.livefit.model.LivePosition
+import com.debasish.livefit.model.MapFrame
+import com.debasish.livefit.model.MapFrameKind
+import com.debasish.livefit.model.PageState
+import com.debasish.livefit.model.RouteState
+import com.debasish.livefit.model.Wire
+import com.debasish.livefit.services.Clock
+import com.debasish.livefit.sync.GlassesMapStreamer
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class PageReportRetryTest {
+    private class Link(scope: TestScope) {
+        /** False = the CXR bridge refuses lf_page_state (sendMessage != 0). */
+        var up = true
+        val images = mutableListOf<MapFrame>()
+        val streamer = GlassesMapStreamer(
+            scope.backgroundScope, Clock { scope.testScheduler.currentTime },
+            render = { byteArrayOf(1) },
+            send = { f, _ -> if (f.kind == MapFrameKind.Image) images += f; true },
+            newEpoch = { 7L },
+        )
+        val reporter = PageReporter { json -> if (!up) false else { Wire.decode<PageState>(json).let { streamer.onPageState(it.page, it.seq) }; true } }
+
+        fun connect() {
+            streamer.start()
+            streamer.onRoute(RouteState(sessionId = "s", live = LivePosition(12.97, 77.59, null, FixSource.Watch, 0), status = GpsStatus.Live))
+            streamer.onConnected()
+        }
+    }
+
+    /** Review #10: the first Map report fails; the retry on the same connection makes the images begin. */
+    @Test fun failedMapReportIsRetriedAndImagesBegin() = runTest {
+        val l = Link(this)
+        l.connect()
+        l.reporter.onPage(HudPage.Workout)
+        l.up = false
+        l.reporter.onPage(HudPage.Map)
+        advanceTimeBy(5_000); runCurrent()
+        assertTrue(l.images.isEmpty(), "the phone never heard about Map")
+        assertTrue(l.reporter.hasPending)
+        l.up = true
+        l.reporter.retryPending() // HudController calls this every second
+        advanceTimeBy(500); runCurrent()
+        assertEquals(1, l.images.size)
+        assertFalse(l.reporter.hasPending)
+    }
+
+    /** Review #10: the report of leaving Map fails; the retry makes the images stop. */
+    @Test fun failedLeaveReportIsRetriedAndImagesStop() = runTest {
+        val l = Link(this)
+        l.connect()
+        l.reporter.onPage(HudPage.Map)
+        advanceTimeBy(500); runCurrent()
+        assertEquals(1, l.images.size)
+        l.up = false
+        l.reporter.onPage(HudPage.Workout)
+        advanceTimeBy(3_500); runCurrent()
+        assertEquals(2, l.images.size, "the phone still believes Map is visible")
+        l.up = true
+        l.reporter.retryPending()
+        advanceTimeBy(10_000); runCurrent()
+        assertEquals(2, l.images.size, "no images after the retried report")
+    }
 }
 ```
 
@@ -6778,7 +7968,7 @@ class MapPayloadTest {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :glasses:testDebugUnitTest --tests '*PageReporterTest*' --tests '*MapPayloadTest*'`
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :glasses:testDebugUnitTest --tests '*PageReporterTest*' --tests '*PageReportRetryTest*' --tests '*MapPayloadTest*'`
 Expected: FAIL — `PageReporter`, `MapPayload` unresolved.
 
 - [ ] **Step 3: Implement both**
@@ -6794,16 +7984,22 @@ import com.debasish.livefit.model.Wire
 
 /**
  * lf_page_state (spec §2.5): the visible page on every change and on every (re)connect, so the phone knows whether the
- * Map page is visible even after it restarted. [seq] grows per glasses process; a failed send is simply dropped.
+ * Map page is visible even after it restarted. [seq] grows per glasses process. [send] returns false (or throws) when
+ * the bridge refused the message: the latest page is then pending — replacing any older pending state — and is re-sent
+ * by [retryPending] (every second, HudController) and by an unchanged [onPage], until a send succeeds (review #10).
  */
-class PageReporter(private val send: (String) -> Unit) {
+class PageReporter(private val send: (String) -> Boolean) {
     private var seq = 0L
+    private var pending = false
     @Volatile var page: HudPage = HudPage.Workout
         private set
 
+    val hasPending: Boolean
+        @Synchronized get() = pending
+
     @Synchronized
     fun onPage(p: HudPage) {
-        if (p == page && seq > 0) return
+        if (p == page && seq > 0 && !pending) return
         page = p
         emit()
     }
@@ -6811,9 +8007,12 @@ class PageReporter(private val send: (String) -> Unit) {
     @Synchronized
     fun resend() = emit()
 
+    @Synchronized
+    fun retryPending() { if (pending) emit() }
+
     private fun emit() {
         seq++
-        runCatching { send(Wire.encode(PageState(page = page, seq = seq))) }
+        pending = !runCatching { send(Wire.encode(PageState(page = page, seq = seq))) }.getOrDefault(false)
     }
 }
 ```
@@ -6831,6 +8030,9 @@ object MapPayload {
     fun png(frame: MapFrame, bytes: ByteArray?): ByteArray? =
         bytes?.takeIf { it.isNotEmpty() }
             ?: frame.pngBase64?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }?.takeIf { it.isNotEmpty() }
+
+    /** CRC-32 (hex) for the device check D1 arrival log; "-" without bytes. */
+    fun crc(bytes: ByteArray?): String = bytes?.let { java.util.zip.CRC32().apply { update(it) }.value.toString(16) } ?: "-"
 }
 
 /** The newest accepted map image (spec §2.5). Not a data class: a new image must always replace the old one. */
@@ -6839,7 +8041,7 @@ class MapImage(val sessionId: String, val png: ByteArray, val seq: Long)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :glasses:testDebugUnitTest --tests '*PageReporterTest*' --tests '*MapPayloadTest*'`
+Run: `export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :glasses:testDebugUnitTest --tests '*PageReporterTest*' --tests '*PageReportRetryTest*' --tests '*MapPayloadTest*'`
 Expected: PASS.
 
 - [ ] **Step 5: `HudController.kt`** — add imports `com.debasish.livefit.model.GestureRules`, `com.debasish.livefit.model.GestureSettings`, `com.debasish.livefit.model.MapFrame`, `com.debasish.livefit.model.MapFrameKind`, `com.debasish.livefit.model.PageSettings`, `com.debasish.livefit.sync.MapImageGate`. Replace `private val _settings = MutableStateFlow(loadSettings())` with:
@@ -6861,7 +8063,20 @@ Expected: PASS.
     private val reporter = PageReporter { json -> sendRaw(GlassesChannels.PAGE_STATE, json) }
 ```
 
-In `start()` add:
+Replace `fun sendRaw(channel: String, text: String) { bridge.sendMessage(channel, Caps().apply { write(text) }) }` with (callers that ignore the result are unchanged):
+
+```kotlin
+    /** True when the bridge accepted the message (CXR-S `sendMessage`: 0 = sent, -1 parameter error, -3 internal error). */
+    fun sendRaw(channel: String, text: String): Boolean = bridge.sendMessage(channel, Caps().apply { write(text) }) == 0
+```
+
+and in `start()` replace `scope.launch { while (true) { refreshConnection(); delay(1_000) } }` with:
+
+```kotlin
+        scope.launch { while (true) { refreshConnection(); reporter.retryPending(); delay(1_000) } } // review #10: unsent page state
+```
+
+In `start()` also add:
 
 ```kotlin
         bridge.subscribe(GlassesChannels.MAP, CXRServiceBridge.MsgCallback { _, caps, bytes -> onMap(caps, bytes) })
@@ -6892,6 +8107,8 @@ Add:
     /** lf_map (spec §2.5): an epoch header resets the gate and re-reports our page; images pass the gate first. */
     private fun onMap(caps: Caps?, bytes: ByteArray?) {
         val frame = text(caps)?.let(MapFrame::parse) ?: return
+        // Arrival, before the gate (device check D1): what CXR actually delivered.
+        Log.i(MAP_TAG, "lf_map in kind=${frame.kind} epoch=${frame.renderEpoch} seq=${frame.renderSeq} bytes=${bytes?.size ?: -1} crc=${MapPayload.crc(bytes?.takeIf { it.isNotEmpty() })} b64=${frame.pngBase64?.length ?: 0} b64crc=${MapPayload.crc(MapPayload.png(frame, null))}")
         val session = _frame.value?.workout?.sessionId
         if (frame.kind == MapFrameKind.Epoch) {
             gate.accept(frame, session)
@@ -6912,7 +8129,7 @@ Add:
 
 and in the companion add `private const val KEY_FRAME = "hudSettingsFrame"` and `const val MAP_TAG = "LiveFitMap"`.
 
-- [ ] **Step 6: `MainActivity.kt`** — replace the Task 21 placeholders' bodies and report pages:
+- [ ] **Step 6: `MainActivity.kt`** — replace the bodies of the Task 21 stand-in members and report pages:
 
 ```kotlin
     private fun gestures(): GestureSettings = controller.gestures.value
@@ -6923,10 +8140,23 @@ and in the companion add `private const val KEY_FRAME = "hudSettingsFrame"` and 
     }
 ```
 
-In `onCreate` after `controller = HudController(...).also { it.start() }` add `controller.reportPage(nav.page)`, and in the bridge `StatusListener.onConnected` add `if (::controller.isInitialized) controller.onPhoneConnected()` after the log line. Inside `setContent` add `val pages by controller.pages.collectAsStateWithLifecycle()` next to the other collected flows and change the `available` line to:
+In `onCreate` after `controller = HudController(...).also { it.start() }` add `controller.reportPage(nav.page)`, and in the bridge `StatusListener.onConnected` add `if (::controller.isInitialized) controller.onPhoneConnected()` after the log line. Inside `setContent` add next to the other collected flows:
+
+```kotlin
+            val pages by controller.pages.collectAsStateWithLifecycle()
+            val gestureSettings by controller.gestures.collectAsStateWithLifecycle() // review #9: a new idle timeout re-keys the timer effect
+```
+
+change the `available` line to:
 
 ```kotlin
             val available = PageSet.available(pages, PageSet.mapEligible(frame?.workout ?: WorkoutSnapshot()))
+```
+
+and replace the Task 21 line `val idleMs = gestures().idleTimeoutS * 1_000L` with:
+
+```kotlin
+            val idleMs = gestureSettings.idleTimeoutS * 1_000L
 ```
 
 - [ ] **Step 7: Build and test**
@@ -6938,8 +8168,35 @@ Expected: BUILD SUCCESSFUL, tests PASS.
 
 ```bash
 git add glasses
-git commit -m "feat(glasses): apply received pages and validated gestures, report the visible page, accept lf_map images"
+git commit -m "feat(glasses): apply received pages and validated gestures, report (and retry) the visible page, accept lf_map images"
 ```
+
+- [ ] **Step 9: Early device check D1 — raw PNG over CXR (needs Task 15 merged; run before Task 23 starts)**
+
+The first point where the phone `lf_map` sender (Task 15) and the glasses receiver (this task) both exist. Decide now whether the PNG travels in the CXR `bytes` argument or as Base64 in the JSON, so Task 23 (and Task 25) build on the working path; Task 18 is unaffected either way.
+
+Run (phone debug build + glasses build from the same commit; the watch is not needed):
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 17) && ./gradlew :phone:assembleDebug :glasses:assembleDebug
+source tools/device-tests/common.sh && require PHONE GLASSES
+adb -s "$GLASSES" install -r glasses/build/outputs/apk/debug/glasses-debug.apk
+adb -s "$PHONE" install -r --user 0 phone/build/outputs/apk/debug/phone-debug.apk
+# Open LiveFit on the phone and the glasses app; wait for the HUD to show the phone connected.
+adb -s "$PHONE" logcat -c; adb -s "$GLASSES" logcat -c
+for kb in 8 38 60; do
+  adb -s "$PHONE" shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver --es cmd map_probe --ei kb $kb; sleep 3
+done
+adb -s "$PHONE" shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver --es cmd map_probe --ei kb 38 --ez b64 true; sleep 3
+adb -s "$PHONE" logcat -d -s LiveFitMap | grep map_probe
+adb -s "$GLASSES" logcat -d -s LiveFitMap | grep 'lf_map in'
+```
+
+Expected and decision (record the four phone/glasses line pairs in the Task 25 acceptance record, row 1):
+- For each raw probe the glasses log `lf_map in kind=Image … bytes=<kb×1024> crc=<same as the phone's crc>`. If the 8 KB and 38 KB probes match: keep `CxrGlassesLink.MAP_AS_BASE64 = false`. (60 KB is headroom information only; the renderer targets ≤ 40 KB.)
+- If raw probes arrive with `bytes=0`/`-1` or a different crc but the `b64` probe arrives with `b64crc=<phone crc>`: set `CxrGlassesLink.MAP_AS_BASE64 = true` in Task 15's file, commit `fix(glasses-link): map images as Base64 (device check D1)`, rebuild, and repeat the raw-probe loop with `--ez b64 true` to confirm.
+- If neither path delivers a matching 38 KB payload: stop and report to the owner before Task 23 (the map stream would need chunking, which this plan does not cover).
+- The probe uses render epoch 4242; after it, restart the phone app so the real stream announces a fresh epoch.
 
 ---
 
@@ -7315,7 +8572,7 @@ git commit -m "feat(voice): map, stats and music-controls page views; music view
 - Create: `docs/superpowers/acceptance/2026-10-09-pages-maps-gestures-acceptance.md`
 
 **Interfaces:**
-- Consumes: everything above; log tags `LiveFitMap` (phone `sent seq=… bytes=… epoch=…`, glasses `shown epoch=… seq=… bytes=…` / `dropped …` / `image without payload`), `LiveFitPhoneGps` (`phone GPS on|off`), `LiveFitWatchLink` (`time sync ok=… offset=…`), `LiveFitExercise` (batching overrides list, `gps=… location supported=…`).
+- Consumes: everything above (including the device check D1 result, Task 22 Step 9); log tags `LiveFitMap` (phone `sent seq=… bytes=… epoch=…` / `map_probe …`, glasses `lf_map in …` / `shown epoch=… seq=… bytes=…` / `dropped …` / `image without payload`), `LiveFitPhoneGps` (`phone GPS on|off`), `LiveFitWatchLink` (`time sync ok=… offset=…`), `LiveFitExercise` (batching overrides list, `gps=… location supported=…`).
 - Produces: a filled-in acceptance record; the final value of `CxrGlassesLink.MAP_AS_BASE64`.
 
 - [ ] **Step 1: Full JVM test sweep**
@@ -7362,7 +8619,7 @@ Run on: Galaxy S25 + Galaxy Watch6 Classic + Rokid Glasses, all installed via `t
 
 | # | Check | How | Pass |
 |---|---|---|---|
-| 1 | lf_map payload path | Start a Run, glasses on Map; `adb -s $GLASSES logcat -s LiveFitMap` | `shown epoch=… bytes=N` with N > 0. If only `image without payload` appears: set `CxrGlassesLink.MAP_AS_BASE64 = true`, reinstall, repeat |
+| 1 | lf_map payload path | Paste the D1 probe lines (Task 22 Step 9) here; then start a Run, glasses on Map; `adb -s $GLASSES logcat -s LiveFitMap` | D1 crc pairs match on the chosen path; `shown epoch=… bytes=N` with N > 0. If only `image without payload` appears: set `CxrGlassesLink.MAP_AS_BASE64 = true`, reinstall, repeat |
 | 2 | Map on glasses: cadence, size, attribution | Walk 2 min on Map; `tools/device-tests/map-cadence.sh 120` | script PASS; marker moves within ~3 s; "© OpenStreetMap contributors" readable; streets dim green, route bright, water/parks black |
 | 3 | Map on watch: tiles, zoom, own fixes | Same walk, watch Map page; turn the bezel both ways | mint streets appear; zoom 14–18 and always re-centred; attribution visible; route matches the glasses |
 | 4 | Offline map | Phone airplane mode with Bluetooth on (glasses) / watch Wi-Fi + LTE off, 2 min | glasses "No map — route only", route keeps growing on black; watch route-only on black; Summary distance and history unaffected |
@@ -7379,6 +8636,8 @@ Run on: Galaxy S25 + Galaxy Watch6 Classic + Rokid Glasses, all installed via `t
 | 15 | A custom mapping applied live | Settings → Glasses gestures → Page mode → Glance → Tap → Next song; then try Double tap → Talk on Glance | Tap on Glance skips the song at once (no reconnect); the second change is refused with "Glance needs a gesture for Close app" |
 | 16 | Voice page views | Say "stats view", "map view", "music view", "playlist view"; disable Stats and say "stats view" | each page opens on the glasses only; toast "Stats page is turned off in Settings" |
 | 17 | Coordinated upgrade guard | Install the previous (v3) glasses APK | phone shows "Update LiveFit on your glasses"; no lf_map images accepted |
+| 18 | Tiles recover without moving | Stand still on the Map page (glasses and watch) with phone mobile data and watch Wi-Fi/LTE off for 1 min, then turn them back on | images keep coming route-only during the outage; tiles appear on both within ~35 s of reconnecting without zooming or walking |
+| 19 | Route survives a phone kill right after a delta | During a GPS Walk: `adb -s $PHONE shell am force-stop com.debasish.livefit` twice, 30 s apart; reopen LiveFit; after the Walk open its history detail | glasses route and history thumbnail have no gaps around the kills |
 ```
 
 - [ ] **Step 5: Run every acceptance check on the devices** and record date, numbers and PASS/FAIL in the table's Pass column. Any FAIL goes back to the owning task (the table's "How" names the log tag that points at it) before this task is done.
