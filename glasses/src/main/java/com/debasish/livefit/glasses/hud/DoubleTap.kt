@@ -65,6 +65,10 @@ data class CloseConfirm(val shownAtMs: Long? = null, val highlightYes: Boolean =
         else -> CloseConfirm() to DoubleTapAction.Leave
     }
 
+    /** The Close app action, whatever gesture is mapped to it: ask while a workout records and [ask] is on, else leave. */
+    fun onClose(phase: WorkoutPhase?, ask: Boolean, nowMs: Long): Pair<CloseConfirm, DoubleTapAction> =
+        if (ask && phase in RECORDING) show(nowMs) to DoubleTapAction.AskClose else CloseConfirm() to DoubleTapAction.Leave
+
     fun onSwipe(): CloseConfirm = if (shown) copy(highlightYes = !highlightYes) else this
 
     /** Answers the prompt: true = close, false = stay, null = nothing shown (the tap is not ours). */
