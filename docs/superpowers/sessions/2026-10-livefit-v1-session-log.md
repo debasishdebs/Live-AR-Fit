@@ -270,66 +270,398 @@ Format: **In** = owner's message (paraphrased, key words quoted) · **Out** = wh
 - **Out:** re-read the file against the conversation; admitted gaps (missing prompts, no commits/verification for 1–13, owner decisions folded in); rebuilt this section with one entry per prompt, commits from `git log`, and explicit verification notes.
 
 
+> **Commit hashes note (2026-10-09 ~21:00):** before the first public push, history was rewritten with `git filter-branch` to remove device serials, adb mDNS names and a Bluetooth MAC from three docs (owner request, entry 59). Every hash in entries 1–54 is a **pre-scrub** hash. The old history survives only in the local `backup/pre-scrub` branch, which is never pushed. To find a commit's current hash, search its subject: `git log --format='%h %s' | grep -F '<subject>'`. Key mappings (old → new):
+> - `044a5c0` → `3279d77`, which is tag **v0.1.0-beta**
+> - `dcc5fc3` → `fc8bd71`
+> - `87a7d2c` → `63edd0c`
+> - `8274a5b` → `6380e8d`
+> - `9fce4fa` → `033f378`
+> - `9d47091` → `f54362d`
+> - `2164d70` → `5566392`, which is tag **v0.2.0-beta**
+> - `8e5c197` → `59331d9`
+> - `ce17644` → `f069904`
+> - `b2b1873` → `17d30a3`
+> - `3498a0a` → `5816b37`
+> - `36c8b22` → `9cccc47`
+> - `b426df5` → `25f0416`
+> - `bd5634c` → `5ff3754`
+>
+> Entries from 55 on use post-scrub hashes.
+
 ### 48. `/compact`, then `/superpowers:subagent-driven-development docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md`
-- **Out:** ledger at `.superpowers/sdd/2026-10-09-livefit-pages-maps-gestures-plan/progress.md`. An Opus pre-flight scan of all 25 briefs found 0 blocking, 3 fix-in-task and 9 minor issues, each ruled on in the ledger: Task 12 Spacer miscount; Task 15's `pageStates` instead of `GlassesEvent.PageVisible`; the D1 flip owned by the controller. Task 1 (protocol v4) ran alone, then lanes A–G in parallel worktrees `../lf-wt/p-<lane>`, capped at ~4 concurrent Gradle builds because of the 8 GB Mac. Each task had one implementer (Sonnet 5.5, or Opus 5.5 for judgment-heavy tasks: 11, 12, 14, 18, 22, 23) and one reviewer (Sonnet or Opus); never Haiku. All 24 code tasks were approved on first review; deferred minors are in the ledger. I ran device check D1 on the phone and glasses: raw PNG bytes over CXR arrived intact at 8, 38 and 60 KB (crc matched), so `MAP_AS_BASE64 = false` stays.
-- **Commits:** `dcc5fc3` (T1) … `87a7d2c` (T18); integration merge `8274a5b`.
-- **Verified:** full JVM sweep on `8274a5b`: 632 tests, 0 failures. The phone and glasses run the new build, and on the glasses page cycling, Map skipped without a GPS workout, Music controls scroll mode and its 5 s idle exit were all seen. The watch was not installed (it dropped off wireless adb). The phone has no location permission yet, so its FGS type is `connectedDevice` only, as designed.
+- **In:** run the pages/maps/gestures plan (25 tasks) with subagent-driven development.
+- **Out:**
+  - **Setup:** ledger at `.superpowers/sdd/2026-10-09-livefit-pages-maps-gestures-plan/progress.md`.
+  - **Pre-flight scan:** an Opus pass over all 25 briefs found 0 blocking, 3 fix-in-task and 9 minor issues. Each got a ruling in the ledger: the Task 12 Spacer miscount, Task 15's `pageStates` instead of `GlassesEvent.PageVisible`, and the D1 flip owned by the controller.
+  - **Lanes:** Task 1 (protocol v4) ran alone, then lanes A–G ran in parallel worktrees `../lf-wt/p-<lane>`. About 4 Gradle builds ran at once at most, because the Mac has 8 GB.
+  - **Models:** each task had one implementer (Sonnet 5.5, or Opus 5.5 for tasks 11, 12, 14, 18, 22 and 23) and one reviewer. Haiku was never used.
+  - **Reviews:** all 24 code tasks were approved on first review. Deferred minors are in the ledger.
+  - **Device check D1:** raw PNG bytes over CXR arrived intact at 8, 38 and 60 KB, so `MAP_AS_BASE64 = false`.
+  - **Final review:** the Opus whole-branch review said "ready with fixes". I-1: a lost epoch header left the glasses map dark. The fix re-announces the epoch on entering Map, and the gate keeps lastSeq on a repeated epoch. A watch batching-override retry was also added. Both were re-reviewed clean.
+  - **Task 25 indoor acceptance:**
+    - Rows 12 (glasses half), 14 (partial) and 15 passed.
+    - The custom gesture Glance Tap → Next song was applied live.
+    - Double tap → Talk was refused with "Glance needs a gesture for Close app".
+- **Commits (pre-scrub):** `dcc5fc3` … `87a7d2c`, merge `8274a5b`; final fixes `9fce4fa` and `9d47091`; acceptance record `2164d70`.
+- **Verified:**
+  - JVM sweep: 632 tests, 0 failures.
+  - The phone and glasses run the build. Page cycling worked, Map was skipped without a GPS workout, and Music controls scroll worked with its 5 s idle exit.
+  - The watch was not installed (it was off adb).
 
 ### 49. "one agent per task with review per workflow/task? in parallel all independent right"
-- **Out:** confirmed: a fresh implementer plus a reviewer per task; Task 1 first; lanes in parallel; tasks inside a lane sequential; cross-lane dependencies merged before the dependent task.
+- **Out:** confirmed. Each task gets a fresh implementer and a reviewer. Task 1 runs first. Lanes run in parallel, tasks inside a lane run in sequence, and cross-lane dependencies are merged before the task that needs them.
 
-### 50. Final review + fix wave, Task 25 indoor acceptance
-- **Out:** the Opus whole-branch review said "ready with fixes". I-1: a lost epoch header left the glasses map dark, so the phone now re-announces the epoch on entering Map and the gate keeps lastSeq on a repeated epoch. Also added a watch batching-override retry. Both re-reviewed clean. On the phone and glasses: rows 12 (glasses half), 14 (partial) and 15 passed. Custom gesture Glance Tap→Next song was applied live; Double tap→Talk was refused with "Glance needs a gesture for Close app".
-- **Commits:** `9fce4fa`, `9d47091`, `2164d70` (acceptance record + map-cadence.sh).
-
-### 51. "can we add drive mode?? … in 30min" + "Stats don't hide but 0s; how tough is destination/turn-by-turn?"
-- **Out:** explained that Android Auto/CarPlay can't expose speed limit or ETA. Turn-by-turn = days of work; recommended reading Google Maps' nav notification next (~2–3 h). Built a time-boxed drive mode on `feat/drive-mode` (`d0b4938`, Opus, no task review): phone-only, nothing saved, glasses land on Map at zoom 16 with big km/h, Workout page = DRIVE dashboard.
-- **Verified:** installed on the phone and glasses; drive start → Map "Waiting for GPS" + 0 km/h, lf_map images shown. Phone location permission was still not granted.
-
-### 52. "keep a note to remind me… make production ready, Play Store, generic Wear OS, repos, Hi Rokid agents"
-- **Out:** memory `pending-device-tests` saved. Three read-only audits: Samsung coupling (no Samsung SDKs; 3 must-fix), Play readiness (no release config/icons/privacy policy, restricted permissions), Hi Rokid (games are on-glasses `.aix` JS agents run by `com.rokid.os.sprite.assistserver`; built with public `@yodaos-pkg/aix-cli`; CXR can't register voice commands; Google Assistant shut down Sept 2026 → Gemini; App Actions documented for START/STOP/PAUSE/RESUME_EXERCISE). Proposed sub-projects A (Wear OS) → B (production) with C (Hi Rokid) in parallel, D (App Actions) last.
-
-### 53. Owner decisions: name "Live AR Fit", package com.livear.fit, v0.1.0-beta / v0.2.0-beta / v1.0.0 (+Hi Rokid), one LiveFit agent, author gmail (no rewrite, no GPG), drop full-screen intent, battery-opt via settings + bold warning, tile provider with key
-- **Out:** repo git config set to Debasish Kanhar <d.kanhar@gmail.com>; memory `release-plan` saved. Fossil Gen 6 needs the Wear OS 3 update (Health Services). Health Services can't name the other tracking app.
-
-### 54. "yes go ahead with A" (generic Wear OS)
-- **Out:** two parallel Sonnet lanes plus Opus reviews and one fix round each.
-  - Phone lane (`8e5c197`, `ce17644`): capability `livefit_watch`/`livefit_phone` node choice with a connectedNodes fallback, CDM DEVICE_PROFILE_WATCH, brand-aware media-controls tip, generic copy, takeover text "Another app is still tracking a workout on your watch", scripts detect any watch by `ro.build.characteristics`.
-  - Watch lane (`b2b1873`, `3498a0a`): advertises the capability, refuses unsupported exercise types ("This watch can't track …"), map +/− zoom, screen-scaled insets, burn-in-safe AOD, provenance `wear-os/health-services`. The first review caught insets not applied and committed `-E` sed backup files (fixed).
-  - Merged `36c8b22`.
-- **Verified:** full JVM sweep 0 failures; all three APKs build. Installed on the glasses only (phone and watch were off wireless adb).
-
-### 55. "Continue with B and C", GitHub repo URL, Fossil on Wear OS 3, "v0.2.0-beta includes map: yes"
-- **Out:** device serials and BT MAC scrubbed from all history (filter-branch on 3 docs; backup ref kept locally). Pushed to github.com/debasishdebs/Live-AR-Fit `main`; tags v0.1.0-beta and v0.2.0-beta, both GitHub pre-releases with debug APKs and SHA256SUMS. Generic Wear OS installed on phone and watch; clock sync OK.
-
-### 56. B spec reviews (Codex: 4 P1 + 4 P2, then 2 more) and the 16 KB question
-- **Out:** spec rev 2–4: OS-dependent HR permission; remote-launch filters kept with an entry guard; glasses package vs activity split; 16 KB gate; owner-signed releases; MapTiler Free attribution; music disclosure; in-app privacy policy; on-device STT; Google Data Layer cloud relay disclosed. Owner decided RELRO is a warning only, because Play doesn't enforce it and Google's own graphics-path fails it. Gate = LOAD + zip alignment + Play check + a 16 KB device run.
-
-### 57. Hi Rokid spike on device
-- **Out:** owner ran set-dev and installed the probe. The agent got params; a loopback fetch reaches a glasses-local listener, not the phone. Voice: draft agents (CLI and AIUI Studio Global "Update glasses resource package") are not voice-routed, and Rokid's AI says "I can't start Live Fit". Rokid also won't open third-party glasses apps by name. Discord threads suggest drafts aren't registered in the cloud. Probe imported in AIUI Studio via a slash-free branch (`hi-rokid-probe`).
-
-### 58. B execution (plan e194253, 12 tasks, lanes A/U/M/R/D)
+### 50. "can we add drive mode?? am planning drive in 30min … Android Auto/CarPlay for speed, ETA, speed limit … disables workout screens … defaults to maps. can we do in 30min?"
 - **Out:**
-  - Tasks 1 (identity com.livear.fit), 2 (release build; gate fixed to fail closed), 3 (16 KB checker), 4 (watch HR permissions), 5 (battery banner; fallback chain), 6 (disclosures + privacy policy; dead-end fix), 7 (URI guard + sender gate), 8 (MapTiler + attribution; per-source cache), 9 (robustness; StrictMode on main; races), 10 (docs; accuracy fixes) and 11 (CI) are reviewed and merged.
-  - First GitHub CI run passed.
-- **Verified:** full unit sweep and all three debug builds pass on each merge.
+  - Android Auto and CarPlay can't give third-party apps speed limits or ETA.
+  - Speed from the phone's GPS is feasible. ETA needs a destination plus routing; speed limits need OSM maxspeed, which isn't possible in 30 minutes.
+  - I proposed a 30-minute phone-only drive mode and asked for location permission on the phone.
+- **Verified:** nothing; design only.
 
-### 59. C approved and built
-- **Out:** glasses loopback receiver on 127.0.0.1:47123; LiveFit agent in `rokid-agent/livefit/` with review drafts. Agent commands carry `via=Agent` and go through the Settings → Voice gate (Stop asks first). Reviewed (one fix round) and merged.
+### 51. "Stats is hidden → don't hide but will be 0s. how tough is adding destination service? … voice or app … turn by turn on glass and phone … no destination = no ETA"
+- **Out:**
+  - Destination plus turn-by-turn is days of work: geocoding, routing, guidance, re-routing and UI.
+  - The faster option (about 2–3 hours, next feature) is reading Google Maps' navigation notification for the next turn and ETA. The notification access already exists.
+  - I built a time-boxed drive mode with Opus on `feat/drive-mode`, with no task review:
+    - phone-only, nothing saved;
+    - the glasses open on Map at zoom 16 with a big km/h readout;
+    - the Workout page becomes a DRIVE dashboard;
+    - Stats stays and shows 0s.
+- **Commits:** `d0b4938` (branch `feat/drive-mode`, **not merged**; planned for v2).
+- **Verified:**
+  - Installed on the phone and glasses.
+  - Drive start showed Map with "Waiting for GPS" and 0 km/h, and `lf_map` images were shown, 11.6 KB every 3 s.
+  - The phone still had no location permission. The drive itself is still untested.
+
+### 52. "I'll do those later, keep a note … make production ready … package and publish to Play Store … any Wear OS watch … 2 entries? rokid app on GitHub? 3 repos? … Hi Rokid integration … agent store … explore"
+- **Out:**
+  - Saved memory `pending-device-tests`.
+  - Phone and watch share one applicationId, so they form one Play listing with both form factors.
+  - The glasses app ships as an APK on GitHub Releases.
+  - Recommended a single monorepo, because the three apps share one protocol.
+  - Ran three read-only audits:
+    - **Samsung coupling:** no Samsung SDK is used. Must-fix items: the watch name filter, the tools' SM_R9 serial match, and the Galaxy Wearable copy.
+    - **Play readiness:** missing release config, R8 rules, icons and privacy policy. Restricted permissions in use: full-screen intent and battery exemption. Missing declarations and disclosures. The OSM tile policy needs a keyed provider.
+    - **Hi Rokid:** the games are on-glasses `.aix` JS agents run by Rokid's assistant service. They are built with the public `@yodaos-pkg/aix-cli`. CXR can't register voice commands. Google Assistant was shut down in Sept 2026 and replaced by Gemini. App Actions are documented for START/STOP/PAUSE/RESUME_EXERCISE.
+  - Proposed sub-projects: A (Wear OS) → B (production), with C (Hi Rokid) in parallel, and D (App Actions) last.
+- **Verified:** audits are code and device reads only.
+
+### 53. "Watch → go ahead generic (Fossil Gen 6) … app name Live AR Auto/Fit? … I'll create public repo … 0.1.0-beta → … 1.0.0 maps + Hi Rokid … sign commits with my details … brand later … what's full-screen intent? battery warn bold … help write privacy/declarations … OpenStreetMap: host server or OpenFreeMap/Protomaps? … estimates bloated"
+- **Out:**
+  - Wear OS 2 is not supported; the Fossil Gen 6 needs its Wear OS 3 update.
+  - Suggested the name "Live AR Fit".
+  - Release cadence: v0.1.0-beta / v0.2.0-beta / v1.0.0 (with Hi Rokid).
+  - Explained the full-screen intent; replace it with an Ongoing Activity.
+  - Battery: use the settings intent plus a bold banner.
+  - OpenFreeMap and Protomaps are vector-only, so use a keyed raster provider (MapTiler or Thunderforest) behind `TileSource`. A provider setting can come after v1.
+  - Agreed the estimates were too high and switched to sizing by task count.
+  - Proposed design A in chat.
+  - Asked about rewriting commit authorship.
+
+### 54. "package com.livear.fit (later com.livear.auto) … app name Live AR Fit … what's today's pages? … leave old commits, new commits gmail, authorship only … 'Another app <name> is still tracking' … wrap YouTube/watch media controls?"
+- **Out:**
+  - Repo git config set to `Debasish Kanhar <d.kanhar@gmail.com>`.
+  - Saved memory `release-plan`.
+  - v0.2.0-beta = Stats/Map/Music pages, maps and configurable gestures. Drive mode is v2.
+  - Health Services can't report the other app's name.
+  - Third-party media UIs can't be embedded. Our Music controls page covers that need, and the media-overlay reopen workaround is kept for all brands.
+
+### 55. "yes go ahead with A"
+- **Out:** two parallel Sonnet lanes, each with an Opus review and one fix round.
+  - **Phone lane:**
+    - capability `livefit_watch`/`livefit_phone` node choice, with a connectedNodes fallback;
+    - CDM `DEVICE_PROFILE_WATCH`;
+    - brand-aware media-controls tip;
+    - generic copy;
+    - takeover text "Another app is still tracking a workout on your watch";
+    - scripts detect any watch.
+  - **Watch lane:**
+    - advertises the capability;
+    - refuses unsupported exercise types;
+    - map +/− zoom;
+    - screen-scaled insets;
+    - burn-in-safe AOD;
+    - provenance `wear-os/health-services`.
+  - The first watch-lane review caught that the insets were never applied and that `-E` sed backup files had been committed.
+- **Commits (pre-scrub):** `8e5c197`, `ce17644`, `b2b1873`, `3498a0a`, merge `36c8b22`.
+- **Verified:** JVM sweep 0 failures; all three APKs build. Installed on the glasses only.
+
+### 56. "are code ready or spec? anything for me to review?"
+- **Out:**
+  - Only A was code (merged).
+  - B and C had no spec yet.
+  - Listed the asks: the v0.2.0-beta map decision, wireless debugging, the GitHub URL, and an optional diff review.
+
+### 57. "v0.2.0-beta with map as beta → yes; wireless debugging on; Fossil later (Wear OS 3), Galaxy Watch 4 recharging; GitHub git@github.com:debasishdebs/Live-AR-Fit.git; continue with B and C"
+- **Out:**
+  - The push failed: no SSH key on this Mac, and `gh` was not installed.
+  - Installed generic Wear OS on the watch; the phone was off adb.
+  - Started the C spike prep: a throwaway probe agent built in scratch with a portable Node, and no device changes.
+  - Wrote the B spec draft.
+- **Commits:** `b6975d5` (B spec draft).
+
+### 58. "installed gh and added ssh key; ran rm -rf /tmp/x; what all I need to do?"
+- **Out:**
+  - Verified that SSH and `gh` work.
+  - Listed what's needed: a serial-scrub decision, phone adb, spike approval, and the B spec decisions.
+
+### 59. "device serials → squash/remove from history (vulnerability) … phone wireless on … Hi Rokid spike yes, clean up before publishing … Apache … MapTiler … why keystore? … email yes"
+- **Out:**
+  - Rewrote all history with `filter-branch` on the 3 docs. Placeholders like `<phone-adb-serial>` replace the identifiers.
+  - Verified 0 hits for the serials and MAC across history.
+  - Pushed `main` to github.com/debasishdebs/Live-AR-Fit and created tags `v0.1.0-beta` (`3279d77`) and `v0.2.0-beta` (`5566392`).
+  - Published both GitHub pre-releases, with debug APKs for phone, watch and glasses plus `SHA256SUMS.txt`.
+  - Installed the generic Wear OS phone build; clock sync OK (offset about −1.3 s).
+  - Recorded the B spec decisions.
+  - Explained the upload keystore and Play App Signing.
+  - Saved memory `no-device-ids-in-repo`.
+  - The spike agent tried to change the device and was blocked by the permission classifier.
+- **Commits:** `5091e94`.
+- **Verified:** `git log -S` for each identifier returns 0; the repo is PUBLIC and `main` is pushed; the releases are live.
+
+### 60. "what's B spec? path and what is it about? remind me"
+- **Out:** gave the path (`docs/superpowers/specs/2026-10-09-production-release-design.md`) and a section-by-section summary.
+
+### 61. Pasted Codex review of the B spec (4 P1, 4 P2, plus cleanup)
+- **In:**
+  - OS-dependent HR permissions.
+  - Keep remote watch launching.
+  - Glasses package vs activity split.
+  - 16 KB gate.
+  - Stable signing for releases.
+  - MapTiler attribution plan.
+  - Music disclosure is wrong.
+  - In-app privacy policy.
+  - Keep on-device-only STT.
+- **Out:** spec rev 2 addressed all of them.
+- **Commits:** `f981671`.
+
+### 62. Codex: "Not yet — two issues remain in f981671" (16 KB must be a gate; Google Data Layer cloud relay)
+- **Out:**
+  - Rev 3: 16 KB became a hard gate with no exceptions, and Rokid gets contacted early.
+  - Rev 3 discloses that phone↔watch data may travel through Google's encrypted cloud relay.
+- **Commits:** `8ea0c49`.
+
+### 63. "what are 16kb builds? why do we need those? all are publicly available. as for plan, that's approved"
+- **Out:**
+  - Explained 16 KB page sizes and Play's requirement since Nov 2025.
+  - Checked the public Rokid Maven artifacts with an ELF parse. `cxr-service-bridge` 1.4 and 1.5 both have LOAD aligned. RELRO-end is misaligned in 5/5 libs in 1.4 and 4/5 in 1.5.
+  - Wrote B's plan through an Opus agent: 12 tasks in lanes A/U/M/R/D.
+  - The planner found that Google's own `graphics-path` also fails RELRO.
+- **Commits:** `e63d9a7`.
+
+### 64. "what's Hi Rokid test?"
+- **Out:** explained the spike: a probe agent sends `GET 127.0.0.1:47123/lf?cmd=…` to an `nc` listener. Gave the commands to run with `!`.
+
+### 65. "what's my phone and glass serials? give full commands"
+- **Out:** gave the serials in chat (not in the repo) and the full step-by-step commands.
+
+### 66. "here as in from claude code terminal? not main terminal?"
+- **Out:** the listener goes in a normal Terminal, because it blocks. Steps 2–3 run in Claude Code with `!`.
+
+### 67. (owner ran) `aix device set-dev` + `aix install ./livefit-probe` on the glasses
+- **Out:** developer mode was enabled and LiveFit Probe installed with phone upload confirmed. Cloud indexing was "not verified".
+- **Then I ran the probe:**
+  - `launch-page` ran the page, and `onLoad` received `{"command":"pause"}`.
+  - With a listener only on the phone, the fetch was refused (ConnectionRefused).
+  - With `nc` on the glasses, the TCP connection was accepted (TIME_WAIT 127.0.0.1→47123).
+  - Conclusion: an agent's loopback request reaches the glasses, not the phone.
+
+### 68. "I did that from home page of Rokid, it says 'Completed'. can you check"
+- **Out:** logs showed the ASR heard "Tell Liffit to pause". Rokid's cloud matched its built-in `control_playback` pause (system media), not our agent. "Hi Rokid, pause / next song" already controls YouTube Music.
+
+### 69. "I just tried Livefit start workout, it said can't start. check logs"
+- **Out:** the ASR heard "Live fit start workout." and Rokid's AI replied "I can't start a workout in Live Fit from here." No agent call was made: the dev-installed agent isn't indexed for voice.
+
+### 70. "okay tried both, what's this error? … do you mean workout in Live Fit app which is good but can't do anything?"
+- **Out:**
+  - "Open live fit probe" produced the reply "Open Phone assistant… Live Fit Pro". The ASR hears "probe" as "Pro", and our agent isn't among the assistant's tools.
+  - Drafted a Discord question for Rokid that also asks about 16 KB-aligned CXR builds.
+
+### 71. "submit for review and test? who enforces 16KB? do we really need it?"
+- **Out:**
+  - Don't submit the probe: it would be rejected, and the store targets mainland China. Ask Rokid first and build the real agent (C).
+  - Google Play enforces 16 KB, and Play checks LOAD alignment.
+  - Recommended RELRO as a warning only.
+
+### 72. "What's stricter RELRO rule and who enforces it? can't that be skipped?"
+- **Out:** explained RELRO (read-only relocations; with a partial page the end stays writable). Neither Play nor the OS blocks on it; it is only a developer-guide recommendation. It can be skipped as a warning.
+
+### 73. "yes go ahead, skip RELRO and start B"
+- **Out:**
+  - Spec rev 4 and plan updated: the gate is LOAD + zip alignment + Play check + 16 KB device run, and RELRO is a warning.
+  - B ledger at `.superpowers/sdd/2026-10-09-production-release-plan/`.
+  - Task 1 (identity `com.livear.fit` / `com.livear.fit.glasses`, versionCode scheme, labels, icons, backup off) passed review and merged.
+  - Lanes started: A (Task 2), U (Task 4) and R (Task 9).
+- **Commits:** `e194253` (spec rev 4 + plan), merge `de9ab70` (Task 1).
+
+### 74. "while I've asked in Discord, check this → js.rokid.com/AIUI/guide/debug/cli_device_debug … are these not useful?"
+- **Out:**
+  - The CLI path is what we used. Its docs say an install success "does not mean cloud indexing has finished".
+  - The AIUI Studio path syncs drafts to your own glasses.
+  - Suggested renaming the agent, removing the CLI copy, and adding a richer AGENTS.md.
+
+### 75. "I've rokid dev account, can't we publish it and test? LiveFit not in Agent Store"
+- **Out:** found Rokid's docs through their public GitHub (`jsar-project/AIUI`). AIUI Studio Global flow: Import → Build & Review → Package AIX (syncs to cloud) → Hi Rokid app Settings → Developer → Update glasses resource package → "Hi Rokid, open the xxx agent". No review needed for own-device testing. Copied the probe to the Desktop for import.
+
+### 76. "https://js.rokid.com/AIUI/guide/quickstart/first-chat … these ones? don't know where to upload? Opera has the tabs open"
+- **Out:** extracted the quickstart and publish docs from GitHub raw. Gave the AIUI Studio steps: aiui-global.rokid.com, Import from local folder, Package AIX, update the glasses resource package.
+
+### 77. "why did you create folder for livefit probe separately … why not submodule in same repo?"
+- **Out:**
+  - A plain subfolder is better than a submodule.
+  - Put the probe at `rokid-agent/livefit-probe/` on the throwaway branch `spike/hi-rokid`; it is not in main.
+- **Commits:** `78ab4f1` (spike branch).
+
+### 78. "pushed remote?"
+- **Out:** yes. `spike/hi-rokid` is at `78ab4f1` and the import URL returns 200.
+
+### 79. Screenshot: AIUI import failed: "GitHub ref not found: spike/hi-rokid/rokid-agent/livefit-probe"
+- **Out:** their importer can't handle "/" in branch names, so I pushed the same commit as `hi-rokid-probe`.
+
+### 80. Screenshot: import failed again with `hi-rokid-probe/…`
+- **Out:** their importer doesn't split ref and path at all. Use "Import from local folder" (Desktop copy) or the `blob` URL form.
+
+### 81. Screenshot: imported (livefit-probe, Draft · Synced) and the Build & Review form
+- **Out:** don't Submit for Review. Find Package AIX.
+
+### 82. Screenshot: the AIX Packaging tab
+- **Out:** click Package AIX, then update the glasses resource package, then try voice.
+
+### 83. "it asks for opening msg and feature description before I can package AIX"
+- **Out:** gave filler text for both, category Life. Save Details does not submit.
+
+### 84. Screenshot: packaged (`37a8afa3…aix`)
+- **Out:** next, update the glasses resource package and say "Hi Rokid, open LiveFit Probe".
+- **Then:** logs showed the cloud agent downloaded to the glasses (`showAgentDownloadToast agentName=livefit-probe success=true`). Every voice attempt still went to the general AI ("Do you mean … Live Fit Pro app?"), and the agent was never called.
+
+### 85. (owner ran) `aix device unset-dev`
+- **Out:** developer mode is disabled, but the CLI-installed "LiveFit Probe" is still listed (the CLI has no uninstall).
+
+### 86. Screenshots: "repackaged; still says LiveFit Probe?? Hi Rokid Agent store / management doesn't show it, can't search it"
+- **Out:** the package title comes from `app.json`, and the glasses use the Studio name (sync at 00:17 showed `agentName=LiveFit`). Draft agents never show in the store; the voice tries had run before the sync.
+
+### 87. "check logs now. no other way to invoke/start our app from Hi Rokid? like 'start translation', 'start navigation'"
+- **Out:** "Open Live fit", "Start live fit", "Live fit start workout" and "Live fit playlist screen" were all declined by Rokid's AI. Built-in features (translation, navigation) are Rokid's own system scenes, so third parties can't add to them. Suggested trying "open Rokid LiveFit" (the glasses app label).
+
+### 88. "check now?"
+- **Out:** "Open Rocket Life with app" and "Launch the Rocket Live Fit app" got "I can't open … directly". Rokid doesn't open third-party glasses apps by name, so there is no voice route for now.
+
+### 89. Pasted Discord history (other developers unanswered; じゅん: Draft agent returns `agentId不存在`)
+- **Out:**
+  - Drafts appear not to be registered in Rokid's cloud, which is consistent with our result: voice likely needs an approved agent.
+  - Proposed C's design in chat:
+    - a glasses-app loopback HTTP receiver on 127.0.0.1:47123 (`/lf?cmd=`);
+    - one "LiveFit" agent with an enum tool;
+    - the review submission package.
+
+### 90. "yes approved design for (C)"
+- **Out:** built C with Opus on `feat/hi-rokid-agent`:
+  - **Receiver:** `AgentServer` / `AgentCommand` with 13 commands. Loopback-only bind, 2 s deadline, 2 KB cap, connection bound; JSON replies.
+  - **Agent:** `rokid-agent/livefit/` holds the LiveFit agent, its README, and the `review/` drafts.
+  - **Review fix:** agent commands now carry `via=Agent` and go through the Settings → Voice gate, so Stop asks first. `play_pause` is gated and the acks are neutral.
+  - Reviewed, re-reviewed and merged.
+- **Parallel B progress during 74–90:**
+  - **Task 4** (watch HR permissions by OS version, location disclosure, no full-screen intent): approved.
+  - **Task 7** (`livefit://` entry guard, Wearable sender gate): approved.
+  - **Task 9** (robustness): fix round for StrictMode on the main thread and three races.
+  - **Task 5** (battery banner): fix round for the optimisation list → app details → Settings fallback.
+  - **Task 10** (docs): fix round for Clear-history accuracy, music in Data safety and minors.
+  - **Task 2** (release build): fix round so the gate fails closed on the resolved task graph, and SerializationException logs no longer quote JSON.
+  - **Task 3:** 16 KB checker (24 libs, 0 fail, 13 RELRO warnings).
+  - **Task 11:** CI.
+  - **Task 8** (MapTiler + attribution): fix rounds for the phone logo tint, a per-source tile cache, and moving the legacy delete off the main thread.
+  - **Task 6** (disclosures + in-app privacy policy): fix round for the dead end after permanent denial, the mic row, the watch About page, and the toast.
+  - The first GitHub CI run passed (9m47s).
+- **Commits:** C merge `dfffae4`; B merges `bae4165`, `439d0a3`, `06c3300`, `82ba36d`, `4d7637d`; Task 6 `2cd79ec`, `77fd663`; session log `1b56589`.
+- **Verified:** after each merge the full JVM test suite and all three debug builds passed. Integration was pushed to `main`, and CI went green.
+
+### 91. "what's the BG agent running???"
+- **Out:** one agent: the final-review fix wave in `lf-wt/bFix`. I listed its items.
+- **Before that:**
+  - The Opus final review of B+C said "ready with fixes", with 4 Important findings:
+    1. resource shrinking strips `android_wear_capabilities` in release;
+    2. `release.yml` secret scope, pins and permissions;
+    3. PeerGate mutex and timeout;
+    4. the docs miss C.
+  - It also listed 9 docs-accuracy lines.
+- **After:** the fix wave produced 5 commits:
+  - `keep.xml`;
+  - a `check_wear_caps` CI gate;
+  - hardened workflows with SHA pins;
+  - PeerGate known-first with a timeout and rate-limit;
+  - the receiver refuses foreign Host and drops CORS;
+  - minors;
+  - docs.
+
+  It also found and fixed a phone `lintVitalRelease` blocker (fragment 1.8.3). The re-review found everything addressed, and it was merged and pushed.
+- **Commits:** `1cdd50c`, `79119c8`, `b714395`, `4d53ec1`, `d296261`.
+- **Verified:** 1109 JVM tests and 28 release-tooling tests pass. The dummy-key release bundles build, `check_wear_caps` passes on both AABs (and fails when `keep.xml` is removed), and the 16 KB check gives 0 fail and 5 warnings.
+
+### 92. "what all are pending from my side? list it I will do it step by step"
+- **Out:** a 16-step owner checklist:
+  - **Keys:** MapTiler key and upload keystore into `local.properties`.
+  - **Devices:** devices on adb; a 16 KB device, Pixel 8 or newer.
+  - **Decisions:** MapTiler non-commercial terms; MapTiler logo recolour; Rokid SDK redistribution; Rokid voice routing.
+  - **Reviews:** the privacy policy and Play drafts; enable GitHub Pages.
+  - **After device acceptance:**
+    - the Play Console upload;
+    - the GitHub release secrets;
+    - the Hi Rokid demo video and agent submission;
+    - cleanup of the probe, developer mode and the throwaway branches.
+  - Also gave a resume prompt for a new chat.
+
+### 93. "update the markdown with our session history. remember correctly to add everything"
+- **Out:**
+  - Rewrote entries 48 onward, one per prompt, with what I did and the commits; earlier entries had grouped prompts together.
+  - Added the commit-hash scrub note with old → new mappings.
+  - Refreshed "Resume here" and "Open items".
 
 ## Resume here (handoff for the next chat)
-- **Branch:** `design/livefit-v1-v2` (no remote). Plan rev 4 at `b426df5`; session-log commits after it.
-- **Installed on devices:** the r8 build (glance/workout/playlist pages, view voice commands, Nearby devices, voice-command toggles) + phone label fix `bd5634c`.
-- **Next:** `/superpowers:subagent-driven-development docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md` (25 tasks, Task 1 alone, then lanes A–G; early device check D1 in Task 22; acceptance Task 25).
-- **Spec:** `docs/superpowers/specs/2026-10-09-livefit-pages-maps-gestures-design.md` (base: `2026-10-05-livefit-v1-design.md`).
-- **Reviews:** `../reviews/2026-10-09-pages-maps-plan-review.md`, `…-r2.md` (Codex).
-- **Devices:** phone `<phone-adb-serial>`, watch `<watch-adb-serial>` (serials can gain " (2)"), glasses `<glasses-serial>` (USB). Install with `bash tools/install-all.sh` (glasses → watch → phone; all three must match protocol version). JDK 17: `export JAVA_HOME=$(/usr/libexec/java_home -v 17)`.
-- **Old worktrees:** `../lf-wt/*` (V1 lanes, r2–r8 fix branches) are merged and can be removed.
-- **Device notes:** watch drops off wireless adb when off the charger; Hi Rokid long press is system-reserved; glasses have no internet.
+- **Repo:** github.com/debasishdebs/Live-AR-Fit (public). Local integration branch `design/livefit-v1-v2` pushes to `origin/main`. Commits are authored as `Debasish Kanhar <d.kanhar@gmail.com>`.
+- **Never** `git push --all` or `--mirror`. The local `backup/pre-scrub` branch and old `feat/*`, `fix/*`, `sdd/*` branches hold unscrubbed history.
+- **Releases:**
+  - `v0.1.0-beta` and `v0.2.0-beta` are GitHub pre-releases (debug APKs).
+  - `v1.0.0` waits for B Task 12 (device acceptance) and the owner's decisions.
+- **Status:**
+  - A (generic Wear OS), B tasks 1–11, and C are merged and reviewed, including the final whole-branch review and its fix wave.
+  - Drive mode is on `feat/drive-mode` (`d0b4938`), unmerged, for v2.
+- **Ledgers:**
+  - `.superpowers/sdd/2026-10-09-production-release-plan/progress.md` (B; also has C notes and every ruling).
+  - `.superpowers/sdd/2026-10-09-livefit-pages-maps-gestures-plan/progress.md` (pages/maps plan).
+- **Specs and plans:**
+  - `docs/superpowers/specs/2026-10-09-production-release-design.md` (rev 4)
+  - `docs/superpowers/plans/2026-10-09-production-release-plan.md`
+  - C brief: `.superpowers/sdd/hi-rokid-c/brief.md`
+- **Memory notes:** `pending-device-tests`, `release-plan`, `no-device-ids-in-repo`, `session-log-upkeep`.
+- **Devices:** detected at runtime by `tools/install-all.sh` (watch by `ro.build.characteristics`). Never write serials into tracked files. JDK 17: `export JAVA_HOME=$(/usr/libexec/java_home -v 17)`.
+- **Next:** B Task 12 (release-signed device acceptance) once the MapTiler key and upload keystore are in `local.properties`. Then the owner submits to Play and the Rokid agent store. Resume prompt: "Continue LiveFit v1.0.0: production-release plan Task 12 (device acceptance). Check memory pending-device-tests and release-plan, and the ledger at .superpowers/sdd/2026-10-09-production-release-plan/progress.md."
 
 ## Open items
-- Execute `docs/superpowers/plans/2026-10-09-livefit-pages-maps-gestures-plan.md` (rev 4, `b426df5`) in a fresh chat with `/superpowers:subagent-driven-development`.
-- Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
-- Long backward swipe on the glasses (unit-tested; not yet tried on device).
-- Disabled voice command → "turned off" toast (not tried on device).
-- Glance page before a workout shows 00:00 / "--".
+- **Owner steps:** the 16-step list in entry 92.
+- **Device tests not yet done:**
+  - drive mode;
+  - outdoor walk acceptance rows 2–11, 18 and 19, plus rows 12 (watch), 14 (rest), 16 and 17 of `docs/superpowers/acceptance/2026-10-09-pages-maps-gestures-acceptance.md`;
+  - the B Task 12 checklist (in memory `pending-device-tests`);
+  - the Hi Rokid agent card on the device (CORS/Host).
+- **Rulings to confirm on device:**
+  - LiveLocationSelector `continuityGapMs` of 3 s vs real watch fix arrival gaps;
+  - rotary focus;
+  - HUD palette road edges;
+  - watch location card padding on round screens;
+  - receiver 403 for a Host header without a port.
+- **Owner decisions:**
+  - MapTiler Free "non-commercial" terms for a Play app;
+  - Rokid CXR SDK redistribution rights;
+  - recolouring the MapTiler logo;
+  - Rokid voice routing for Global accounts (asked on Discord).
+- **Cleanup before publishing:**
+  - remove LiveFit Probe in the Hi Rokid app;
+  - confirm developer mode is off;
+  - delete the remote branches `hi-rokid-probe` and `spike/hi-rokid`;
+  - remove old `../lf-wt/*` worktrees.
+- **Next features:**
+  - Google Maps navigation-notification turn-by-turn on the glasses (about 2–3 hours);
+  - drive mode review and merge (v2);
+  - D: App Actions / Gemini after the Play publish;
+  - brand and logo task.
