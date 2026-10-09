@@ -158,6 +158,9 @@ Each entry: **prompt** (owner's words, trimmed) → **response** (summary of my 
 ### 21. Codex review of the implementation plan (11 P2 + 1 P3)
 - **Done:** accepted all 12 (route durability after ACK, pre-calibration timestamp repair, observed-time recovery, torn route-file append, non-blocking tile rendering, watch tile retry, live-only marker, unknown accuracy, scroll timer ordering, page-report retry, OSM cache validators, Task 12 dependency); review saved to `../reviews/2026-10-09-pages-maps-plan-review.md`; Opus agent revising the plan + adding an early on-device PNG-over-CXR check.
 
+### 22. Plan revision 2 committed
+- **Done:** `e46e0b8` — all 12 findings resolved (route rows written in the delta transaction + rebuild on load; nullable phone time re-normalized on calibration; arrival-timed recovery; torn-tail truncation; non-blocking TileLoader with retries; live-only watch marker; `accuracyM: Float?` with one shared predicate; IdleGate; PageReporter retry; OSM validators/304; `:core:map` exposure moved to Task 2) + early device check D1 (raw PNG vs Base64 over CXR) in Task 22.
+
 ## Open items
 - Real walk: HR + timer live with watch screen dimmed; music start with YTM fully closed and phone locked.
 - Long backward swipe on the glasses (unit-tested; not yet tried on device).
