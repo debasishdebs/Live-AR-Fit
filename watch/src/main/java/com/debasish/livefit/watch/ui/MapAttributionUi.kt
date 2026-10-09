@@ -22,7 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -49,7 +48,7 @@ internal fun MapAttributionBadge(attribution: MapAttribution, onInfo: () -> Unit
     val lines = attributionLines(attribution.text)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (attribution.mapTilerLogo) Image(painterResource(R.drawable.maptiler_logo), contentDescription = "MapTiler", modifier = Modifier.height(10.dp), colorFilter = ColorFilter.tint(W.Dim))
+            if (attribution.mapTilerLogo) Image(painterResource(R.drawable.maptiler_logo), contentDescription = "MapTiler", modifier = Modifier.height(10.dp))
             Text(" ${lines.first()}", fontSize = 9.sp, color = W.Dim)
         }
         for (line in lines.drop(1)) Text(line, fontSize = 9.sp, color = W.Dim, textAlign = TextAlign.Center)

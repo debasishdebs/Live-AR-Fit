@@ -7,8 +7,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -46,7 +44,7 @@ class GlassesMapRenderer(
     private val caption = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = green; textSize = 28f; textAlign = Paint.Align.CENTER; isFakeBoldText = true }
     private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f }
     private val attributionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = dim; textSize = 18f; textAlign = Paint.Align.RIGHT; isFakeBoldText = true }
-    private val logoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { colorFilter = PorterDuffColorFilter(dim, PorterDuff.Mode.SRC_IN) }
+    private val logoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
     suspend fun render(state: RouteState): ByteArray? {
         val generation = tiles.generation // on the caller's (Main) thread, before suspending: a later hide() wins (review r2 #1)
@@ -78,7 +76,7 @@ class GlassesMapRenderer(
             c.drawText(s.label, 16f, y - 8f, small)
         }
         captions.forEachIndexed { i, line -> c.drawText(line, sizePx / 2f, 40f + i * 34f, caption) }
-        // Spec §5: MapTiler logo + "© MapTiler © OpenStreetMap contributors" on every image, in the HUD palette, HUD-legible.
+        // Spec §5: MapTiler logo + "© MapTiler © OpenStreetMap contributors" on every image; the logo keeps its original colours (black map background).
         val textY = sizePx - 12f
         c.drawText(attribution.text, sizePx - 12f, textY, attributionPaint)
         if (attribution.mapTilerLogo && logo != null) c.drawBitmap(logo, sizePx - 12f - logo.width, textY - 18f - logo.height, logoPaint)
@@ -103,7 +101,7 @@ class GlassesMapRenderer(
         const val MAX_PNG_BYTES = 40 * 1024
         const val LOGO_HEIGHT_PX = 24
 
-        /** The MapTiler logo at HUD size (tinted at draw time); null if the drawable is missing. */
+        /** The MapTiler logo at HUD size (original colours, drawn untinted); null if the drawable is missing. */
         fun logo(context: Context): Bitmap? = ContextCompat.getDrawable(context, R.drawable.maptiler_logo)?.let { d ->
             d.toBitmap(width = LOGO_HEIGHT_PX * d.intrinsicWidth / d.intrinsicHeight.coerceAtLeast(1), height = LOGO_HEIGHT_PX)
         }

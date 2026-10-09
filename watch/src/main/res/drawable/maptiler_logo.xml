@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The official MapTiler logo (https://api.maptiler.com/resources/logo.svg), converted 1:1 to a VectorDrawable;
-     required on every map display by the MapTiler Free plan (spec §5). Do not redraw or alter; tint at draw time. -->
+     required on every map display by the MapTiler Free plan (spec §5). Do not redraw, recolour or tint. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="67dp"
     android:height="20dp"
