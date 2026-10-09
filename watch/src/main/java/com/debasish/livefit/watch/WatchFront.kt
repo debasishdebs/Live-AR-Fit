@@ -62,7 +62,7 @@ object WatchFront {
         val pi = PendingIntent.getActivity(context, 1, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("Rokid LiveFit")
+            .setContentTitle("Live AR Fit")
             .setContentText(if (reason == "confirmation") "Answer on the workout screen" else "Workout started")
             .setCategory(NotificationCompat.CATEGORY_WORKOUT)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

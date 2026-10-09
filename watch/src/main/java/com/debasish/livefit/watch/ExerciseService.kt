@@ -35,7 +35,7 @@ class ExerciseService : Service() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Workout", NotificationManager.IMPORTANCE_LOW))
         val touch = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val builder = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Rokid LiveFit").setContentText("Workout in progress")
+            .setContentTitle("Live AR Fit").setContentText("Workout in progress")
             .setSmallIcon(android.R.drawable.ic_media_play).setOngoing(true).setContentIntent(touch)
         OngoingActivity.Builder(this, ID, builder)
             .setStaticIcon(android.R.drawable.ic_media_play)

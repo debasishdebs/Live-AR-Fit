@@ -86,7 +86,7 @@ fun HomeScreen(
             Column(Modifier.fillMaxWidth().background(LiveFitColors.HeaderGradient).statusBarsPadding().padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("Rokid LiveFit", style = MaterialTheme.typography.headlineMedium)
+                        Text("Live AR Fit", style = MaterialTheme.typography.headlineMedium)
                         Text("Ready when you are", style = MaterialTheme.typography.bodyMedium, color = LiveFitColors.InkSoft)
                     }
                     IconButton(onClick = onSettings, modifier = Modifier.clip(CircleShape).background(Color.White)) {

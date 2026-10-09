@@ -47,7 +47,7 @@ class LiveFitHubService : Service() {
     }
 
     /**
-     * F1: after an APK update or reboot nothing else reconnects the glasses (they sit on "Open Rokid LiveFit on your phone").
+     * F1: after an APK update or reboot nothing else reconnects the glasses (they sit on "Open Live AR Fit on your phone").
      * One attempt when they are linked and nearby; opening the app (already connecting) or a running session is left alone.
      */
     private fun connectGlassesIfNearby(graph: ServiceGraph) {
@@ -78,7 +78,7 @@ class LiveFitHubService : Service() {
     override fun onDestroy() { running = false; watcher?.cancel(); _locationCapable.value = false; super.onDestroy() }
 
     private fun notification(text: String): Notification = Notification.Builder(this, CHANNEL)
-        .setContentTitle("Rokid LiveFit")
+        .setContentTitle("Live AR Fit")
         .setContentText(text)
         .setSmallIcon(android.R.drawable.ic_menu_compass)
         .setOngoing(true)

@@ -60,7 +60,7 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
                 ChipRow(Icons.Rounded.Link, LiveFitColors.ChipSky, if (reachable) "Reachable" else "Unreachable", if (reachable) "Watch is connected" else (st.detail ?: "Watch is not connected"), {}, trailing = {})
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
                 ChipRow(Icons.Rounded.Watch, LiveFitColors.ChipViolet, if (installed) "Watch app installed" else "Watch app not found",
-                    if (installed) "Rokid LiveFit on the watch is responding" else "Install Rokid LiveFit on the watch, then open it once", {}, trailing = {})
+                    if (installed) "Live AR Fit on the watch is responding" else "Install Live AR Fit on the watch, then open it once", {}, trailing = {})
             }
         }
         SectionLabel("Link")
@@ -69,7 +69,7 @@ fun LinkedWatchScreen(services: ServiceGraph, onBack: () -> Unit, toast: (String
                 ChipRow(Icons.Rounded.Link, LiveFitColors.ChipSky, "Pair / re-pair", "Lets Android wake LiveFit when the watch is near",
                     { toast("Tap Allow on your watch when asked"); PeerPairing.pair(activity, services, DeviceKind.Watch) { ok -> toast(if (ok) "Watch paired" else "Pairing cancelled") } })
                 HorizontalDivider(Modifier.padding(start = 70.dp), color = LiveFitColors.Line)
-                ChipRow(Icons.Rounded.Favorite, LiveFitColors.ChipCoral, "Sensor permissions", "Granted on the watch: open Rokid LiveFit on the watch and tap Allow", {}, trailing = {})
+                ChipRow(Icons.Rounded.Favorite, LiveFitColors.ChipCoral, "Sensor permissions", "Granted on the watch: open Live AR Fit on the watch and tap Allow", {}, trailing = {})
             }
         }
         SectionLabel("Tip")

@@ -47,8 +47,8 @@ fun AboutScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(24.dp))
         IconChip(Icons.Rounded.Favorite, LiveFitColors.ChipMint, size = 88.dp, shapeRadius = 28.dp)
         Spacer(Modifier.height(12.dp))
-        Text("Rokid LiveFit", style = MaterialTheme.typography.headlineMedium)
-        Text("Version 0.1 · design preview", color = LiveFitColors.InkSoft)
+        Text("Live AR Fit", style = MaterialTheme.typography.headlineMedium)
+        Text("Version ${com.debasish.livefit.phone.BuildConfig.VERSION_NAME}", color = LiveFitColors.InkSoft)
         SoftCard(Modifier.padding(16.dp).fillMaxWidth()) {
             Column {
                 ChipRow(Icons.Rounded.Code, LiveFitColors.ChipSlate, "Built on", "Rokid CXR-L · Wear Health Services", {}, trailing = {})

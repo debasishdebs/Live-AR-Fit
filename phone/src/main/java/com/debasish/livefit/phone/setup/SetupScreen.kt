@@ -110,11 +110,11 @@ fun SetupScreen(services: ServiceGraph, onFinished: () -> Unit) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(48.dp))
         val (icon, title, body) = when (step) {
-            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Rokid LiveFit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
+            SetupStep.Welcome -> Triple(Icons.Rounded.Shield, "Welcome to Live AR Fit", "Allow microphone, nearby devices, notifications and background use so the hub can run during workouts.")
             SetupStep.Glasses -> Triple(GlassesIcon, "Link your Rokid glasses", "Authorize LiveFit in Hi Rokid, then pair so Android wakes LiveFit when the glasses are near." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair from Hi Rokid instead." else " Tap Allow on your glasses when asked.")
             SetupStep.Watch -> Triple(Icons.Rounded.Watch, "Link your Wear OS watch", (if (Build.VERSION.SDK_INT < 33) "Pair the watch" else "Pair the watch (tap Allow on your watch when asked)") +
-                ", then open Rokid LiveFit on the watch once and tap Allow for heart-rate sensors." +
+                ", then open Live AR Fit on the watch once and tap Allow for heart-rate sensors." +
                 if (Build.VERSION.SDK_INT < 33) " On this Android version, pair it from your watch's companion app (Galaxy Wearable, Pixel Watch, Wear OS…) instead." else "")
             SetupStep.Music -> Triple(Icons.Rounded.LibraryMusic, "Control YouTube Music", "Give LiveFit notification access so it can play, skip and like songs.")
             SetupStep.Map -> Triple(Icons.Rounded.MyLocation, "Map fallback", "Allow location so your phone can draw the route when the watch has no GPS fix. Optional — workouts record without it.")

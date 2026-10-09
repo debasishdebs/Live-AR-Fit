@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Spike-only: drive experiments from adb while the phone is locked.
- * adb shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver --es cmd connect_allow
+ * adb shell am broadcast -n com.livear.fit/com.debasish.livefit.phone.DebugReceiver --es cmd connect_allow
  */
 class DebugReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -30,7 +30,7 @@ class DebugReceiver : BroadcastReceiver() {
             "watch_start" -> CoroutineScope(Dispatchers.Main).launch { WatchControl.launchActivity(app, "start", force = intent.getBooleanExtra("force", false)) }
             "watch_real_start" -> CoroutineScope(Dispatchers.Main).launch { WatchControl.message(app, WatchControl.PATH_START, force = intent.getBooleanExtra("force", false)) }
             // Device check D1 (plan Task 22): one PNG-sized payload on lf_map over CXR — raw bytes, or Base64 in the JSON (b64).
-            // adb shell am broadcast -n com.debasish.livefit/.phone.DebugReceiver --es cmd map_probe --ei kb 38 [--ez b64 true]
+            // adb shell am broadcast -n com.livear.fit/com.debasish.livefit.phone.DebugReceiver --es cmd map_probe --ei kb 38 [--ez b64 true]
             "map_probe" -> CoroutineScope(Dispatchers.Main).launch {
                 val glasses = CxrGlassesLink.instance ?: return@launch
                 val size = intent.getIntExtra("kb", 38) * 1024
